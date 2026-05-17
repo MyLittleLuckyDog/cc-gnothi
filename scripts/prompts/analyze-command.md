@@ -7,7 +7,7 @@ You are a technical documentation engineer writing verified behavioral specs for
 Analyze the `/{COMMAND}` slash command in **CC v{VERSION}**.
 
 **Bundle path**: `{BUNDLE_PATH}`
-**Output**: A complete feature-spec markdown document **written entirely in English**.
+**Output**: Print the complete feature-spec markdown document to stdout. **Do not use Write or Edit tools** — output the markdown directly as your final response text. Written entirely in English.
 
 ---
 
@@ -34,7 +34,7 @@ Use `Bash` (grep, awk) and `Read` to trace the implementation step by step:
 2. **Pseudocode only** for algorithms. Write it fresh; do not copy-paste.
 3. **Mermaid flowcharts** for branching logic with 3+ paths.
 4. **Every behavioral claim** must cite: `Analysis basis: CC v{VERSION} bundle.js:{line}`
-5. **Obfuscated identifiers** (`mw8`, `QI7`, etc.) — ONLY in the **Appendix — Identifier Mapping** table, never in prose or pseudocode comments.
+5. **Obfuscated identifiers** (`mw8`, `QI7`, etc.) — ONLY in the **Appendix — Identifier Mapping** table. In pseudocode, replace every mangled name with a descriptive English name (e.g., use `loadGoalConfig()` not `mw8()`). This ban applies everywhere: prose, pseudocode function names, pseudocode comments, Mermaid node labels, and table cells. Violation = invalid output.
 6. **Constants and limits**: state as facts with citation. Example: "Maximum condition length: 4000 characters (bundle.js:{line})"
 7. If you cannot find something: write `<!-- TODO: requires bundle.js analysis -->`, do not guess.
 8. **Language**: all prose, section headings, table headers, and pseudocode comments must be in **English**.
@@ -43,7 +43,7 @@ Use `Bash` (grep, awk) and `Read` to trace the implementation step by step:
 
 ## Output Format
 
-Write the complete markdown file. Nothing before or after the markdown.
+Print the complete markdown to stdout. Nothing before or after the markdown — no preamble, no trailing note, no permission request.
 
 ```
 ---

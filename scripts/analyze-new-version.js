@@ -3,10 +3,10 @@
  * analyze-new-version.js
  *
  * V1: Metadata + command registration extraction only.
- *     No behavioral spec generation (V2 after manual validation).
+ *     No behavioral spec generation (that is done by analyze-command.md via claude -p).
  *
  * Usage:
- *   node analyze-new-version.js [--artifacts <path>] [--versions <path>] [--dry-run]
+ *   node analyze-new-version.js [--artifacts <path>] [--versions <path>] [--dry-run] [--version X.X.X]
  *
  * Reads: caludeCodeAVX2/artifacts/claude-{X.X.X}.js  (READ-ONLY)
  * Writes: cc-gnothi/versions/v{X.X.X}/_index.md + {feature}.md stubs
@@ -62,7 +62,7 @@ function extractCommands(content) {
   const commands = [];
   let m;
   while ((m = pattern.exec(content)) !== null) {
-    const key = m[2]; // name is unique enough for dedup
+    const key = m[2];
     if (!seen.has(key)) {
       seen.add(key);
       commands.push({ type: m[1], name: m[2], description: m[3] });
@@ -114,21 +114,25 @@ function findPrevVersion(allVersions, targetVersion) {
 
 function buildIndexMd(meta, commands, diff, prevVersion) {
   const today = new Date().toISOString().slice(0, 10);
-  const prevStr = prevVersion ? prevVersion : 'N/A';
+  const prevStr = prevVersion || 'N/A';
 
   const commandTable = commands
     .map((c) => `| \`/${c.name}\` | ${c.description} |`)
     .join('\n');
 
   const addedRows = diff.added.length
-    ? diff.added.map((c) => `| \`/${c.name}\` | ${c.description} | 추가 |`).join('\n')
+    ? diff.added.map((c) => `| \`/${c.name}\` | ${c.description} | added |`).join('\n')
     : '| — | — | — |';
   const removedRows = diff.removed.length
-    ? diff.removed.map((c) => `| \`/${c.name}\` | — | 제거 |`).join('\n')
+    ? diff.removed.map((c) => `| \`/${c.name}\` | — | removed |`).join('\n')
     : '';
 
   const chapterProposals = diff.added
-    .map((c) => `- [ ] \`/${c.name}\` — ${c.description}. 기존 챕터 흡수 또는 신규 feature-spec 검토.`)
+    .map((c) => `- [ ] \`/${c.name}\` — ${c.description}. Review: absorb into existing chapter or create new feature-spec.`)
+    .join('\n');
+
+  const docList = diff.added
+    .map((c) => `- [${c.name}.md](${c.name}.md) — \`/${c.name}\`: ${c.description} (stub, analysis pending)`)
     .join('\n');
 
   return `---
@@ -143,32 +147,37 @@ generated: "${today}"
 
 # CC v${meta.version}
 
-## 번들 메타
-| 항목 | 값 |
+## Bundle Metadata
+
+| Field | Value |
 |---|---|
 | BUILD_TIME | ${meta.buildTime} |
 | GIT_SHA | \`${meta.gitSha}\` |
-| 번들 크기 | ${meta.bundleSize} / ${meta.bundleLines} lines |
-| 이전 버전 | ${prevStr} |
+| Bundle size | ${meta.bundleSize} / ${meta.bundleLines} lines |
+| Previous version | ${prevStr} |
 
-## 커맨드 변경 (vs ${prevStr})
-| 커맨드 | 설명 | 변경 |
+## Command Changes (vs ${prevStr})
+
+| Command | Description | Change |
 |---|---|---|
 ${addedRows}
 ${removedRows || ''}
 
-## 슬래시 커맨드 전체 목록 (v${meta.version})
-| 커맨드 | 설명 |
+## All Slash Commands (v${meta.version})
+
+| Command | Description |
 |---|---|
 ${commandTable}
 
-## 분석 문서
-<!-- 자동화가 채움. 새 feature-spec 파일 작성 시 여기에 추가. -->
-${diff.added.map((c) => `- [${c.name}.md](${c.name}.md) — /${c.name}: ${c.description} (stub, 분석 필요)`).join('\n')}
+## Feature Spec Documents
 
-## 챕터 제안
-<!-- 자동화가 채움. 신규 기능 감지 시 자동 추가. -->
-${chapterProposals || '<!-- 이번 버전 신규 커맨드 없음 -->'}
+<!-- Populated by automation. Add entries here when a feature-spec file is complete. -->
+${docList || '<!-- No new commands this version -->'}
+
+## Chapter Proposals
+
+<!-- Populated by automation when new commands are detected. -->
+${chapterProposals || '<!-- No new commands this version -->'}
 `;
 }
 
@@ -184,30 +193,34 @@ source: "bundle-registration-only"
 bundle_verified: false
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
-license: "CC BY-NC-SA 4.0"
+license: "AGPL-3.0-only"
 ---
 
 # \`/${cmd.name}\`
 
-> 분석 기준: CC v${meta.version} bundle.js (등록 정보만 추출; 동작 명세 미분석)
+> Analysis basis: CC v${meta.version} bundle.js (registration only; behavioral spec not yet analyzed)
 
-## 등록 정보
-| 항목 | 값 |
+## Registration
+
+| Field | Value |
 |---|---|
 | name | \`${cmd.name}\` |
 | type | \`${cmd.type}\` |
 | description | ${cmd.description} |
 
-## 동작 명세
-<!-- TODO: bundle.js 심층 분석 필요 -->
-<!-- 분석 대상: /${cmd.name} 처리 로직 전체 (입력 파싱 → 실행 → 출력) -->
-<!-- 작성 규칙: 의사코드/Mermaid 전용. 번들 코드 인용 절대 금지. -->
+## Behavioral Spec
 
-## 자주 하는 실수
-<!-- TODO: 분석 후 작성 -->
+<!-- TODO: requires bundle.js deep analysis -->
+<!-- Target: complete control flow for /${cmd.name} (input parsing → execution → output) -->
+<!-- Rule: pseudocode/Mermaid only. Never quote bundle code. -->
 
-## 참고
-- [commands.md](commands.md) — 전체 커맨드 목록
+## Common Mistakes
+
+<!-- TODO: fill after analysis -->
+
+## See Also
+
+- [_index.md](_index.md) — full command list for v${meta.version}
 `;
 }
 
@@ -241,7 +254,6 @@ function processVersion(version, opts, allArtifactVersions) {
   const commands = extractCommands(content);
   console.log(`  Commands found: ${commands.length}`);
 
-  // Load prev version commands for diff
   const prevVersion = findPrevVersion(allArtifactVersions, version);
   let prevCommands = [];
   if (prevVersion) {
@@ -257,20 +269,23 @@ function processVersion(version, opts, allArtifactVersions) {
   console.log(`  Added: ${diff.added.map((c) => c.name).join(', ') || 'none'}`);
   console.log(`  Removed: ${diff.removed.map((c) => c.name).join(', ') || 'none'}`);
 
-  // Write _index.md
+  // Write _index.md (always regenerate)
   const indexPath = path.join(versionDir, '_index.md');
   const indexContent = buildIndexMd(meta, commands, diff, prevVersion);
   writeFile(indexPath, indexContent, opts.dryRun);
 
-  // Write stub feature-spec for each newly added command
+  // Write stub for each new command (skip if already exists with bundle_verified:true)
   for (const cmd of diff.added) {
     const stubPath = path.join(versionDir, `${cmd.name}.md`);
-    if (!fs.existsSync(stubPath)) {
-      const stubContent = buildFeatureStubMd(meta, cmd);
-      writeFile(stubPath, stubContent, opts.dryRun);
-    } else {
-      console.log(`  skip (exists): ${stubPath}`);
+    if (fs.existsSync(stubPath)) {
+      const existing = fs.readFileSync(stubPath, 'utf8');
+      if (existing.includes('bundle_verified: true')) {
+        console.log(`  skip (verified): ${stubPath}`);
+        continue;
+      }
     }
+    const stubContent = buildFeatureStubMd(meta, cmd);
+    writeFile(stubPath, stubContent, opts.dryRun);
   }
 
   return { version, meta, commands, diff };
@@ -304,6 +319,7 @@ function main() {
 
   if (targets.length === 0) {
     console.log('\nAll artifact versions are already documented. Nothing to do.');
+    console.log('Use --version X.X.X to force-regenerate a specific version.');
     return;
   }
 
@@ -322,10 +338,9 @@ function main() {
   console.log(`\n── Done. Processed ${results.length} version(s). ──`);
   if (!opts.dryRun && results.length > 0) {
     console.log('\nNext steps:');
-    console.log('  1. Review _index.md for each new version');
-    console.log('  2. For each stub {feature}.md: analyze bundle.js and replace TODO with verified behavioral spec');
-    console.log('  3. Update "분석 문서" section in _index.md after spec is complete');
-    console.log('  4. Review "챕터 제안" section — decide: absorb into existing chapter or keep as feature-spec');
+    console.log('  1. Review _index.md for each version');
+    console.log('  2. For each stub {command}.md: run claude -p with scripts/prompts/analyze-command.md');
+    console.log('  3. Update bundle_verified: true in the feature-spec frontmatter after verification');
   }
 }
 
