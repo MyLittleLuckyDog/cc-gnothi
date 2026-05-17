@@ -15,6 +15,15 @@ pub struct QueryRequest {
     pub text: String,
 }
 
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct GetSpecRequest {
+    /// Exact slash command name, e.g. "clear", "compact", "memory".
+    pub command: String,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct ListCommandsRequest {}
+
 #[derive(Clone)]
 pub struct GnothiServer {
     store: Arc<Store>,
@@ -51,11 +60,36 @@ impl GnothiServer {
 
         serde_json::json!({ "results": results }).to_string()
     }
+
+    #[tool(
+        name = "get_spec",
+        description = "Return the full behavioral spec for a single Claude Code slash command. Sections are concatenated in canonical order (Overview → Registration → Behavioral Spec → …). Appendix excluded. Use this when you need the complete spec for a known command."
+    )]
+    async fn get_spec(&self, Parameters(req): Parameters<GetSpecRequest>) -> String {
+        match self.store.get_spec(&req.command, self.cc_version.as_deref()) {
+            Some(result) => serde_json::to_string(&result).unwrap_or_else(|e| {
+                serde_json::json!({ "error": e.to_string() }).to_string()
+            }),
+            None => serde_json::json!({
+                "error": format!("No spec found for command: {}", req.command)
+            })
+            .to_string(),
+        }
+    }
+
+    #[tool(
+        name = "list_commands",
+        description = "List all known Claude Code slash commands with name, description, and type. Use this for discovery before calling get_spec or query."
+    )]
+    async fn list_commands(&self, _: Parameters<ListCommandsRequest>) -> String {
+        let commands = self.store.list_commands(self.cc_version.as_deref());
+        serde_json::json!({ "commands": commands }).to_string()
+    }
 }
 
 #[tool_handler(
     router = self.tool_router,
     name = "cc-gnothi-mcp",
-    instructions = "Query Claude Code behavioral specs verified against bundle source. Use the `query` tool with a slash command name or feature keyword."
+    instructions = "Query Claude Code behavioral specs verified against bundle source. Use `list_commands` to discover available commands, `get_spec` to fetch a full spec, or `query` to search by keyword."
 )]
 impl ServerHandler for GnothiServer {}
