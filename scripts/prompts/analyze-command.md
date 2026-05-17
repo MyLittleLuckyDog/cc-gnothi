@@ -7,7 +7,7 @@ You are a technical documentation engineer writing verified behavioral specs for
 Analyze the `/{COMMAND}` slash command in **CC v{VERSION}**.
 
 **Bundle path**: `{BUNDLE_PATH}`
-**Output**: A complete feature-spec markdown document.
+**Output**: A complete feature-spec markdown document **written entirely in English**.
 
 ---
 
@@ -33,10 +33,11 @@ Use `Bash` (grep, awk) and `Read` to trace the implementation step by step:
 1. **NEVER quote bundle code** — any length, any snippet. Bundle is © Anthropic PBC.
 2. **Pseudocode only** for algorithms. Write it fresh; do not copy-paste.
 3. **Mermaid flowcharts** for branching logic with 3+ paths.
-4. **Every behavioral claim** must cite: `분석 기준: CC v{VERSION} bundle.js:{line}`
-5. **Obfuscated identifiers** (`mw8`, `QI7`, etc.) — ONLY in the **Appendix 식별자 매핑** table, never in prose.
-6. **Constants and limits**: state as facts with citation. Example: "조건 길이 상한 4000자 (bundle.js:{line})"
-7. If you cannot find something: write `<!-- TODO: bundle.js 분석 필요 -->`, do not guess.
+4. **Every behavioral claim** must cite: `Analysis basis: CC v{VERSION} bundle.js:{line}`
+5. **Obfuscated identifiers** (`mw8`, `QI7`, etc.) — ONLY in the **Appendix — Identifier Mapping** table, never in prose or pseudocode comments.
+6. **Constants and limits**: state as facts with citation. Example: "Maximum condition length: 4000 characters (bundle.js:{line})"
+7. If you cannot find something: write `<!-- TODO: requires bundle.js analysis -->`, do not guess.
+8. **Language**: all prose, section headings, table headers, and pseudocode comments must be in **English**.
 
 ---
 
@@ -53,93 +54,92 @@ updated: "{TODAY}"
 tags: ["{COMMAND}", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v{VERSION} bundle.js (직접 분석)"
+analysis_basis: "CC v{VERSION} bundle.js (direct analysis)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
-license: "CC BY-NC-SA 4.0"
+license: "AGPL-3.0-only"
 ---
 
 # `/{COMMAND}`
 
-> 분석 기준: CC v{VERSION} bundle.js (직접 분석)  
-> 최소 버전: v{VERSION}
+> Analysis basis: CC v{VERSION} bundle.js (direct analysis)
+> Minimum version: v{VERSION}
 
 ---
 
-## 개요
+## Overview
 
-[1–3문장. 이 커맨드가 무엇을 하는지, 핵심 메커니즘 한 줄.]
+[1–3 sentences. What this command does and its core mechanism.]
 
-## 등록 정보
+## Registration
 
-| 항목 | 값 |
+| Field | Value |
 |---|---|
-| type | `local-jsx` 또는 `local` |
+| type | `local-jsx` or `local` |
 | name | `{COMMAND}` |
 | description | ... |
-| argumentHint | ... (있으면) |
-| immediate | true/false (있으면) |
-| supportsNonInteractive | true/false (있으면) |
+| argumentHint | ... (if present) |
+| immediate | true/false (if present) |
+| supportsNonInteractive | true/false (if present) |
 
-분석 기준: CC v{VERSION} bundle.js:{line}
+Analysis basis: CC v{VERSION} bundle.js:{line}
 
-## 입력 분기
+## Input Branching
 
-[Mermaid flowchart 또는 numbered pseudocode]
+[Mermaid flowchart or numbered pseudocode]
 
 ```mermaid
 flowchart TD
     ...
 ```
 
-분석 기준: CC v{VERSION} bundle.js:{line}
+Analysis basis: CC v{VERSION} bundle.js:{line}
 
-## 동작 명세
+## Behavioral Spec
 
-[섹션별 pseudocode + 상수]
+[Per-section pseudocode + constants]
 
-### [서브기능 1]
+### [Sub-feature 1]
 
-pseudocode:
 ```
 function name(input):
     if input is empty:
         ...
-    if input matches clear_keywords:
+    if input matches CLEAR_KEYWORDS:
         ...
     if input.length > LIMIT:
         error "..."  // LIMIT = 4000, bundle.js:{line}
     ...
 ```
 
-분석 기준: CC v{VERSION} bundle.js:{line}
+Analysis basis: CC v{VERSION} bundle.js:{line}
 
-## 상태·사이드이펙트
+## State & Side Effects
 
-| 항목 | 내용 |
+| Item | Detail |
 |---|---|
-| 훅 등록/해제 | ... |
-| appState 변경 | ... |
-| 텔레메트리 | `tengu_*` 이벤트 목록 |
-| 사운드 | ... |
+| Hook registration/removal | ... |
+| appState changes | ... |
+| Telemetry | list of `tengu_*` events |
+| Sound | ... |
 
-분석 기준: CC v{VERSION} bundle.js:{line}
+Analysis basis: CC v{VERSION} bundle.js:{line}
 
-## 버전별 차이
+## Version History
 
-| 버전 | 변경 내용 |
+| Version | Change |
 |---|---|
-| v{VERSION} | 초기 분석 |
+| v{VERSION} | Initial analysis |
 
-## 자주 하는 실수
+## Common Mistakes
 
 1. ...
 
-## Appendix — 식별자 매핑
+## Appendix — Identifier Mapping
 
-> 번들 디버깅 전용. 버전 업그레이드 시 식별자가 바뀔 수 있음.
+> For bundle debugging only. Identifiers change across versions.
 
-| 식별자 | 역할 |
+| Identifier | Role |
 |---|---|
 | `XYZ` | ... |
 ```
