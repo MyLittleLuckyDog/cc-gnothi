@@ -1,0 +1,13 @@
+{
+  "name": "cc-gnothi",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build-index": "node scripts/extract-ast.js --build-index",
+    "extract": "node scripts/extract-ast.js --cmd"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.54.0",
+    "@babel/parser": "^7.27.0"
+  }
+}

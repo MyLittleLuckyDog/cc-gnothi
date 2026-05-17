@@ -7,102 +7,79 @@
 
 ## 현재 상태 한 줄 요약
 
-**MCP walking skeleton 빌드 완료, 문서 stub 56개 생성 완료, 배치 분석 파이프라인 미완성.**
+**AST 기반 추출 파이프라인 완성. `clear` spec 1개 verified. 55개 대기 중. claude-gateway PoC 단계.**
 
 ---
 
 ## Git 상태
 
-- 브랜치: `main`, origin과 동기화 완료
+- 브랜치: `main`
 - 마지막 커밋: `f44d7be feat(docs): add v2.1.132 stubs + batch analysis script`
-- 커밋 이력:
-  ```
-  f44d7be feat(docs): add v2.1.132 stubs + batch analysis script
-  af79656 feat(mcp): add Rust MCP walking skeleton + update license and prompt
-  f092e09 docs: add README and CC BY-NC-SA 4.0 license
-  0eceef2 feat: initial commit — cc-gnothi workspace
-  ```
+- 미커밋 변경:
+  - `scripts/extract-ast.js` (신규 — AST 인덱스 + 커맨드 추출)
+  - `scripts/call-api.js` (신규 — Anthropic SDK, gateway proxy, 429 retry)
+  - `scripts/analyze-all.sh` (수정 — call-api.js 사용, 순차 처리)
+  - `scripts/prompts/analyze-command.md` (수정 — 툴 없이 JSON 기반 spec 생성)
+  - `package.json`, `node_modules/` (신규 — @babel/parser, @anthropic-ai/sdk)
+  - `versions/v2.1.132/clear.md` (신규 — verified spec 1개)
 
 ---
 
 ## 컴포넌트별 상태
 
 ### Rust MCP 서버 (`src/`)
-
 | 파일 | 상태 |
 |---|---|
-| `Cargo.toml` | 완료. rmcp 1.7.0, schemars 1.0, reqwest, walkdir |
-| `main.rs` | 완료. `--cc-version`, `--docs`, `--fetch` args, stdio transport |
-| `loader.rs` | 완료. MD→Chunk (frontmatter + section 단위) |
-| `store.rs` | 완료. QMD 스코어링 (heading 8, feature 6, tags 4, body 1, version +10) |
-| `fetcher.rs` | 완료. GitHub API tree + SHA 캐시 (`~/.cc-gnothi/cache/`) |
-| `server.rs` | 완료. rmcp `query` 툴 1개 |
-| **빌드** | **성공** (경고 3개, 에러 없음) |
+| 빌드 | **성공** (경고 3개, 에러 없음) |
+| 기능 | `query` 툴 1개 |
 
 ### 문서 (`versions/v2.1.132/`)
-
 | 항목 | 상태 |
 |---|---|
-| `_index.md` | 완료. 56개 커맨드 목록, 영문 |
-| stub `.md` (56개) | 완료. Registration만, `bundle_verified: false` |
-| **verified spec** | **0개** — 배치 분석 미완성 |
+| stub (55개) | 완료. `bundle_verified: false` |
+| **verified spec** | **1개** — `clear.md` (품질 확인됨) |
 
-### 스크립트
+### AST 파이프라인 (`scripts/`)
 
 | 파일 | 상태 |
 |---|---|
-| `analyze-new-version.js` | 완료. 영문 stub 생성 |
-| `analyze-all.sh` | 완료. 파이프라인 작성됨, **출력 포맷 버그 있음** |
-| `prompts/analyze-command.md` | 완료. 영문, rule 5 강화됨 |
-
----
-
-## 핵심 미해결 이슈
-
-### ① analyze-all.sh 출력 포맷 버그 (최우선)
-
-**증상**: `claude -p`에 `--allowed-tools "Bash Read"` 줘도, claude가 분석은 제대로 하고 Write 툴로 파일 저장을 시도 → stdout에 permission 요청 텍스트가 나옴 → validation 실패.
-
-**증거**: `/tmp/cc-gnothi-clear-FAILED.md` 내용 =
-```
-The write is waiting for your permission to overwrite the existing file...
-- 12 ordered phases — SessionEnd hooks → ... (올바른 분석 내용)
-- SessionEnd hook timeout — clamped to [1500ms, 60000ms]
-- 35 obfuscated identifier mappings
-```
-→ **분석 자체는 정확함.** 출력 경로만 잘못됨.
-
-**수정 방향**:
-- `analyze-command.md` 프롬프트에 더 강한 지시 추가:
-  > "Write/Edit tools are disabled. You MUST output the raw markdown directly to stdout as your response text. Any permission request or file-save attempt is a failure."
-- `--output-format text` 확인 (이미 default이지만 명시)
-- 또는: 프롬프트 마지막에 "Now output the markdown:" 같은 강제 유도어 추가
-
-### ② npm 권한 문제 (선택)
-
-```bash
-sudo chown -R $(whoami) ~/.npm
-```
-실행 후 `npm install -g js-beautify` 가능 → 번들 readable 변환 옵션 생김.
-현재는 grep+Read로 분석 가능함이 확인됨 (clear 분석 내용이 정확했음).
-
-### ③ MCP 미완성 기능 (문서 완성 후)
-
-- See Also 1-hop 링크 확장 (Store에서 linked spec Overview 자동 추가)
-- GitHub 인증 토큰 옵션
-- `CC_VERSION` 환경변수 fallback 전략
+| `extract-ast.js` | **완성**. `--build-index` (17780 fn, 84 cmd), `--cmd <name>` (JSON 추출) |
+| `call-api.js` | **완성**. gateway proxy 또는 직접 API, 429 retry, usage 로깅 |
+| `analyze-all.sh` | **완성**. 순차 처리, AST JSON → prompt embed → call-api.js |
+| `prompts/analyze-command.md` | **완성**. 툴 없이 JSON만으로 spec 생성 |
+| AST 인덱스 캐시 | `~/.cc-gnothi/cache/index-2.1.132.json` (빌드 완료) |
 
 ---
 
 ## 즉시 재개 순서
 
 ```
-1. analyze-command.md 프롬프트 수정 (Write 툴 금지 강화)
-2. clear 단독 테스트: bash scripts/analyze-all.sh --cmd clear --version 2.1.132
-3. 성공 확인 후 배치: bash scripts/analyze-all.sh --version 2.1.132 --parallel 5
-   (예상 시간: 56개 × ~7분 / 5병렬 = ~80분)
-4. 배치 완료 후 MCP fetcher 실제 테스트
+1. claude-gateway 빌드 및 실행:
+   cd /Volumes/juryu_home/with_AI/projects/06.DenoV8POC/01.Tools/claude-gateway
+   cargo build --release
+   ./target/release/server
+
+2. 단독 테스트:
+   cd /Volumes/juryu_home/with_AI/projects/0x.tools/cc-gnothi
+   bash scripts/analyze-all.sh --cmd add-dir --version 2.1.132
+
+3. 성공 확인 후 배치 (55개):
+   bash scripts/analyze-all.sh --version 2.1.132
+
+4. 배치 완료 후 MCP 실제 테스트
 ```
+
+---
+
+## 핵심 설계 변경 (v2 파이프라인)
+
+| 항목 | 이전 | 현재 |
+|---|---|---|
+| 분석 방식 | `claude -p` + grep/Read 번들 | AST 추출 → JSON → Claude 해석만 |
+| API 호출 | `claude -p` (subprocess) | `@anthropic-ai/sdk` → gateway proxy |
+| 병렬 처리 | xargs -P 5 | 순차 (rate limit 대응) |
+| Write 툴 버그 | 발생 가능 | 구조적 해소 (툴 없음) |
+| 결과물 품질 | LLM 추측 가능 | AST 사실 기반 (byte citation) |
 
 ---
 
@@ -110,10 +87,10 @@ sudo chown -R $(whoami) ~/.npm
 
 - **라이선스**: AGPL-3.0-only (Anthropic PBC 번들 저작권 별도 명시)
 - **문서 언어**: CC가 참고할 MD는 영문, 사용자 피드백은 한국어
-- **번들 분석 방식**: grep + Read (14MB, 19K줄, 평균 734자/라인). 작동 확인됨.
-- **그래프 검색**: 현 단계 불필요. 문서 충분해지면 See Also 1-hop 확장으로 커버.
-- **MCP 툴 수**: `query` 1개. `list_commands` / `get_spec` 추가는 나중.
-- **obfuscated identifier**: Appendix 매핑 테이블에만 허용, pseudocode에 절대 금지.
+- **번들 분석 방식**: @babel/parser AST (14MB, Bun CJS, 3.3s parse, 17780 fn)
+- **AST JSON 크기**: depth=2 기준 ~20KB/커맨드 → Claude 프롬프트에 직접 임베드
+- **obfuscated identifier**: Appendix 매핑 테이블에만 허용, pseudocode 금지
+- **gateway**: `/v1/messages` proxy (OAuth 기반, API 키 불필요)
 
 ---
 
@@ -121,15 +98,20 @@ sudo chown -R $(whoami) ~/.npm
 
 ```
 /Volumes/juryu_home/with_AI/projects/0x.tools/cc-gnothi/   ← 메인 repo
-  src/                  ← Rust MCP 서버
   scripts/
-    analyze-all.sh      ← 배치 분석 스크립트
-    analyze-new-version.js
-    prompts/analyze-command.md  ← claude -p 프롬프트 템플릿
-  versions/v2.1.132/    ← stub 문서 56개
+    extract-ast.js          ← AST 인덱스 빌드 + 커맨드 추출
+    call-api.js             ← API 호출 (gateway or direct)
+    analyze-all.sh          ← 배치 파이프라인
+    prompts/analyze-command.md
+  versions/v2.1.132/        ← spec 문서 (1 verified, 55 stub)
 
 /Volumes/juryu_home/with_AI/projects/0x.tools/caludeCodeAVX2/artifacts/
-  claude-2.1.132.js     ← 분석 대상 번들 (14MB, 읽기 전용)
+  claude-2.1.132.js         ← 분석 대상 번들 (14MB, 읽기 전용)
 
-/tmp/cc-gnothi-clear-FAILED.md  ← clear 분석 결과 (내용은 정확함, 형식 실패)
+/Volumes/juryu_home/with_AI/projects/06.DenoV8POC/01.Tools/claude-gateway/
+  src/                      ← Rust gateway source
+  target/release/server     ← 빌드 필요
+
+~/.cc-gnothi/cache/
+  index-2.1.132.json        ← AST 인덱스 (17780 fn, 84 cmd)
 ```

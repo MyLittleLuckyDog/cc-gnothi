@@ -4,46 +4,46 @@ You are a technical documentation engineer writing verified behavioral specs for
 
 ## Task
 
-Analyze the `/{COMMAND}` slash command in **CC v{VERSION}**.
+Write a complete feature-spec for the `/{COMMAND}` slash command in **CC v{VERSION}**.
 
-**Bundle path**: `{BUNDLE_PATH}`
-**Output**: Print the complete feature-spec markdown document to stdout. **Do not use Write or Edit tools** — output the markdown directly as your final response text. Written entirely in English.
-
----
-
-## Analysis Approach
-
-Use `Bash` (grep, awk) and `Read` to trace the implementation step by step:
-
-1. `grep -n 'name:"{COMMAND}"' {BUNDLE_PATH}` — find registration line(s)
-2. From registration, note all fields: `type`, `name`, `description`, `argumentHint`, `immediate`, `supportsNonInteractive`, `thinClientDispatch`, `isHidden`, `isEnabled`, etc.
-3. Find the `load:` target function identifier → grep for its definition
-4. Read 300–500 lines around the definition to understand the full control flow
-5. Trace every branch: input parsing → validation → core logic → output → side effects
-6. Note all numeric constants, string constants, timeouts, Set members
-7. Note all telemetry events (`tengu_*`, `Q(...)` calls), sound effects, hook registrations
-8. If complexity requires: trace sub-functions recursively (grep for each sub-identifier)
-
-**Continue until you have traced every code path end-to-end.**
+**DO NOT use any tools.** All data you need is in the JSON block at the end of this prompt.
+Written entirely in English.
 
 ---
 
-## CRITICAL Writing Rules
+## Source Data
+
+The JSON block below was extracted deterministically from the CC v{VERSION} bundle via AST analysis.
+It contains:
+- `registration` — exact field values from the command registration object
+- `callGraph` — call edges from the command's implementation (depth ≤ 2)
+- `telemetry` — all `tengu_*` event strings found in the implementation
+- `literals` — string/number constants found in the implementation
+- `identifiers` — obfuscated function identifiers reached during traversal
+
+Use these facts as your primary source. Do not guess. If something is not in the data, write
+`<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->`.
+
+---
+
+## Writing Rules
 
 1. **NEVER quote bundle code** — any length, any snippet. Bundle is © Anthropic PBC.
 2. **Pseudocode only** for algorithms. Write it fresh; do not copy-paste.
 3. **Mermaid flowcharts** for branching logic with 3+ paths.
-4. **Every behavioral claim** must cite: `Analysis basis: CC v{VERSION} bundle.js:{line}`
-5. **Obfuscated identifiers** (`mw8`, `QI7`, etc.) — ONLY in the **Appendix — Identifier Mapping** table. In pseudocode, replace every mangled name with a descriptive English name (e.g., use `loadGoalConfig()` not `mw8()`). This ban applies everywhere: prose, pseudocode function names, pseudocode comments, Mermaid node labels, and table cells. Violation = invalid output.
-6. **Constants and limits**: state as facts with citation. Example: "Maximum condition length: 4000 characters (bundle.js:{line})"
-7. If you cannot find something: write `<!-- TODO: requires bundle.js analysis -->`, do not guess.
-8. **Language**: all prose, section headings, table headers, and pseudocode comments must be in **English**.
+4. **Every behavioral claim** must cite the `loc_byte` from the JSON as:
+   `Analysis basis: CC v{VERSION} bundle.js:+{loc_byte}`
+5. **Obfuscated identifiers** (`mw8`, `QI7`, etc.) — ONLY in the **Appendix — Identifier Mapping**
+   table. Replace every mangled name with a descriptive English name in pseudocode.
+6. **Constants and limits**: state as facts with citation. Example:
+   "Maximum condition length: 4000 characters (bundle.js:+{loc_byte})"
+7. **Language**: all prose, section headings, table headers, and pseudocode in **English**.
 
 ---
 
 ## Output Format
 
-Print the complete markdown to stdout. Nothing before or after the markdown — no preamble, no trailing note, no permission request.
+Print the complete markdown below. Nothing before or after — no preamble, no trailing note.
 
 ```
 ---
@@ -54,7 +54,7 @@ updated: "{TODAY}"
 tags: ["{COMMAND}", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v{VERSION} bundle.js (direct analysis)"
+analysis_basis: "CC v{VERSION} bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -62,7 +62,7 @@ license: "AGPL-3.0-only"
 
 # `/{COMMAND}`
 
-> Analysis basis: CC v{VERSION} bundle.js (direct analysis)
+> Analysis basis: CC v{VERSION} bundle.js (AST extraction + Claude interpretation)
 > Minimum version: v{VERSION}
 
 ---
@@ -75,55 +75,43 @@ license: "AGPL-3.0-only"
 
 | Field | Value |
 |---|---|
-| type | `local-jsx` or `local` |
+| type | `...` |
 | name | `{COMMAND}` |
 | description | ... |
-| argumentHint | ... (if present) |
-| immediate | true/false (if present) |
-| supportsNonInteractive | true/false (if present) |
+[Add rows for each non-null field in registration JSON]
 
-Analysis basis: CC v{VERSION} bundle.js:{line}
+Analysis basis: CC v{VERSION} bundle.js:+{loc_byte from registration}
 
 ## Input Branching
 
-[Mermaid flowchart or numbered pseudocode]
+[Mermaid flowchart or numbered pseudocode derived from callGraph and literals]
 
 ```mermaid
 flowchart TD
     ...
 ```
 
-Analysis basis: CC v{VERSION} bundle.js:{line}
-
 ## Behavioral Spec
 
-[Per-section pseudocode + constants]
+[Pseudocode per sub-feature. Use descriptive names, not obfuscated IDs.]
 
-### [Sub-feature 1]
+### [Sub-feature derived from callGraph]
 
 ```
-function name(input):
-    if input is empty:
-        ...
-    if input matches CLEAR_KEYWORDS:
-        ...
-    if input.length > LIMIT:
-        error "..."  // LIMIT = 4000, bundle.js:{line}
+function descriptiveName(input):
     ...
 ```
 
-Analysis basis: CC v{VERSION} bundle.js:{line}
+Analysis basis: CC v{VERSION} bundle.js:+{loc_byte}
 
 ## State & Side Effects
 
 | Item | Detail |
 |---|---|
-| Hook registration/removal | ... |
+| Telemetry | [list events from telemetry array] |
+| Hook registration | ... |
 | appState changes | ... |
-| Telemetry | list of `tengu_*` events |
 | Sound | ... |
-
-Analysis basis: CC v{VERSION} bundle.js:{line}
 
 ## Version History
 
@@ -141,5 +129,13 @@ Analysis basis: CC v{VERSION} bundle.js:{line}
 
 | Identifier | Role |
 |---|---|
-| `XYZ` | ... |
+[Row per entry in identifiers array that is obfuscated (short, non-English name)]
+```
+
+---
+
+## Pre-Extracted AST Data
+
+```json
+{AST_JSON}
 ```
