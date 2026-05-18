@@ -28,8 +28,9 @@ function parseArgs() {
   };
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
-      case '--build-index': opts.mode = 'index'; break;
-      case '--cmd':         opts.mode = 'cmd'; opts.cmd = args[++i]; break;
+      case '--build-index':    opts.mode = 'index'; break;
+      case '--hash-commands':  opts.mode = 'hash';  break;
+      case '--cmd':            opts.mode = 'cmd'; opts.cmd = args[++i]; break;
       case '--bundle':      opts.bundle = args[++i]; break;
       case '--version':     opts.version = args[++i]; break;
       case '--index':       opts.indexPath = args[++i]; break;
@@ -369,6 +370,48 @@ function main() {
     const outPath = path.join(cacheDir, `index-${opts.version}.json`);
     fs.writeFileSync(outPath, JSON.stringify(index, null, 2));
     process.stderr.write(`Index written: ${outPath}\n`);
+    return;
+  }
+
+  if (opts.mode === 'hash') {
+    if (!opts.bundle || !opts.version) {
+      console.error('--hash-commands requires --bundle and --version');
+      process.exit(1);
+    }
+    const crypto = require('crypto');
+    const cacheDir = path.join(os.homedir(), '.cc-gnothi', 'cache');
+    const indexPath = opts.indexPath ?? path.join(cacheDir, `index-${opts.version}.json`);
+
+    if (!fs.existsSync(indexPath)) {
+      process.stderr.write(`Building index for v${opts.version} first...\n`);
+      const src0 = fs.readFileSync(opts.bundle, 'utf8');
+      const index0 = buildIndex(src0, opts.version);
+      fs.mkdirSync(cacheDir, { recursive: true });
+      fs.writeFileSync(indexPath, JSON.stringify(index0, null, 2));
+    }
+
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    process.stderr.write(`Loading bundle ${opts.bundle}...\n`);
+    const src = fs.readFileSync(opts.bundle, 'utf8');
+
+    const hashes = {};
+    const cmdNames = Object.keys(index.commands);
+    process.stderr.write(`Computing structural fingerprints for ${cmdNames.length} commands...\n`);
+
+    for (const cmdName of cmdNames) {
+      const extracted = extractCommand(src, index, cmdName, opts.depth);
+      const lits = new Set(
+        (extracted.literals || []).filter(x => x.kind === 'string').map(x => x.value)
+      );
+      const tels = new Set((extracted.telemetry || []).map(x => x.event));
+      const sig = [...lits, ...tels].sort().join('|');
+      hashes[cmdName] = crypto.createHash('sha256').update(sig).digest('hex').slice(0, 16);
+    }
+
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const outPath = path.join(cacheDir, `hashes-${opts.version}.json`);
+    fs.writeFileSync(outPath, JSON.stringify({ version: opts.version, commands: hashes }, null, 2));
+    process.stderr.write(`Hashes written: ${outPath} (${cmdNames.length} commands)\n`);
     return;
   }
 
