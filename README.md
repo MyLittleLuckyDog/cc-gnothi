@@ -49,6 +49,10 @@ curl -L https://github.com/MyLittleLuckyDog/cc-gnothi/releases/latest/download/c
 # Linux x86_64
 curl -L https://github.com/MyLittleLuckyDog/cc-gnothi/releases/latest/download/cc-gnothi-mcp-x86_64-unknown-linux-gnu.tar.gz \
   | tar xz && claude mcp add cc-gnothi -- ./cc-gnothi-mcp
+
+# Windows x86_64 (PowerShell)
+Invoke-WebRequest -Uri https://github.com/MyLittleLuckyDog/cc-gnothi/releases/latest/download/cc-gnothi-mcp-x86_64-pc-windows-msvc.exe -OutFile cc-gnothi-mcp.exe
+claude mcp add cc-gnothi -- ./cc-gnothi-mcp.exe
 ```
 
 No configuration needed. The binary auto-detects your installed CC version and loads the matching embedded specs. If your exact version isn't embedded yet, it falls back to the closest available version with a warning.
