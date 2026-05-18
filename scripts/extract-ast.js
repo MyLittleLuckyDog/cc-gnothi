@@ -456,14 +456,50 @@ function extractSystemContext(src, index, minStringLen, version) {
   }
 
   // ── Pass C: find system prompt assembler and force-include its callees ────────
-  // The assembler is the function that calls section-builders like OU7(), zU7(), YU7().
-  // Strategy: find a function whose slice contains 'OU7' (the System section builder).
-  // OU7 is reliably present in the CC system prompt assembly for v2.1.x.
+  // Phase 1 (anchor): find a function calling OU7() — works for *U7 namespace versions.
+  // Phase 2 (fallback): find the function calling the most already-known candidates.
+  //   Section-builders are string-heavy and land in `candidates` after Pass A/B regardless
+  //   of their namespace. The assembler is the function that calls the most of them.
 
   process.stderr.write('Pass C: tracing system prompt assembler call graph...\n');
 
+  // Shared: extract and force-include all indexed callees of a confirmed assembler.
+  const applyAssembler = (assemblerFnId, indexedCallees) => {
+    for (const calleeId of indexedCallees) {
+      if (calleeId === assemblerFnId) continue;
+      const calleeLoc = index.functions[calleeId];
+      const calleeSlice = src.slice(calleeLoc.start, calleeLoc.end);
+      let calleeAst;
+      try {
+        calleeAst = parser.parse(calleeSlice, { sourceType: 'script', errorRecovery: true, strictMode: false });
+      } catch { continue; }
+      walk(calleeAst, {
+        StringLiteral(node) {
+          const v = node.value;
+          if (v && v.length >= Math.min(minStringLen, 80)) {
+            upsert(calleeId, calleeLoc.start, makeLargeString(v, calleeLoc.start + node.start), []);
+          }
+        },
+        TemplateLiteral(node) {
+          const text = cooked(node);
+          if (text && text.length >= Math.min(minStringLen, 80)) {
+            upsert(calleeId, calleeLoc.start, makeLargeString(text, calleeLoc.start + node.start), []);
+          }
+        },
+      });
+      if (!candidates.has(calleeId)) {
+        candidates.set(calleeId, {
+          identifier: calleeId, byteOffset: calleeLoc.start,
+          totalStringChars: 0, largeStrings: [], telemetryEvents: [],
+        });
+      }
+      candidates.get(calleeId).__assemblerCall = true;
+    }
+  };
+
   let assemblerFound = false;
 
+  // Phase 1: OU7() anchor
   for (const [fnId, loc] of Object.entries(index.functions)) {
     const fnLen = loc.end - loc.start;
     if (fnLen > 8000 || fnLen < 100) continue;
@@ -489,47 +525,73 @@ function extractSystemContext(src, index, minStringLen, version) {
     if (indexedCallees.size < 2) continue;
 
     process.stderr.write(
-      `  Assembler: ${fnId} (${fnLen} bytes, ${indexedCallees.size} indexed callees): `
+      `  Assembler (anchor): ${fnId} (${fnLen} bytes, ${indexedCallees.size} indexed callees): `
       + [...indexedCallees].slice(0, 8).join(', ') + '\n'
     );
 
-    // Force-include all direct callees
-    for (const calleeId of indexedCallees) {
-      if (calleeId === fnId) continue;
-      const calleeLoc = index.functions[calleeId];
-      const calleeSlice = src.slice(calleeLoc.start, calleeLoc.end);
+    applyAssembler(fnId, indexedCallees);
+    assemblerFound = true;
+    break;
+  }
 
-      let calleeAst;
+  // Phase 2: fallback — find function calling the most known candidates.
+  // Namespace-agnostic: section-builders are in `candidates` regardless of their identifier.
+  if (!assemblerFound) {
+    process.stderr.write('  Phase 1 anchor not found — trying candidate-callee heuristic...\n');
+
+    let bestFnId = null, bestFnLoc = null, bestFnLen = 0, bestFnSlice = null, bestCount = 0;
+
+    for (const [fnId, loc] of Object.entries(index.functions)) {
+      const fnLen = loc.end - loc.start;
+      if (fnLen > 8000 || fnLen < 200) continue;
+      if (candidates.has(fnId)) continue; // section-builders are not the assembler
+
+      const slice = src.slice(loc.start, loc.end);
+      let fnAst;
       try {
-        calleeAst = parser.parse(calleeSlice, { sourceType: 'script', errorRecovery: true, strictMode: false });
+        fnAst = parser.parse(slice, { sourceType: 'script', errorRecovery: true, strictMode: false });
       } catch { continue; }
 
-      walk(calleeAst, {
-        StringLiteral(node) {
-          const v = node.value;
-          if (v && v.length >= Math.min(minStringLen, 80)) {
-            upsert(calleeId, calleeLoc.start, makeLargeString(v, calleeLoc.start + node.start), []);
-          }
-        },
-        TemplateLiteral(node) {
-          const text = cooked(node);
-          if (text && text.length >= Math.min(minStringLen, 80)) {
-            upsert(calleeId, calleeLoc.start, makeLargeString(text, calleeLoc.start + node.start), []);
+      const candidateCallees = new Set();
+      walk(fnAst, {
+        CallExpression(node) {
+          if (node.callee.type === 'Identifier' && candidates.has(node.callee.name)) {
+            candidateCallees.add(node.callee.name);
           }
         },
       });
 
-      if (!candidates.has(calleeId)) {
-        candidates.set(calleeId, {
-          identifier: calleeId, byteOffset: calleeLoc.start,
-          totalStringChars: 0, largeStrings: [], telemetryEvents: [],
-        });
+      if (candidateCallees.size > bestCount) {
+        bestCount = candidateCallees.size;
+        bestFnId = fnId; bestFnLoc = loc; bestFnLen = fnLen; bestFnSlice = slice;
       }
-      candidates.get(calleeId).__assemblerCall = true;
     }
 
-    assemblerFound = true;
-    break; // only process the first assembler matching the heuristic
+    if (bestFnId && bestCount >= 6) { // bestCount = unique candidate callees
+      let fnAst;
+      try {
+        fnAst = parser.parse(bestFnSlice, { sourceType: 'script', errorRecovery: true, strictMode: false });
+      } catch { fnAst = null; }
+
+      const indexedCallees = new Set();
+      if (fnAst) {
+        walk(fnAst, {
+          CallExpression(node) {
+            if (node.callee.type === 'Identifier' && index.functions[node.callee.name]) {
+              indexedCallees.add(node.callee.name);
+            }
+          },
+        });
+      }
+
+      process.stderr.write(
+        `  Assembler (fallback): ${bestFnId} (${bestFnLen} bytes, ${indexedCallees.size} indexed / ${bestCount} candidate callees): `
+        + [...indexedCallees].slice(0, 8).join(', ') + '\n'
+      );
+
+      applyAssembler(bestFnId, indexedCallees);
+      assemblerFound = true;
+    }
   }
 
   if (!assemblerFound) process.stderr.write('  No assembler found via heuristic.\n');
