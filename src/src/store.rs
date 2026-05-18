@@ -73,11 +73,14 @@ impl Store {
         }
 
         let include_appendix = terms.iter().any(|t| t == "identifier" || t == "appendix");
+        // Include system-context docs only when query explicitly asks for system/prompt layer
+        let include_system = terms.iter().any(|t| t == "system" || t == "prompt" || t == "hardcoded");
 
         let mut scored: Vec<(usize, &Chunk)> = self
             .chunks
             .iter()
             .filter(|c| include_appendix || !is_appendix(c))
+            .filter(|c| include_system || c.frontmatter.doc_type.as_deref() != Some("system-context"))
             .filter_map(|chunk| {
                 let score = qmd_score(chunk, &terms, version_hint);
                 if score > 0 { Some((score, chunk)) } else { None }

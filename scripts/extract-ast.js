@@ -19,22 +19,25 @@ const parser = require('@babel/parser');
 function parseArgs() {
   const args = process.argv.slice(2);
   const opts = {
-    mode: null,       // 'index' | 'cmd'
+    mode: null,       // 'index' | 'cmd' | 'hash' | 'system-context'
     cmd: null,
     bundle: null,
     version: null,
     indexPath: null,
     depth: 2,
+    minStringLen: 500,
   };
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
-      case '--build-index':    opts.mode = 'index'; break;
-      case '--hash-commands':  opts.mode = 'hash';  break;
-      case '--cmd':            opts.mode = 'cmd'; opts.cmd = args[++i]; break;
+      case '--build-index':         opts.mode = 'index'; break;
+      case '--hash-commands':       opts.mode = 'hash';  break;
+      case '--dump-system-context': opts.mode = 'system-context'; break;
+      case '--cmd':                 opts.mode = 'cmd'; opts.cmd = args[++i]; break;
       case '--bundle':      opts.bundle = args[++i]; break;
       case '--version':     opts.version = args[++i]; break;
       case '--index':       opts.indexPath = args[++i]; break;
       case '--depth':       opts.depth = parseInt(args[++i], 10); break;
+      case '--min-len':     opts.minStringLen = parseInt(args[++i], 10); break;
     }
   }
   return opts;
@@ -339,6 +342,265 @@ function dedupe(arr, key) {
   });
 }
 
+// ── System context extraction ─────────────────────────────────────────────────
+// Two-pass approach:
+//   Pass A (full AST): find top-level string variable declarations (var X = "..." / `...`)
+//   Pass B (index slices): scan each indexed function for StringLiteral + TemplateLiteral
+// Content is included for internal analysis only — never reproduce in output spec.
+
+function cooked(templateLiteralNode) {
+  // Join static quasis parts; for dynamic templates, separate parts with " ... "
+  const parts = templateLiteralNode.quasis.map((q) => q.value.cooked ?? q.value.raw);
+  if (templateLiteralNode.expressions.length === 0) return parts.join('');
+  // Dynamic: interleave " ... " placeholders so total length remains meaningful
+  return parts.join(' ... ');
+}
+
+function makeLargeString(text, loc_byte) {
+  const cap = 4000;
+  return {
+    len: text.length,
+    loc_byte,
+    // Content included for internal analysis only — DO NOT reproduce in output spec
+    content: text.length > cap ? text.slice(0, cap) + '…[truncated]' : text,
+  };
+}
+
+function extractSystemContext(src, index, minStringLen, version) {
+  const candidates = new Map(); // identifier → entry
+
+  function upsert(id, byteOffset, ls, tel) {
+    if (!candidates.has(id)) {
+      candidates.set(id, { identifier: id, byteOffset, totalStringChars: 0, largeStrings: [], telemetryEvents: [] });
+    }
+    const e = candidates.get(id);
+    e.largeStrings.push(ls);
+    e.totalStringChars += ls.len;
+    for (const t of tel) if (!e.telemetryEvents.includes(t)) e.telemetryEvents.push(t);
+  }
+
+  // ── Pass A: full AST walk for top-level string variable declarations ─────────
+  process.stderr.write(`Pass A: parsing full bundle for string variable declarations (~4s)...\n`);
+  const ast = parser.parse(src, {
+    sourceType: 'script',
+    errorRecovery: true,
+    strictMode: false,
+  });
+
+  walk(ast, {
+    VariableDeclarator(node) {
+      if (!node.id || node.id.type !== 'Identifier') return;
+      const init = node.init;
+      if (!init) return;
+
+      let text = null;
+      if (init.type === 'StringLiteral') {
+        text = init.value;
+      } else if (init.type === 'TemplateLiteral') {
+        text = cooked(init);
+      }
+
+      if (text && text.length >= minStringLen) {
+        upsert(node.id.name, node.start, makeLargeString(text, init.start), []);
+      }
+    },
+  });
+
+  process.stderr.write(`Pass A done: ${candidates.size} string variable candidates.\n`);
+
+  // ── Pass B: scan each indexed function slice for StringLiteral + TemplateLiteral ─
+  const fns = Object.entries(index.functions);
+  process.stderr.write(`Pass B: scanning ${fns.length} function slices...\n`);
+
+  let scanned = 0;
+  for (const [fnId, loc] of fns) {
+    if (loc.end - loc.start < minStringLen) { scanned++; continue; }
+
+    const slice = src.slice(loc.start, loc.end);
+    let fnAst;
+    try {
+      fnAst = parser.parse(slice, { sourceType: 'script', errorRecovery: true, strictMode: false });
+    } catch { scanned++; continue; }
+
+    const telHere = [];
+    walk(fnAst, {
+      StringLiteral(node) {
+        const v = node.value;
+        if (!v) return;
+        if (/^tengu_/.test(v)) telHere.push(v);
+        if (v.length >= minStringLen) {
+          upsert(fnId, loc.start, makeLargeString(v, loc.start + node.start), []);
+        }
+      },
+      TemplateLiteral(node) {
+        const text = cooked(node);
+        if (text && text.length >= minStringLen) {
+          upsert(fnId, loc.start, makeLargeString(text, loc.start + node.start), []);
+        }
+      },
+    });
+
+    if (telHere.length > 0) {
+      if (!candidates.has(fnId)) {
+        candidates.set(fnId, { identifier: fnId, byteOffset: loc.start, totalStringChars: 0, largeStrings: [], telemetryEvents: [] });
+      }
+      for (const t of telHere) {
+        if (!candidates.get(fnId).telemetryEvents.includes(t)) candidates.get(fnId).telemetryEvents.push(t);
+      }
+    }
+
+    scanned++;
+    if (scanned % 3000 === 0) {
+      process.stderr.write(`  ${scanned}/${fns.length} scanned\n`);
+    }
+  }
+
+  // ── Pass C: find system prompt assembler and force-include its callees ────────
+  // The assembler is the function that calls section-builders like OU7(), zU7(), YU7().
+  // Strategy: find a function whose slice contains 'OU7' (the System section builder).
+  // OU7 is reliably present in the CC system prompt assembly for v2.1.x.
+
+  process.stderr.write('Pass C: tracing system prompt assembler call graph...\n');
+
+  let assemblerFound = false;
+
+  for (const [fnId, loc] of Object.entries(index.functions)) {
+    const fnLen = loc.end - loc.start;
+    if (fnLen > 8000 || fnLen < 100) continue;
+
+    const slice = src.slice(loc.start, loc.end);
+    // Must call OU7() (not be OU7 itself) — finds the section assembler, not OU7 itself
+    if (fnId === 'OU7' || !slice.includes('OU7(')) continue;
+
+    let fnAst;
+    try {
+      fnAst = parser.parse(slice, { sourceType: 'script', errorRecovery: true, strictMode: false });
+    } catch { continue; }
+
+    const indexedCallees = new Set();
+    walk(fnAst, {
+      CallExpression(node) {
+        if (node.callee.type === 'Identifier' && index.functions[node.callee.name]) {
+          indexedCallees.add(node.callee.name);
+        }
+      },
+    });
+
+    if (indexedCallees.size < 2) continue;
+
+    process.stderr.write(
+      `  Assembler: ${fnId} (${fnLen} bytes, ${indexedCallees.size} indexed callees): `
+      + [...indexedCallees].slice(0, 8).join(', ') + '\n'
+    );
+
+    // Force-include all direct callees
+    for (const calleeId of indexedCallees) {
+      if (calleeId === fnId) continue;
+      const calleeLoc = index.functions[calleeId];
+      const calleeSlice = src.slice(calleeLoc.start, calleeLoc.end);
+
+      let calleeAst;
+      try {
+        calleeAst = parser.parse(calleeSlice, { sourceType: 'script', errorRecovery: true, strictMode: false });
+      } catch { continue; }
+
+      walk(calleeAst, {
+        StringLiteral(node) {
+          const v = node.value;
+          if (v && v.length >= Math.min(minStringLen, 80)) {
+            upsert(calleeId, calleeLoc.start, makeLargeString(v, calleeLoc.start + node.start), []);
+          }
+        },
+        TemplateLiteral(node) {
+          const text = cooked(node);
+          if (text && text.length >= Math.min(minStringLen, 80)) {
+            upsert(calleeId, calleeLoc.start, makeLargeString(text, calleeLoc.start + node.start), []);
+          }
+        },
+      });
+
+      if (!candidates.has(calleeId)) {
+        candidates.set(calleeId, {
+          identifier: calleeId, byteOffset: calleeLoc.start,
+          totalStringChars: 0, largeStrings: [], telemetryEvents: [],
+        });
+      }
+      candidates.get(calleeId).__assemblerCall = true;
+    }
+
+    assemblerFound = true;
+    break; // only process the first assembler matching the heuristic
+  }
+
+  if (!assemblerFound) process.stderr.write('  No assembler found via heuristic.\n');
+  process.stderr.write('Pass C done.\n');
+
+  // ── Score and sort: system-prompt patterns first, then prose, then keywords ───
+  const all = Array.from(candidates.values());
+
+  // Deduplicate largeStrings by loc_byte within each candidate
+  for (const c of all) {
+    const seen = new Set();
+    c.largeStrings = c.largeStrings.filter((s) => {
+      if (seen.has(s.loc_byte)) return false;
+      seen.add(s.loc_byte);
+      return true;
+    });
+    c.totalStringChars = c.largeStrings.reduce((s, x) => s + x.len, 0);
+  }
+
+  function syspromptScore(entry) {
+    // Use MAX for rare high-value signals (not additive across strings).
+    // Prose bonuses capped per candidate. Penalties additive.
+    let maxRare = 0;
+    let proseBonus = 0;
+    let penalty = 0;
+
+    for (const s of entry.largeStrings) {
+      const c = s.content;
+      // Rare signals: take the max from any one string
+      if (c.startsWith('IMPORTANT:')) maxRare = Math.max(maxRare, 2000);
+      if (c.startsWith('# ') && s.len < 6000) maxRare = Math.max(maxRare, 1500);
+      if (c.includes('${') && s.len < 2000) maxRare = Math.max(maxRare, 800);
+      // Prose bonuses: capped at 400 total (prevents accumulation across many strings)
+      if (c.includes('\n') && s.len < 5000) proseBonus = Math.max(proseBonus, 300);
+      if (c.includes('.') && c.includes(' ') && s.len >= 100 && s.len < 5000)
+        proseBonus = Math.max(proseBonus, 400);
+      // Penalties (additive — each bad string contributes)
+      if (c.includes('\n') && s.len > 8000) penalty += 600;
+      if (!c.includes('\n') && s.len > 5000) penalty += 1000;
+    }
+    // Bonus for multi-string candidates (array-based section builders like OU7, zU7)
+    // Each function with 3+ prose strings gets +100 bonus (up to 400) to surface them
+    const proseStrings = entry.largeStrings.filter(
+      (s) => s.content.includes('.') && s.content.includes(' ') && s.len >= 100 && s.len < 5000
+    );
+    const multiBonus = Math.min(400, Math.max(0, (proseStrings.length - 2) * 100));
+    return maxRare + proseBonus + multiBonus - penalty;
+  }
+
+  all.sort((a, b) => {
+    // Assembler callees always come first (guaranteed to be system prompt sections)
+    if (a.__assemblerCall && !b.__assemblerCall) return -1;
+    if (b.__assemblerCall && !a.__assemblerCall) return 1;
+    const diff = syspromptScore(b) - syspromptScore(a);
+    if (diff !== 0) return diff;
+    return b.totalStringChars - a.totalStringChars;
+  });
+
+  const top = all.slice(0, 30);
+  process.stderr.write(`Done. ${all.length} total candidates → top ${top.length} returned.\n`);
+
+  return {
+    version,
+    extracted: new Date().toISOString().slice(0, 10),
+    minStringLen,
+    totalFunctions: fns.length,
+    note: 'largeStrings.content is for analysis only — DO NOT reproduce verbatim in output spec',
+    systemContextFunctions: top,
+  };
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 function main() {
@@ -412,6 +674,38 @@ function main() {
     const outPath = path.join(cacheDir, `hashes-${opts.version}.json`);
     fs.writeFileSync(outPath, JSON.stringify({ version: opts.version, commands: hashes }, null, 2));
     process.stderr.write(`Hashes written: ${outPath} (${cmdNames.length} commands)\n`);
+    return;
+  }
+
+  if (opts.mode === 'system-context') {
+    if (!opts.bundle || !opts.version) {
+      console.error('--dump-system-context requires --bundle and --version');
+      process.exit(1);
+    }
+
+    const cacheDir = path.join(os.homedir(), '.cc-gnothi', 'cache');
+    const indexPath = opts.indexPath ?? path.join(cacheDir, `index-${opts.version}.json`);
+
+    if (!fs.existsSync(indexPath)) {
+      process.stderr.write(`Building index for v${opts.version} first...\n`);
+      const src0 = fs.readFileSync(opts.bundle, 'utf8');
+      const index0 = buildIndex(src0, opts.version);
+      fs.mkdirSync(cacheDir, { recursive: true });
+      fs.writeFileSync(indexPath, JSON.stringify(index0, null, 2));
+    }
+
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    process.stderr.write(`Loading bundle ${opts.bundle}...\n`);
+    const src = fs.readFileSync(opts.bundle, 'utf8');
+
+    const result = extractSystemContext(src, index, opts.minStringLen, opts.version);
+
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const outPath = path.join(cacheDir, `system-context-${opts.version}.json`);
+    fs.writeFileSync(outPath, JSON.stringify(result, null, 2));
+    process.stderr.write(
+      `System context written: ${outPath} (${result.systemContextFunctions.length} candidates)\n`
+    );
     return;
   }
 
