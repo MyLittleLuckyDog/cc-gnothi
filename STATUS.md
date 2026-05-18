@@ -7,7 +7,7 @@
 
 ## 한 줄 요약
 
-**Phase 1 완료. MCP v0.1.0 릴리즈됨. Phase 2 (프롬프트 레벨 분석) 대기 중.**
+**Phase 2 완료. 전 버전 `_system-context.md` 생성 + MCP query 통합 완료.**
 
 ---
 
@@ -41,20 +41,23 @@
 
 ---
 
+## 완료된 것들 (Phase 2 추가)
+
+### Phase 2 — 시스템 컨텍스트 분석
+
+| 항목 | 상태 |
+|---|---|
+| `extract-ast.js --dump-system-context` (3-pass 추출) | ✅ |
+| `scripts/analyze-system-context.sh` + 프롬프트 템플릿 | ✅ |
+| `versions/v2.1.132~143/_system-context.md` (6개 버전) | ✅ |
+| `store.rs` query() doc_type 필터 (system/prompt/hardcoded 키워드) | ✅ |
+| MCP query("system prompt hardcoded") 정상 반환 확인 | ✅ |
+| list_commands에서 _system-context 제외 확인 | ✅ |
+
 ## 대기 중인 것들
 
 ### 즉시
-- [ ] Actions 빌드 결과 확인 (aarch64/x86_64 macOS, Linux, Windows)
-- [ ] README.md Install 섹션 — 릴리즈 URL 실제 링크로 업데이트
-
-### Phase 2 — 분석 스코프 확장
-슬래시 커맨드 외 **프롬프트 영향 영역** 문서화:
-- [ ] `extract-ast.js --dump-system-prompts` 모드 추가
-  - agent 초기화 단계 system prompt 추출
-  - tool definition 문자열
-  - behavioral guard 패턴
-- [ ] `versions/v{X}/_system-context.md` 문서 형식 설계
-- [ ] `loader.rs` / `store.rs` 새 doc type 지원 추가
+- [ ] README.md Phase 2 섹션 업데이트 (system context 분석 기능 소개)
 
 ### 배포 생태계
 - [ ] MCP Marketplace 등록 검토
