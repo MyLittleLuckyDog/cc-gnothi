@@ -15,6 +15,7 @@ serde_yaml = "0.9"
 schemars = { version = "1.0", features = ["derive"] }
 walkdir = "2"
 anyhow = "1"
+rust-embed = { version = "8", features = ["compression", "include-exclude"] }
 reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

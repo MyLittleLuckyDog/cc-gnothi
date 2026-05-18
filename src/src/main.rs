@@ -2,11 +2,12 @@
 // cc-gnothi-mcp — © 2026 ryujaeuk <ryujaeuk@gmail.com>
 //
 // Usage:
-//   cc-gnothi-mcp --cc-version 2.1.143 [--docs /local/path]
-//   cc-gnothi-mcp --cc-version 2.1.143 --fetch   (download from GitHub, then serve)
-//
-// If --docs is omitted with --fetch, cache is stored at ~/.cc-gnothi/cache/
+//   cc-gnothi-mcp                        # auto-detect CC version, use embedded specs
+//   cc-gnothi-mcp --cc-version 2.1.143   # explicit version, use embedded specs
+//   cc-gnothi-mcp --fetch                # download specs from GitHub (any version)
+//   cc-gnothi-mcp --docs /local/path     # dev mode: read specs from disk
 
+mod embedded;
 mod fetcher;
 mod loader;
 mod server;
@@ -31,16 +32,12 @@ async fn main() -> Result<()> {
         .init();
 
     let args = parse_args();
+    let (chunks, cc_version) = resolve_chunks(&args).await?;
 
-    let docs_root = resolve_docs_root(&args).await?;
-
-    tracing::info!("loading docs from {}", docs_root.display());
-    let chunks = loader::load_all(&docs_root)
-        .with_context(|| format!("load docs from {}", docs_root.display()))?;
     tracing::info!("loaded {} chunks", chunks.len());
 
     let store = store::Store::new(chunks);
-    let server = server::GnothiServer::new(store, args.cc_version);
+    let server = server::GnothiServer::new(store, cc_version);
 
     let transport = rmcp::transport::stdio();
     server
@@ -54,34 +51,61 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn resolve_docs_root(args: &Args) -> Result<PathBuf> {
-    // Explicit --docs path always wins
+async fn resolve_chunks(args: &Args) -> Result<(Vec<loader::Chunk>, Option<String>)> {
+    // Dev mode: explicit disk path
     if let Some(root) = &args.docs_root {
-        return Ok(root.clone());
+        tracing::info!("dev mode: loading from {}", root.display());
+        let chunks = loader::load_all(root)?;
+        return Ok((chunks, args.cc_version.clone()));
     }
 
-    if args.fetch {
-        let version = args.cc_version.as_deref().context(
-            "--fetch requires --cc-version (e.g. --cc-version 2.1.143)",
+    // Determine version (explicit flag → env var → auto-detect)
+    let version = args.cc_version.clone()
+        .or_else(detect_cc_version)
+        .context(
+            "cannot determine CC version; pass --cc-version X.Y.Z or set CC_VERSION env var"
         )?;
+
+    tracing::info!("target CC version: {}", version);
+
+    // Embedded specs (primary path for installed binaries)
+    match loader::load_embedded(&version) {
+        Ok(chunks) => return Ok((chunks, Some(version))),
+        Err(e) => tracing::debug!("embedded miss: {}", e),
+    }
+
+    // Fallback: fetch from GitHub
+    if args.fetch {
         let cache_root = fetcher::default_cache_root();
         let f = fetcher::Fetcher::new(cache_root)?;
-        let local = f.fetch(version).await?;
-        return Ok(local);
+        let local = f.fetch(&version).await?;
+        let chunks = loader::load_all(&local)?;
+        return Ok((chunks, Some(version)));
     }
 
-    // Fallback: infer repo root from exe path
-    let exe = std::env::current_exe().context("cannot determine exe path")?;
-    let root = exe
-        .ancestors()
-        .nth(4)
-        .context("cannot infer repo root from exe path")?
-        .to_path_buf();
-    tracing::warn!(
-        "no --docs or --fetch provided, inferring repo root as {}",
-        root.display()
-    );
-    Ok(root)
+    anyhow::bail!(
+        "no specs embedded for CC {} — update cc-gnothi or run with --fetch",
+        version
+    )
+}
+
+/// Run `claude --version` and extract the X.Y.Z version string.
+fn detect_cc_version() -> Option<String> {
+    let out = std::process::Command::new("claude")
+        .arg("--version")
+        .output()
+        .ok()?;
+    let text = String::from_utf8(out.stdout).ok()?;
+    for word in text.split_whitespace() {
+        let clean = word.trim_end_matches('.');
+        let parts: Vec<&str> = clean.split('.').collect();
+        if parts.len() == 3
+            && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+        {
+            return Some(clean.to_string());
+        }
+    }
+    None
 }
 
 fn parse_args() -> Args {
@@ -92,10 +116,10 @@ fn parse_args() -> Args {
     let mut iter = std::env::args().skip(1);
     loop {
         match iter.next().as_deref() {
-            Some("--cc-version") => {
+            Some("--cc-version") | Some("--version") => {
                 cc_version = iter.next();
             }
-            Some("--docs") => {
+            Some("--docs") | Some("--docs-dir") => {
                 docs_root = iter.next().map(PathBuf::from);
             }
             Some("--fetch") => {
@@ -106,7 +130,6 @@ fn parse_args() -> Args {
         }
     }
 
-    // Also accept CC_VERSION env var
     if cc_version.is_none() {
         cc_version = std::env::var("CC_VERSION").ok();
     }

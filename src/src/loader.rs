@@ -6,6 +6,9 @@ use serde::Deserialize;
 use std::path::Path;
 use walkdir::WalkDir;
 
+use crate::embedded::VersionedSpecs;
+use rust_embed::Embed as _;
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Frontmatter {
     #[serde(rename = "type")]
@@ -49,13 +52,15 @@ pub fn load_all(root: &Path) -> Result<Vec<Chunk>> {
 fn load_file(path: &Path) -> Result<Vec<Chunk>> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("read {}", path.display()))?;
+    load_str(&raw, &path.to_string_lossy())
+}
 
-    let (frontmatter, body) = split_frontmatter(&raw);
+fn load_str(raw: &str, file_id: &str) -> Result<Vec<Chunk>> {
+    let (frontmatter, body) = split_frontmatter(raw);
     let fm: Frontmatter = frontmatter
         .and_then(|s| serde_yaml::from_str(&s).ok())
         .unwrap_or_default();
 
-    let file_id = path.to_string_lossy().to_string();
     let sections = split_sections(body);
 
     let chunks = sections
@@ -63,7 +68,7 @@ fn load_file(path: &Path) -> Result<Vec<Chunk>> {
         .enumerate()
         .map(|(i, (heading, content))| Chunk {
             id: format!("{}#{}", file_id, i),
-            file: file_id.clone(),
+            file: file_id.to_string(),
             heading: heading.clone(),
             content,
             frontmatter: fm.clone(),
@@ -71,6 +76,69 @@ fn load_file(path: &Path) -> Result<Vec<Chunk>> {
         .collect();
 
     Ok(chunks)
+}
+
+/// Load specs for a specific CC version from embedded data.
+/// Falls back to the latest embedded version (with a warning) if exact version not found.
+pub fn load_embedded(version: &str) -> Result<Vec<Chunk>> {
+    let mut chunks = load_embedded_version(version);
+
+    if chunks.is_empty() {
+        let latest = latest_embedded_version()
+            .context("binary contains no embedded specs")?;
+        tracing::warn!(
+            "CC {} not embedded; falling back to {} (update cc-gnothi for exact match)",
+            version,
+            latest
+        );
+        chunks = load_embedded_version(&latest);
+        anyhow::ensure!(!chunks.is_empty(), "embedded latest version {} is empty", latest);
+    }
+
+    tracing::info!("loaded {} chunks from embedded v{}", chunks.len(), version);
+    Ok(chunks)
+}
+
+fn load_embedded_version(version: &str) -> Vec<Chunk> {
+    let prefix = format!("v{}/", version);
+    let mut chunks = Vec::new();
+
+    for file_path in VersionedSpecs::iter() {
+        if !file_path.starts_with(&prefix) || !file_path.ends_with(".md") {
+            continue;
+        }
+        let Some(file) = VersionedSpecs::get(&file_path) else { continue };
+        let Ok(raw) = std::str::from_utf8(file.data.as_ref()) else { continue };
+
+        match load_str(raw, &file_path) {
+            Ok(c) => chunks.extend(c),
+            Err(e) => tracing::warn!("skipping embedded {}: {}", file_path, e),
+        }
+    }
+
+    chunks
+}
+
+fn latest_embedded_version() -> Option<String> {
+    let mut versions: Vec<String> = VersionedSpecs::iter()
+        .filter_map(|p| {
+            let s = p.to_string();
+            s.strip_prefix('v')
+                .and_then(|rest| rest.split('/').next())
+                .map(|v| v.to_string())
+        })
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    versions.sort_by(|a, b| {
+        let parse = |s: &str| -> Vec<u32> {
+            s.split('.').filter_map(|x| x.parse().ok()).collect()
+        };
+        parse(a).cmp(&parse(b))
+    });
+
+    versions.into_iter().last()
 }
 
 fn split_frontmatter(raw: &str) -> (Option<String>, &str) {
