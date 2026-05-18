@@ -124,6 +124,10 @@ for i in "${!ALL_SORTED[@]}"; do
   echo "$LOG_PREFIX Analyzing v${ver} (diff from v${PREV_VER})..."
   bash "$SCRIPT_DIR/analyze-all.sh" --version "$ver" --from-version "$PREV_VER"
 
+  echo "$LOG_PREFIX Analyzing system context for v${ver}..."
+  bash "$SCRIPT_DIR/analyze-system-context.sh" --version "$ver" \
+    || echo "$LOG_PREFIX WARN: system context analysis failed for v${ver}, continuing..."
+
   # Count committed-ready files and push
   SPEC_COUNT=$(find "$REPO_ROOT/versions/v${ver}" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
   if [[ "$SPEC_COUNT" -gt 0 ]]; then
