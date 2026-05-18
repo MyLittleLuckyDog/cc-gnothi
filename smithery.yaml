@@ -1,0 +1,23 @@
+# Smithery configuration — https://smithery.ai/docs/config#smitheryyaml
+#
+# cc-gnothi-mcp is a pre-built native binary distributed via GitHub Releases.
+# Install first: see README.md Install section, then use this server.
+
+startCommand:
+  type: stdio
+
+configSchema:
+  type: object
+  properties:
+    binaryPath:
+      type: string
+      description: >
+        Path to the cc-gnothi-mcp binary. Defaults to 'cc-gnothi-mcp'
+        (assumes binary is in PATH or current directory after installation).
+      default: "cc-gnothi-mcp"
+
+commandFunction: |-
+  (config) => ({ command: config.binaryPath || 'cc-gnothi-mcp', args: [] })
+
+exampleConfig:
+  binaryPath: "cc-gnothi-mcp"
