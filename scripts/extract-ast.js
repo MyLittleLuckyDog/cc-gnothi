@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * extract-ast.js — Bun bundle AST extractor for cc-gnothi
+ * extract-ast.js — static analysis tool for cc-gnothi
  *
  * Usage:
  *   node scripts/extract-ast.js --build-index --bundle <path> --version <ver>

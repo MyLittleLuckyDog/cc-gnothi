@@ -21,8 +21,7 @@ Full license text: https://www.gnu.org/licenses/agpl-3.0.txt
 
 ---
 
-NOTICE: The Claude Code CLI bundle analyzed in this repository is
-© Anthropic PBC. All rights reserved.
-This repository contains no bundle source code. All behavioral specifications
-are written as original pseudocode derived from analysis of the bundle's
-observable behavior and structure.
+NOTICE: Claude Code is © Anthropic PBC. All rights reserved.
+This repository contains no Claude Code source code or bundle content.
+All behavioral specifications are original documents describing observed
+behaviors, written as pseudocode with factual accuracy.
