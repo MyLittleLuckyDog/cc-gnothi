@@ -1,117 +1,95 @@
 # cc-gnothi 작업 상태
 
-> 마지막 업데이트: 2026-05-18
-> 재개 시 이 파일부터 읽을 것
+> 마지막 업데이트: 2026-05-18  
+> 재개 시 이 파일부터 읽을 것. 세부 기술 레퍼런스는 `docs/reference/pipeline.md`.
 
 ---
 
-## 현재 상태 한 줄 요약
+## 한 줄 요약
 
-**AST 기반 추출 파이프라인 완성. `clear` spec 1개 verified. 55개 대기 중. claude-gateway PoC 단계.**
-
----
-
-## Git 상태
-
-- 브랜치: `main`
-- 마지막 커밋: `f44d7be feat(docs): add v2.1.132 stubs + batch analysis script`
-- 미커밋 변경:
-  - `scripts/extract-ast.js` (신규 — AST 인덱스 + 커맨드 추출)
-  - `scripts/call-api.js` (신규 — Anthropic SDK, gateway proxy, 429 retry)
-  - `scripts/analyze-all.sh` (수정 — call-api.js 사용, 순차 처리)
-  - `scripts/prompts/analyze-command.md` (수정 — 툴 없이 JSON 기반 spec 생성)
-  - `package.json`, `node_modules/` (신규 — @babel/parser, @anthropic-ai/sdk)
-  - `versions/v2.1.132/clear.md` (신규 — verified spec 1개)
+**Phase 1 완료. MCP v0.1.0 릴리즈됨. Phase 2 (프롬프트 레벨 분석) 대기 중.**
 
 ---
 
-## 컴포넌트별 상태
+## 완료된 것들
 
-### Rust MCP 서버 (`src/`)
-| 파일 | 상태 |
-|---|---|
-| 빌드 | **성공** (경고 3개, 에러 없음) |
-| 기능 | `query` 툴 1개 |
+### Phase 1 — 슬래시 커맨드 분석
 
-### 문서 (`versions/v2.1.132/`)
 | 항목 | 상태 |
 |---|---|
-| stub (55개) | 완료. `bundle_verified: false` |
-| **verified spec** | **1개** — `clear.md` (품질 확인됨) |
+| v2.1.132 ~ v2.1.143 전 버전 spec (85~88개/버전) | ✅ 커밋·푸시 완료 |
+| diff 기반 파이프라인 (structural fingerprint, COPY/ANALYZE) | ✅ |
+| `sync.sh` cron 자동화 (감지 → 분석 → 커밋·푸시) | ✅ |
+| `compare.sh` 버전 간 diff 도구 | ✅ |
 
-### AST 파이프라인 (`scripts/`)
+### MCP 서버
 
-| 파일 | 상태 |
+| 항목 | 상태 |
 |---|---|
-| `extract-ast.js` | **완성**. `--build-index` (17780 fn, 84 cmd), `--cmd <name>` (JSON 추출) |
-| `call-api.js` | **완성**. gateway proxy 또는 직접 API, 429 retry, usage 로깅 |
-| `analyze-all.sh` | **완성**. 순차 처리, AST JSON → prompt embed → call-api.js |
-| `prompts/analyze-command.md` | **완성**. 툴 없이 JSON만으로 spec 생성 |
-| AST 인덱스 캐시 | `~/.cc-gnothi/cache/index-2.1.132.json` (빌드 완료) |
+| Rust 바이너리 (`get_spec`, `list_commands`, `query` 3개 툴) | ✅ |
+| `rust-embed` 전 버전 내장 + CC 버전 자동감지 | ✅ |
+| MCP end-to-end 테스트 통과 | ✅ |
+| Claude Code 로컬 등록 (`cc-gnothi` Connected) | ✅ |
+
+### 배포
+
+| 항목 | 상태 |
+|---|---|
+| `release.yml` 4플랫폼 CI/CD | ✅ |
+| `v0.1.0` 태그 푸시 | ✅ 2026-05-18 |
+| GitHub Actions 빌드 | 🔄 빌드 중 (확인: github.com/MyLittleLuckyDog/cc-gnothi/actions) |
 
 ---
 
-## 즉시 재개 순서
+## 대기 중인 것들
+
+### 즉시
+- [ ] Actions 빌드 결과 확인 (aarch64/x86_64 macOS, Linux, Windows)
+- [ ] README.md Install 섹션 — 릴리즈 URL 실제 링크로 업데이트
+
+### Phase 2 — 분석 스코프 확장
+슬래시 커맨드 외 **프롬프트 영향 영역** 문서화:
+- [ ] `extract-ast.js --dump-system-prompts` 모드 추가
+  - agent 초기화 단계 system prompt 추출
+  - tool definition 문자열
+  - behavioral guard 패턴
+- [ ] `versions/v{X}/_system-context.md` 문서 형식 설계
+- [ ] `loader.rs` / `store.rs` 새 doc type 지원 추가
+
+### 배포 생태계
+- [ ] MCP Marketplace 등록 검토
+- [ ] 신규 CC 버전 감지 → sync.sh cron 실제 검증
+
+---
+
+## 재개 순서
 
 ```
-1. claude-gateway 빌드 및 실행:
-   cd /Volumes/juryu_home/with_AI/projects/06.DenoV8POC/01.Tools/claude-gateway
-   cargo build --release
-   ./target/release/server
-
-2. 단독 테스트:
-   cd /Volumes/juryu_home/with_AI/projects/0x.tools/cc-gnothi
-   bash scripts/analyze-all.sh --cmd add-dir --version 2.1.132
-
-3. 성공 확인 후 배치 (55개):
-   bash scripts/analyze-all.sh --version 2.1.132
-
-4. 배치 완료 후 MCP 실제 테스트
+1. git pull origin main
+2. cat STATUS.md                      ← 지금 이 파일
+3. cat docs/reference/pipeline.md     ← 기술 레퍼런스 (스크립트 플래그, spec 포맷 등)
+4. tail /tmp/cc-gnothi-sync.log       ← cron 최근 실행 여부
+5. 작업 시작
 ```
 
 ---
 
-## 핵심 설계 변경 (v2 파이프라인)
+## 주요 경로
 
-| 항목 | 이전 | 현재 |
-|---|---|---|
-| 분석 방식 | `claude -p` + grep/Read 번들 | AST 추출 → JSON → Claude 해석만 |
-| API 호출 | `claude -p` (subprocess) | `@anthropic-ai/sdk` → gateway proxy |
-| 병렬 처리 | xargs -P 5 | 순차 (rate limit 대응) |
-| Write 툴 버그 | 발생 가능 | 구조적 해소 (툴 없음) |
-| 결과물 품질 | LLM 추측 가능 | AST 사실 기반 (byte citation) |
+```
+REPO      /Volumes/juryu_home/with_AI/projects/0x.tools/cc-gnothi/
+AVX2      /Volumes/juryu_home/with_AI/projects/0x.tools/caludeCodeAVX2/  (읽기 전용)
+GATEWAY   /Volumes/juryu_home/with_AI/projects/06.DenoV8POC/01.Tools/claude-gateway/
+          target/release/claude-agent-rs  (port 8765)
+BINARY    REPO/src/target/release/cc-gnothi-mcp
+CACHE     ~/.cc-gnothi/cache/  (index-{ver}.json, hashes-{ver}.json)
+SYNC_LOG  /tmp/cc-gnothi-sync.log
+```
 
 ---
 
-## 주요 설계 결정 (기록)
+## 보안 제약 (변경 불가)
 
-- **라이선스**: AGPL-3.0-only (Anthropic PBC 번들 저작권 별도 명시)
-- **문서 언어**: CC가 참고할 MD는 영문, 사용자 피드백은 한국어
-- **번들 분석 방식**: @babel/parser AST (14MB, Bun CJS, 3.3s parse, 17780 fn)
-- **AST JSON 크기**: depth=2 기준 ~20KB/커맨드 → Claude 프롬프트에 직접 임베드
-- **obfuscated identifier**: Appendix 매핑 테이블에만 허용, pseudocode 금지
-- **gateway**: `/v1/messages` proxy (OAuth 기반, API 키 불필요)
-
----
-
-## 파일 위치 참조
-
-```
-/Volumes/juryu_home/with_AI/projects/0x.tools/cc-gnothi/   ← 메인 repo
-  scripts/
-    extract-ast.js          ← AST 인덱스 빌드 + 커맨드 추출
-    call-api.js             ← API 호출 (gateway or direct)
-    analyze-all.sh          ← 배치 파이프라인
-    prompts/analyze-command.md
-  versions/v2.1.132/        ← spec 문서 (1 verified, 55 stub)
-
-/Volumes/juryu_home/with_AI/projects/0x.tools/caludeCodeAVX2/artifacts/
-  claude-2.1.132.js         ← 분석 대상 번들 (14MB, 읽기 전용)
-
-/Volumes/juryu_home/with_AI/projects/06.DenoV8POC/01.Tools/claude-gateway/
-  src/                      ← Rust gateway source
-  target/release/server     ← 빌드 필요
-
-~/.cc-gnothi/cache/
-  index-2.1.132.json        ← AST 인덱스 (17780 fn, 84 cmd)
-```
+- `caludeCodeAVX2` repo: **읽기 전용**, 절대 쓰지 않음
+- 번들 코드 직접 인용 금지 (© Anthropic PBC)
+- obfuscated identifier: Appendix 매핑 테이블에만 허용, pseudocode 금지
