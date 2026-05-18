@@ -41,19 +41,23 @@ Ask it *"what behaviors in the system prompt are hardcoded vs overridable?"* and
 
 ```bash
 # macOS Apple Silicon
-curl -L https://github.com/MyLittleLuckyDog/cc-gnothi/releases/latest/download/cc-gnothi-mcp-aarch64-apple-darwin.tar.gz \
+VER=$(curl -sL https://api.github.com/repos/MyLittleLuckyDog/cc-gnothi/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+curl -L "https://github.com/MyLittleLuckyDog/cc-gnothi/releases/download/${VER}/cc-gnothi-mcp-${VER}-aarch64-apple-darwin.tar.gz" \
   | tar xz && claude mcp add cc-gnothi -- ./cc-gnothi-mcp
 
 # macOS Intel
-curl -L https://github.com/MyLittleLuckyDog/cc-gnothi/releases/latest/download/cc-gnothi-mcp-x86_64-apple-darwin.tar.gz \
+VER=$(curl -sL https://api.github.com/repos/MyLittleLuckyDog/cc-gnothi/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+curl -L "https://github.com/MyLittleLuckyDog/cc-gnothi/releases/download/${VER}/cc-gnothi-mcp-${VER}-x86_64-apple-darwin.tar.gz" \
   | tar xz && claude mcp add cc-gnothi -- ./cc-gnothi-mcp
 
 # Linux x86_64
-curl -L https://github.com/MyLittleLuckyDog/cc-gnothi/releases/latest/download/cc-gnothi-mcp-x86_64-unknown-linux-gnu.tar.gz \
+VER=$(curl -sL https://api.github.com/repos/MyLittleLuckyDog/cc-gnothi/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+curl -L "https://github.com/MyLittleLuckyDog/cc-gnothi/releases/download/${VER}/cc-gnothi-mcp-${VER}-x86_64-unknown-linux-gnu.tar.gz" \
   | tar xz && claude mcp add cc-gnothi -- ./cc-gnothi-mcp
 
 # Windows x86_64 (PowerShell)
-Invoke-WebRequest -Uri https://github.com/MyLittleLuckyDog/cc-gnothi/releases/latest/download/cc-gnothi-mcp-x86_64-pc-windows-msvc.exe -OutFile cc-gnothi-mcp.exe
+$VER = (Invoke-RestMethod https://api.github.com/repos/MyLittleLuckyDog/cc-gnothi/releases/latest).tag_name
+Invoke-WebRequest -Uri "https://github.com/MyLittleLuckyDog/cc-gnothi/releases/download/$VER/cc-gnothi-mcp-$VER-x86_64-pc-windows-msvc.exe" -OutFile cc-gnothi-mcp.exe
 claude mcp add cc-gnothi -- ./cc-gnothi-mcp.exe
 ```
 

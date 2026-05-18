@@ -53,7 +53,7 @@ jobs:
         shell: bash
         run: |
           BIN="src/target/${{ matrix.target }}/release/${{ matrix.artifact }}"
-          ARCHIVE="cc-gnothi-mcp-${{ matrix.target }}"
+          ARCHIVE="cc-gnothi-mcp-${{ github.ref_name }}-${{ matrix.target }}"
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
             cp "$BIN" "${ARCHIVE}.exe"
             echo "ASSET=${ARCHIVE}.exe" >> $GITHUB_ENV
