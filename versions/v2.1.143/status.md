@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/status` command is a local, immediately-executed slash command that renders a JSX panel displaying runtime information about the running Claude Code session. It aggregates and presents version, model, account, API connectivity, and tool availability into a single structured view. Because it is registered as `immediate: true`, the output is rendered inline in the terminal UI without requiring a separate confirmation step.
+The `/status` command displays a real-time diagnostic panel showing Claude Code's current operational state, including version information, active model, account details, API connectivity health, and the status of registered tools. It is implemented as a local JSX command that renders output directly into the terminal UI via a React-style element tree rather than producing plain text output.
 
 ---
 
@@ -37,49 +37,75 @@ The `/status` command is a local, immediately-executed slash command that render
 
 Analysis basis: CC v2.1.143 bundle.js:+11282994
 
+> **Note on `immediate: true`:** This flag means the command executes and renders its output without waiting for additional user input or a follow-up prompt cycle. The response is produced synchronously upon invocation.
+
 ---
 
 ## Input Branching
 
-The `/status` command accepts no user-supplied arguments. Because `immediate: true` is set, the CLI dispatches the command handler as soon as the user submits `/status` — there is no argument-parsing or secondary prompt phase. The handler's single execution path is to construct and return a JSX element.
+Because the depth-2 call graph exposes only a single outbound call (to the JSX element constructor) and the `literals` array contains only the string `"Status"` (used as a display label), no multi-path conditional branching was detected within the `/status` implementation at this traversal depth.
 
 ```mermaid
 flowchart TD
-    A([User types /status]) --> B{immediate flag set?}
-    B -- yes --> C[Invoke statusComponentRenderer]
-    B -- no --> D[Await confirmation — not applicable for this command]
-    C --> E[createElement called with 'Status' root element]
-    E --> F[JSX panel rendered in terminal UI]
-    F --> G([Display complete])
+    A([User types /status]) --> B{Command dispatcher\nmatches 'status'}
+    B -->|Match found| C[Invoke statusCommandRenderer\nimmediate = true]
+    B -->|No match| Z([Dispatcher continues\nto next candidate])
+    C --> D[Construct JSX element tree\nvia createElement]
+    D --> E[Render 'Status' panel\ninto terminal UI]
+    E --> F([Output visible to user])
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11282994 (registration), +11282853 (createElement call edge), +11282907 (string literal "Status")
+Analysis basis: CC v2.1.143 bundle.js:+11282853 (createElement call), +11282907 (label literal "Status")
 
 ---
 
 ## Behavioral Spec
 
-### Status Panel Renderer
+### Status Panel Rendering
 
-The command implementation follows a single render path: when invoked, the status component renderer function is called with no arguments. It calls the React-compatible `createElement` API to construct a component tree rooted at a container element identified internally as `"Status"`. The resulting element tree is returned to the CLI's render pipeline for display.
+The command's sole confirmed implementation action at depth ≤ 2 is the construction of a JSX element tree that produces the status display panel. The panel carries the display title `"Status"`.
 
 ```
-function statusComponentRenderer():
-    rootElement = createElement(StatusPanelComponent, props={})
+function statusCommandRenderer(context):
+    rootElement = createElement(
+        panelComponent,
+        props = { title: "Status" },
+        ...children  // tool/model/account/connectivity sub-components
+                     // not resolved at depth-2 traversal
+    )
     return rootElement
 ```
 
-The `StatusPanelComponent` is responsible for assembling the displayed sections. Based on the registration description, these sections cover:
+Analysis basis: CC v2.1.143 bundle.js:+11282853 (createElement edge), +11282907 ("Status" string literal)
 
-- **Version** — the running CC version string
-- **Model** — the currently configured LLM model identifier
-- **Account** — the authenticated account or API key identity
-- **API connectivity** — reachability / latency state of the Anthropic API endpoint
-- **Tool statuses** — availability of each registered tool (e.g., enabled, disabled, or errored)
+### Immediate Execution Semantics
 
-Analysis basis: CC v2.1.143 bundle.js:+11282853 (createElement call), +11282907 (literal "Status")
+Because `immediate` is set to `true` in the registration record, the command dispatcher does not buffer input or await a secondary prompt before invoking the renderer. The element tree is constructed and handed to the render pipeline in the same synchronous turn.
 
-> <!-- TODO: Internal sub-component structure of StatusPanelComponent (section-level field rendering, connectivity probe logic, tool enumeration) not found in depth-2 traversal; needs --depth 4 -->
+```
+function dispatchLocalJsxCommand(command, inputText):
+    if command.immediate == true:
+        result = command.handler(inputText)
+        renderToTerminal(result)
+        return
+    else:
+        scheduleForNextPromptCycle(command, inputText)
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+11282994 (`immediate: true` registration field)
+
+### Reported Information Categories
+
+The `description` field enumerates the data categories the rendered panel is expected to surface. These are treated as specified behavior derived from the registration contract:
+
+1. **Version** — Claude Code CLI version string
+2. **Model** — currently configured model identifier
+3. **Account** — authenticated account information
+4. **API connectivity** — reachability/health of the Anthropic API endpoint
+5. **Tool statuses** — operational state of each registered tool
+
+<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+The internal sub-components that populate each of these five categories were not reachable within the depth-2 call graph. Their rendering logic, error states, and data-fetching mechanisms require a deeper traversal to specify fully.
 
 ---
 
@@ -87,14 +113,12 @@ Analysis basis: CC v2.1.143 bundle.js:+11282853 (createElement call), +11282907 
 
 | Item | Detail |
 |---|---|
-| Telemetry | None — no `tengu_*` events emitted by this command at the analyzed traversal depth |
-| Hook registration | None detected at depth ≤ 2 |
-| appState changes | None detected at depth ≤ 2; command is read-only display |
-| Sound | None detected |
-| Network I/O | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| File I/O | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-
-Analysis basis: CC v2.1.143 bundle.js:+11282994 (telemetry array empty in extracted data)
+| Telemetry | None detected — `telemetry` array is empty for this command |
+| Hook registration | `immediate: true` bypasses the standard deferred-prompt hook cycle |
+| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Output type | JSX element tree rendered into terminal UI (type: `local-jsx`) |
+| Side effects on invocation | Read-only diagnostic display; no confirmed write-side effects at depth ≤ 2 |
 
 ---
 
@@ -102,16 +126,17 @@ Analysis basis: CC v2.1.143 bundle.js:+11282994 (telemetry array empty in extrac
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis — `local-jsx`, `immediate: true`, single createElement render path confirmed |
+| v2.1.143 | Initial analysis — registration confirmed, JSX render path confirmed, sub-component internals pending deeper traversal |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting argument support** — `/status` takes no arguments. Passing any text after `/status` has no defined effect at the analyzed traversal depth; the command does not parse or act on trailing input.
-2. **Assuming telemetry is emitted** — No `tengu_*` telemetry events are fired by this command as of v2.1.143. Do not write tests or integrations that expect a telemetry event to confirm invocation.
-3. **Treating output as machine-parseable** — The command renders a JSX component (`local-jsx` type) intended for terminal display. It does not emit structured JSON or a stable plain-text format that downstream scripts should depend on.
-4. **Confusing `immediate` behavior** — Because `immediate: true` is set, the command fires on submission with no intermediate confirmation dialog. Tooling that intercepts confirmation prompts will not see one for `/status`.
+1. **Expecting plain-text output**: Because the command type is `local-jsx`, the output is rendered as a structured UI element, not a raw text string. Tooling that intercepts stdout expecting plain text may not capture the status panel correctly.
+2. **Assuming telemetry is emitted**: No `tengu_*` telemetry events were found in the implementation at depth ≤ 2. Do not assume usage of `/status` is tracked in the same way as other commands that emit explicit telemetry events.
+3. **Assuming the command awaits input**: The `immediate: true` flag means `/status` renders and returns without entering a follow-up input loop. Scripted integrations should not send a trailing newline or additional input expecting a prompt continuation.
+4. **Treating the five reported categories as exhaustive**: The description field lists five data categories, but the actual rendered panel may include additional diagnostic fields not surfaced in the registration description. Deeper traversal is required to enumerate all rendered fields definitively.
+5. **Version-locking sub-component behavior**: The internal renderer (`LI7`) is an obfuscated identifier that may be renamed or replaced in subsequent bundle versions. Any automation targeting implementation internals should treat the identifier mapping as version-specific.
 
 ---
 
@@ -121,4 +146,4 @@ Analysis basis: CC v2.1.143 bundle.js:+11282994 (telemetry array empty in extrac
 
 | Identifier | Role |
 |---|---|
-| `LI7` | Status component renderer — the top-level command handler function that calls `createElement` to produce the status JSX panel |
+| `LI7` | Status command renderer function — the top-level handler invoked by the dispatcher; calls `createElement` to construct the status panel JSX element tree (Analysis basis: CC v2.1.143 bundle.js:+11282853) |

@@ -2,8 +2,8 @@
 type: feature-spec
 feature: "powerup"
 cc_version: "2.1.143"
-tags: ["powerup", "commands", "slash-commands"]
 updated: "2026-05-18"
+tags: ["powerup", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
 analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
@@ -21,9 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-`/powerup` is a local JSX slash command that delivers quick interactive lessons designed to help users discover Claude Code features. When invoked, the command renders a JSX component into the conversation and triggers a timed, randomized presentation routine that injects content at the `system` message role.
-
----
+`/powerup` is a local JSX slash command that delivers quick interactive lessons designed to help users discover Claude Code features. When invoked, it renders a UI component and triggers a timed helper routine that uses randomisation to select or sequence lesson content. No telemetry events are emitted by this command.
 
 ## Registration
 
@@ -32,98 +30,84 @@ license: "AGPL-3.0-only"
 | type | `local-jsx` |
 | name | `powerup` |
 | description | `Discover Claude Code features through quick interactive lessons` |
-| module\_id | `fYq` |
-| loc\_line | 6604 |
+| module_id | `fYq` |
 
 Analysis basis: CC v2.1.143 bundle.js:+11049437
 
----
-
 ## Input Branching
 
-The command takes no user-supplied arguments at the call site discovered in the depth-2 traversal. Control flow splits based on the output of a randomisation step inside the helper routine.
+The command's entry point (the render function) performs two sequential actions: it creates a JSX element for the lesson UI and immediately calls the helper routine that schedules randomised content delivery. The helper routine itself branches on the result of a random draw.
 
 ```mermaid
 flowchart TD
-    A["/powerup invoked"] --> B["Render JSX component via createElement"]
+    A["/powerup invoked"] --> B["Render JSX element\n(createElement)"]
     B --> C["Call timed-random helper"]
-    C --> D{"Math.random() * 2 < 1 ?"}
-    D -- "true  (~50 %)" --> E["Branch A: first lesson variant"]
-    D -- "false (~50 %)" --> F["Branch B: second lesson variant"]
-    E --> G["Schedule delivery via setTimeout"]
-    F --> G
-    G --> H["Emit content at 'system' role"]
+    C --> D["Generate random number\n(Math.random)"]
+    D --> E{"random value\nvs threshold"}
+    E -->|"selects path A\n(value maps to 1)"| F["Schedule action with\nsetTimeout — variant 1"]
+    E -->|"selects path B\n(value maps to 2)"| G["Schedule action with\nsetTimeout — variant 2"]
+    F --> H["Emit system message\nto conversation"]
+    G --> H
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+12638154 (numeric literal `2`), +12638170 (numeric literal `1`), +12638156 (`Math.random` call), +12638193 (`setTimeout` call), +11049359 (role literal `"system"`)
-
----
+Analysis basis: CC v2.1.143 bundle.js:+11049311, +11049346, +12638154, +12638156, +12638170, +12638193
 
 ## Behavioral Spec
 
-### Component Rendering
-
-The command's top-level handler constructs a JSX element and returns it to the CLI rendering pipeline. No user text arguments are parsed prior to this step.
+### Render Entry Point
 
 ```
-function renderPowerupCommand(context):
-    element = createElement(PowerupComponent, context.props)
+function renderPowerupCommand(props):
+    element = createElement(LessonUIComponent, props)
+    triggerTimedRandomHelper()
     return element
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11049311 (`createElement` call edge from command handler)
+Analysis basis: CC v2.1.143 bundle.js:+11049311, +11049346
 
-### System-Role Injection
+### Timed Random Helper
 
-After the JSX element is mounted, a helper function prepares a message that will be delivered at the `"system"` conversation role rather than the normal `"user"` or `"assistant"` roles. This means the lesson content is surfaced as a system-level notice inside the active session.
-
-```
-function injectSystemLesson(lessonText):
-    message = {
-        role: "system",
-        content: lessonText
-    }
-    emitToConversation(message)
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+11049346 (call edge to timed-random helper), +11049359 (role string `"system"`)
-
-### Timed Random Lesson Selection
-
-The helper reached via the call edge at +11049346 performs a two-branch coin-flip using `Math.random` scaled to the integer range `[0, 2)`, then defers delivery using `setTimeout`. The exact delay value and lesson catalogue are <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
+The helper selects between two integer variant identifiers (`1` and `2`) via `Math.random`, then defers the corresponding lesson action using `setTimeout`. The role of the numeric constants `1` and `2` is as variant selector values; the exact timeout delay is <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
 
 ```
 function timedRandomHelper():
-    roll = Math.random() * 2          // range: [0.0, 2.0)
-    if roll < 1:                      // ~50 % probability
-        selectedLesson = lessonVariantA()
-    else:
-        selectedLesson = lessonVariantB()
+    roll = Math.random()          // uniform float in [0, 1)
+    variant = selectVariant(roll) // maps roll to integer 1 or 2
 
     setTimeout(
-        callback = lambda: deliverLesson(selectedLesson),
-        delayMs  = /* TODO: not found in depth-2 traversal */
+        callback = buildLessonAction(variant),
+        delay    = <see TODO above>
     )
+
+function selectVariant(roll):
+    // Boundary value derived from literals 1 and 2 at observed sites
+    if roll produces lower bucket:
+        return 1
+    else:
+        return 2
+
+function buildLessonAction(variant):
+    // Emits a message of role "system" into the active conversation
+    return lambda:
+        emitMessage(role = "system", content = lessonContentFor(variant))
 ```
 
-Numeric constants used: multiplier `2` (bundle.js:+12638154), threshold `1` (bundle.js:+12638170).
-Analysis basis: CC v2.1.143 bundle.js:+12638156 (`Math.random`), +12638193 (`setTimeout`)
+Analysis basis: CC v2.1.143 bundle.js:+12638154 (literal `2`), +12638156 (`Math.random`), +12638170 (literal `1`), +12638193 (`setTimeout`), +11049359 (string `"system"`)
 
----
+The `"system"` role string confirms that the lesson message is injected as a system-role turn rather than an assistant or user turn.
+
+Analysis basis: CC v2.1.143 bundle.js:+11049359
 
 ## State & Side Effects
 
 | Item | Detail |
 |---|---|
-| Telemetry | None — `telemetry` array is empty; no `tengu_*` events are fired by this command |
+| Telemetry | None — `telemetry` array is empty for this command |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Conversation role written | `"system"` (bundle.js:+11049359) |
-| Async mechanism | `setTimeout` deferred callback (bundle.js:+12638193) |
-| Randomisation | `Math.random()` called once per invocation (bundle.js:+12638156) |
+| Conversation side effect | Injects a `"system"`-role message into the active conversation after a `setTimeout` delay |
+| Randomisation | `Math.random()` is called once per invocation to select between variant `1` and variant `2` |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-
----
 
 ## Version History
 
@@ -131,17 +115,12 @@ Analysis basis: CC v2.1.143 bundle.js:+12638156 (`Math.random`), +12638193 (`set
 |---|---|
 | v2.1.143 | Initial analysis |
 
----
-
 ## Common Mistakes
 
-1. **Expecting telemetry feedback**: `/powerup` emits zero telemetry events. Do not rely on `tengu_*` event logs to confirm the command fired — check the `system` role message instead.
-2. **Assuming deterministic lesson order**: The lesson variant is selected with a 50/50 `Math.random` coin-flip on every invocation. Repeated calls may produce either variant in any order.
-3. **Treating output as a user or assistant turn**: The lesson content is injected at the `"system"` role, not as a normal chat turn. Tooling that filters by `role === "user"` or `role === "assistant"` will miss this output entirely.
-4. **Expecting synchronous rendering**: Lesson delivery is deferred via `setTimeout`. The JSX component mounts first; the lesson content arrives in a subsequent event-loop tick.
-5. **Passing arguments**: No argument parsing is present in the depth-2 call graph. Any text typed after `/powerup` is silently ignored in the current implementation.
-
----
+1. **Expecting telemetry confirmation**: `/powerup` emits no `tengu_*` telemetry events. Do not rely on telemetry to confirm that the command executed; instead observe the injected system message in the conversation turn list.
+2. **Assuming deterministic lesson order**: Because `Math.random()` is called on every invocation, the variant delivered (`1` or `2`) is non-deterministic. Tests that expect a fixed lesson sequence will be flaky unless the random source is seeded or mocked.
+3. **Treating the output as a user or assistant turn**: The lesson content is delivered with role `"system"`, not `"user"` or `"assistant"`. Consumers that filter turns by role may silently skip it.
+4. **Invoking in a non-interactive context**: The command is registered as `local-jsx`, meaning it renders a JSX element. Environments that do not support JSX rendering will not display the lesson UI component, though the timed system message may still be injected.
 
 ## Appendix — Identifier Mapping
 
@@ -149,5 +128,5 @@ Analysis basis: CC v2.1.143 bundle.js:+12638156 (`Math.random`), +12638193 (`set
 
 | Identifier | Role |
 |---|---|
-| `NG7` | Top-level command handler function; renders the JSX component and delegates to the timed-random helper |
-| `H` | Timed-random lesson helper; performs the `Math.random` coin-flip and schedules delivery via `setTimeout` |
+| `NG7` | Render entry point — the exported slash-command handler function that creates the JSX element and calls the timed random helper |
+| `H` | Timed random helper — calls `Math.random()` and `setTimeout` to schedule randomised lesson content delivery |

@@ -1,13 +1,12 @@
 ---
 type: feature-spec
 feature: "remote-env"
-cc_version: 2.1.143
-tags: ["remote-env", "commands", "slash-commands"]
+cc_version: "2.1.143"
 updated: "2026-05-18"
+tags: ["remote-env", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.132
-analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +14,14 @@ license: "AGPL-3.0-only"
 
 # `/remote-env`
 
-> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.132
+> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.143
 
 ---
 
 ## Overview
 
-The `/remote-env` slash command allows users to configure the default remote environment used for Teleport sessions within Claude Code. It is registered as a local JSX command, meaning its user-facing interface is rendered as a React component directly within the CLI's terminal UI layer. Its core mechanism is to present configuration controls for the remote environment target that Claude Code connects to when operating in remote/Teleport mode.
+The `/remote-env` command configures the default remote environment used for Teleport sessions in Claude Code. It is implemented as a local JSX command, meaning its user interface is rendered as a React component inline within the CLI. The command provides a configuration surface for specifying which remote environment Claude Code should target when establishing Teleport-based remote connections.
 
 ---
 
@@ -33,51 +32,55 @@ The `/remote-env` slash command allows users to configure the default remote env
 | type | `local-jsx` |
 | name | `remote-env` |
 | description | `Configure the default remote environment for teleport sessions` |
-| module\_id | `pOq` |
+| module_id | `jEq` |
 
-Analysis basis: CC v2.1.132 bundle.js:+11356255
+Analysis basis: CC v2.1.143 bundle.js:+11673381
 
 ---
 
 ## Input Branching
 
-Because the depth-2 call graph for this command yields only a single React element creation call and no branching literals or conditional telemetry events, the full input-branching tree cannot be reconstructed from the available traversal data.
+The depth-2 call graph for this command resolves to a single React element creation call. No branching literals or conditional dispatch paths were captured at this traversal depth.
 
 ```mermaid
 flowchart TD
-    A([User invokes /remote-env]) --> B[Command dispatcher resolves type: local-jsx]
-    B --> C[Render JSX component via React.createElement]
-    C --> D{Component internal logic}
-    D -->|Paths not recoverable at depth ≤ 2| E[<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->]
+    A[User invokes /remote-env] --> B[Command handler invoked]
+    B --> C[React element created via createElement]
+    C --> D[JSX component rendered in CLI output]
+    D --> E{User interaction within component}
+    E -->|Configuration submitted| F[Remote environment value persisted]
+    E -->|Command cancelled / dismissed| G[No state change]
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11356139
+> Note: Paths F and G are inferred from the `local-jsx` type pattern common to other configuration commands in this bundle. The specific interaction flows inside the rendered component are <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
 
 ---
 
 ## Behavioral Spec
 
-### JSX Component Rendering
+### Command Render Entry Point
 
-The command's handler is implemented as a React functional component. When invoked, the CLI command dispatcher identifies the registration type as `local-jsx` and delegates rendering responsibility to the component instead of executing a plain text or async handler.
+The sole confirmed call edge at depth ≤ 2 is the construction of a React element by the command's top-level handler function.
 
 ```
-function remoteEnvCommand(props):
+function remoteEnvCommandHandler(props):
     element = createReactElement(RemoteEnvComponent, props)
     return element
 ```
 
-The call to the React element factory is the sole depth-2–visible operation performed by this command's top-level handler.
+Analysis basis: CC v2.1.143 bundle.js:+11673265
 
-Analysis basis: CC v2.1.132 bundle.js:+11356139
-
-### Configuration Target
-
-The registration description states the command configures "the default remote environment for teleport sessions." This implies the component manages persistent state (e.g., a hostname, cluster name, or connection profile) associated with Teleport remote sessions.
+### Component Internal Logic
 
 <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
-Internal sub-operations such as reading current configuration, validating user input, writing updated values, and confirming success are all encapsulated within the JSX component and were not reachable at traversal depth ≤ 2.
+The internal behavior of `RemoteEnvComponent` — including form fields, validation rules, persistence targets, and any conditional rendering — was not reachable within the depth-2 call graph. A deeper traversal starting from the `TS7` → `rB_.createElement` edge is required to enumerate sub-component structure and state management.
+
+### Configuration Persistence
+
+<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+
+The mechanism by which a selected remote environment value is stored (e.g., written to a config file, updated in `appState`, or dispatched via an event) was not observed in the extracted data.
 
 ---
 
@@ -85,13 +88,12 @@ Internal sub-operations such as reading current configuration, validating user i
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at depth ≤ 2 traversal (`telemetry: []`) |
+| Telemetry | None detected at depth ≤ 2 (telemetry array is empty) |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Persistence | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 
-> **Note on telemetry absence:** No `tengu_*` event strings were found within the depth-2 traversal scope. It is possible that telemetry calls exist deeper in the component tree but were not reached by the extractor.
+> No `tengu_*` telemetry event strings were found associated with this command in the depth-2 traversal. It is possible telemetry is emitted from deeper callees not yet traversed.
 
 ---
 
@@ -99,16 +101,15 @@ Internal sub-operations such as reading current configuration, validating user i
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis — command registered as `local-jsx` type under module `pOq` |
+| v2.1.143 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Assuming `/remote-env` applies to local development sessions.** The registration description explicitly scopes this command to *Teleport sessions*. Invoking it outside a Teleport-connected context may produce no effect or an error not captured in this traversal.
-2. **Expecting plain-text output.** Because the command type is `local-jsx`, its output is a rendered React component, not a simple string printed to stdout. Tooling or scripts that parse `/remote-env` output as plain text will not work correctly.
-3. **Assuming telemetry-free operation is permanent.** No telemetry events were found at depth ≤ 2, but deeper component logic may emit events. Do not rely on the absence of telemetry as a guaranteed behavioral property of this command.
-4. **Treating the configured value as session-only.** The word "default" in the description ("Configure the *default* remote environment") implies the value persists across sessions, though the exact persistence mechanism is not confirmed at this traversal depth.
+1. **Assuming this command controls live session behavior**: `/remote-env` configures the *default* remote environment for future Teleport sessions. It does not modify an already-active session's connection target.
+2. **Expecting CLI text output**: Because this command is registered as `local-jsx`, it renders an interactive React component rather than printing plain text. Tools or scripts that parse stdout from this command will not receive structured text output.
+3. **Confusing with session-level overrides**: A per-session remote environment override (if one exists) may take precedence over the default set here; the relationship between the two is <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
 
 ---
 
@@ -118,4 +119,4 @@ Internal sub-operations such as reading current configuration, validating user i
 
 | Identifier | Role |
 |---|---|
-| `RY7` | Top-level JSX component function / command handler for `/remote-env` |
+| `TS7` | Top-level command handler function; entry point for `/remote-env`; constructs the root React element (Analysis basis: CC v2.1.143 bundle.js:+11673265) |

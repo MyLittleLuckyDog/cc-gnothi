@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/loops` command is a management interface for two related scheduling primitives: **recurring loops** (cron-style background tasks that fire prompts on a schedule) and **stop-hooks** (one-shot or persistent script hooks that execute when a session ends). Users can list all active loops and stop-hooks, create new ones, or delete existing ones from within an active Claude Code session.
+The `/loops` command provides a unified management interface for two related scheduling primitives in Claude Code: **recurring loops** (cron-style background tasks that execute prompts on a schedule) and **stop-hooks** (one-shot callbacks that fire when the current agent session ends). Invoked immediately on registration, the command reads current application state, parses sub-command tokens from the user's input, and dispatches to one of several handlers that create, list, or delete these entries, then reflects mutations back into persistent app state and the `.claude` project directory.
 
 ---
 
@@ -41,327 +41,318 @@ Analysis basis: CC v2.1.143 bundle.js:+11482307
 
 ## Input Branching
 
-The command entry point (`AN7`) inspects the user-supplied argument string and the current application state to determine which sub-operation to execute.
+The top-level dispatcher (`AN7`) reads the raw input string, trims whitespace, and tokenises it before selecting a branch.
 
 ```mermaid
 flowchart TD
-    A(["/loops invoked"]) --> B{Argument present?}
-    B -- No --> C[List all loops and stop-hooks]
-    B -- Yes --> D{Arg matches 'stophook'?}
-    D -- Yes --> E{Sub-arg: stop-hook ID present?}
-    E -- No --> F[Set new stop-hook via setStopHook]
-    E -- Yes --> G{ID found in registry?}
-    G -- No --> H[Error: 'Stop hook not found']
-    G -- Yes --> I[Clear stop-hook → 'Stop hook cleared']
-    D -- No --> J{Arg matches loop schedule expression?}
-    J -- No --> K[Parse as 'cron'-type loop spec via cronExpressionParser]
-    J -- Yes --> L{Action: delete?}
-    L -- Yes --> M[Delete loop entry via loopFileRemover]
-    L -- No --> N[Create loop entry via loopCreator]
-    N --> O[Write loop files via loopFilePersister]
-    O --> P[Notify via backgroundSessionNotifier]
-    C --> Q([Render JSX list])
-    I --> Q
-    H --> Q
-    M --> Q
-    P --> Q
-    F --> Q
+    A([/loops invoked]) --> B[emit tengu_loops_command telemetry]
+    B --> C[getAppState]
+    C --> D{first token?}
+
+    D -->|blank / no args| E[LIST branch\nbuild loop + stophook table]
+    D -->|'cron'| F[CRON branch\nparse schedule expression]
+    D -->|'stophook'| G[STOPHOOK branch\nparse hook definition]
+    D -->|numeric ID or UUID| H{second token?}
+    H -->|'delete' / absent| I[DELETE branch\nremove loop or hook by ID]
+    H -->|unrecognised| J[emit error message to UI]
+
+    E --> Z([render JSX response])
+    F --> K[scheduleParser → VFH\ncreate loop record]
+    K --> Z
+    G --> L{sub-action?}
+    L -->|set| M[setStopHook → QiH\nwrite hook + emit tengu_stop_hook_added]
+    L -->|clear| N[clearStopHook → diH\nwrite state + emit tengu_stop_hook_removed]
+    L -->|list only| Z
+    M --> Z
+    N --> Z
+    I --> O[deleteLoop / deleteHook\nunlink files + update roster]
+    O --> Z
+    J --> Z
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11481264, +11481311, +11481394, +11481447, +11481550, +11481814, +11481912, +11482000
+Analysis basis: CC v2.1.143 bundle.js:+11481264, +11481311, +11481315, +11481331, +11481394, +11481427, +11481550, +11481688, +11481814, +11481912, +11482000
 
 ---
 
 ## Behavioral Spec
 
-### 1. Command Entry and Telemetry Emission
-
-When `/loops` is invoked, the entry function immediately fires a telemetry event and reads current application state before branching on the argument.
+### 1. Command Entry and Telemetry
 
 ```
-function loopsCommandEntry(args, appState):
-    emit telemetry("tengu_loops_command")
-    currentLoops   = appState.getAppState().loops      // cron-type entries
-    currentStopHooks = appState.getAppState().stophooks
-    arg = args.trim()
-    if arg is empty:
-        return renderLoopList(currentLoops, currentStopHooks)
-    elif arg starts with "stophook":
-        return handleStopHook(arg, currentStopHooks, appState)
-    else:
-        return handleLoopSchedule(arg, currentLoops, appState)
+function loopsCommandHandler(input, context):
+    emitTelemetry("tengu_loops_command")          // always first
+    appState = context.getAppState()
+    tokens   = tokenise(input.trim())
+    return dispatch(tokens, appState, context)
 ```
 
 Analysis basis: CC v2.1.143 bundle.js:+11481264, +11481266, +11481315
 
 ---
 
-### 2. Loop File Reader (`vTH`)
+### 2. Tokenisation (`scheduleInputParser`)
 
-Before listing or creating loops, the system reads persisted loop definitions from disk. Files are read with UTF-8 encoding. The result is validated as an array before being pushed into the working list.
+Handles both human-readable schedule descriptions and raw cron expressions.
 
 ```
-function readLoopFiles(loopDirectory):
-    path = buildPath(loopDirectory)
-    raw  = fs.readFile(path, encoding="utf-8")
-    parsed = parseLoopRecord(raw)
-    if not Array.isArray(parsed):
-        return []
-    for each entry in parsed:
-        validate(entry)
-        workingList.push(entry)
-    return workingList
+function scheduleInputParser(rawInput):
+    trimmed = rawInput.trim()
+    parts   = trimmed.split(whitespace)
+
+    if parts[0] == "cron":
+        cronFields = parts[1..]
+        validate each field:
+            minutes : 0–59   (max value 59)
+            hours   : 0–23   (max value 23)
+            days    : 1–31   (max value 31)
+            months  : 1–12
+            weekday : 0–7    (0 and 7 both = Sunday)
+            // range notation "1-5" is supported
+        return CronExpression(cronFields)
+
+    if rawInput matches "Every minute":
+        return CronExpression("* * * * *")
+
+    if rawInput matches "Every hour":
+        return CronExpression("0 * * * *")
+
+    // fallback: attempt parseInt on first token for interval-minutes
+    intervalMin = parseInt(parts[0], 10)
+    if intervalMin is valid and in range 1–10:
+        return IntervalExpression(intervalMin)
+
+    raise ParseError
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+4697834, +4697853, +4697864, +4697997, +4698340
+Analysis basis: CC v2.1.143 bundle.js:+4694540, +4693874, +4693894, +4693939, +4694000, +4695625, +4695745, +4695962, +11481222
+Numeric field limits: minutes max 59 (+11481031), hours max 23 (+11481102), days max 31 (+11481155), seconds-per-minute 60 (+11480997)
 
 ---
 
-### 3. Cron Expression Parser (`HZ` / `_N7`)
-
-Loop schedule expressions are parsed into a normalized cron-like structure. The parser recognises at minimum two named human-readable intervals and falls back to full cron-field parsing.
+### 3. Loop Creation (`createLoopRecord`)
 
 ```
-function parseCronExpression(input):
-    text = input.trim()
-
-    // Named shorthand resolution
-    if text matches "Every minute":
-        return cronRecord(minute=5, label="Every minute")
-    if text matches "Every hour":
-        return cronRecord(hour=10, label="Every hour")
-
-    // Numeric field parsing
-    fields = text.match(cronFieldRegex)
-    minute = parseInt(fields[0])      // valid range 0–59
-    hour   = parseInt(fields[1])      // valid range 0–23
-    dom    = parseInt(fields[2])      // valid range 1–31
-    month  = parseInt(fields[3])
-    dow    = parseInt(fields[4])      // 0–7 (0 and 7 = Sunday)
-
-    minute = Math.max(0, Math.ceil(minute))
-    minute = Math.round(minute)
-    hour   = clamp(hour,   0, 23)
-    dom    = clamp(dom,    1, 31)
-
-    // Weekday alignment helpers
-    next = new Date()
-    next.setUTCDate(next.getUTCDate() + ...)
-    next.setUTCHours(hour, minute, 0, 0)
-    dayOfWeek = next.getDay()         // local day used for display
-
-    return cronRecord(minute, hour, dom, dow, next)
-```
-
-Valid minute range: 0–59 (bundle.js:+11481031)
-Valid hour range: 0–23 (bundle.js:+11481102)
-Valid day-of-month range: 1–31 (bundle.js:+11481155)
-Weekday modulus: 7 (bundle.js:+4696472)
-Weekday range string `"1-5"` (Mon–Fri) is a recognised literal (bundle.js:+4696669)
-
-Analysis basis: CC v2.1.143 bundle.js:+4695625, +4695745, +4695801, +4695962, +11480852, +11480889, +11480974, +11480985, +11481058
-
----
-
-### 4. Loop Creator (`VFH`)
-
-When a valid schedule is provided and no delete flag is present, a new loop record is created and persisted.
-
-```
-function createLoop(schedule, promptText, appState):
-    id        = crypto.randomUUID()          // $n9.randomUUID
+function createLoopRecord(schedule, promptText, appState, context):
+    id        = randomUUID()                    // crypto source
     createdAt = Date.now()
-    record    = buildLoopRecord(id, createdAt, schedule, promptText)
-    loopList  = readLoopFiles(loopDirectory)
-    loopList.push(record)                    // M.push
-    writeLoopFiles(loopDirectory, loopList)  // → loopFilePersister (ZFH)
-    notifyBackgroundSession(appState)        // → backgroundSessionNotifier (V6)
-    registerHookEntry(appState)              // → hookEntryRegistrar (ha)
+    record    = {
+        id        : id,
+        schedule  : schedule,
+        prompt    : promptText,
+        createdAt : createdAt,
+        type      : "cron"
+    }
+
+    // ensure .claude/ directory exists
+    ensureDir(projectRoot / ".claude")
+
+    // write per-loop definition file
+    writeLoopFile(projectRoot / ".claude", record)
+
+    // update in-memory roster
+    appState.loops.push(record)
+    context.setAppState(appState)
+
     return record
 ```
 
-UUID field length for loop ID: 8 characters minimum (bundle.js:+4699206, literal `8`)
-
-Analysis basis: CC v2.1.143 bundle.js:+4699181, +4699243, +4699289, +4699333, +4699346, +4699378, +4699427, +4699440
-
----
-
-### 5. Loop File Persister (`ZFH`)
-
-Persists the current in-memory loop list to the `.claude` directory on disk.
-
-```
-function loopFilePersister(loopList, projectRoot):
-    dir  = path.join(projectRoot, ".claude")  // literal ".claude"
-    fs.mkdir(dir, recursive=true)
-    dest = path.join(dir, loopFileName)
-    content = serializeLoopList(loopList)      // maps each entry
-    fs.writeFile(dest, content)
-    logEntry(content)
-```
-
-Storage directory: `.claude` subdirectory of project root (bundle.js:+4699022)
-
-Analysis basis: CC v2.1.143 bundle.js:+4698990, +4699001, +4699011, +4699062, +4699098, +4699112
+Analysis basis: CC v2.1.143 bundle.js:+4699181, +4699243, +4699289, +4699333, +4699346, +4699440, +11481912
+Directory name literal `.claude`: +4699022
 
 ---
 
-### 6. Loop Deleter (`q` / `loopFileRemover`)
-
-When a delete action is detected, the matching loop file entry is removed using a synchronous unlink call.
+### 4. Loop File Persistence (`writeLoopFiles`)
 
 ```
-function deleteLoop(loopId, loopDirectory):
-    filePath = resolveLoopFilePath(loopId, loopDirectory)
-    fs.unlinkSync(filePath)          // n8K.unlinkSync — synchronous
-    return success
+function writeLoopFiles(claudeDir, loopRecords):
+    mkdir(claudeDir, recursive=true)
+    for record in loopRecords:
+        destPath = path.join(claudeDir, record.id + ".json")
+        serialised = JSON.stringify(record, indent=2)
+        writeFile(destPath, serialised, encoding="utf-8")
+    // also re-serialise combined manifest via manifestEncoder
+    updateManifest(claudeDir, loopRecords)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11481427, +14482768
+Analysis basis: CC v2.1.143 bundle.js:+4698990, +4699001, +4699011, +4699062, +4699098, +4699112, +4699119
+Encoding literal `"utf-8"`: +4697881
 
 ---
 
-### 7. Stop-Hook Handler (`diH` / `QiH`)
+### 5. Stop-Hook Set (`setStopHook`)
 
-Stop-hooks are named hooks that execute when a session stops. The handler checks for an existing hook, applies the appropriate add or remove operation, and updates application state.
-
-```
-function handleStopHook(arg, currentStopHooks, appState):
-    hookId = extractHookId(arg)       // arg after "stophook" token
-
-    if hookId is present:
-        // Attempt removal
-        found = currentStopHooks.has(hookId)
-        if not found:
-            return renderMessage("Stop hook not found")
-        newState = appState.getAppState()
-        newState = removeHookEntry(newState, hookId)
-        appState.setAppState(newState)
-        appState.applyMessageOp("append", buildSystemMessage("Stop hook cleared"))
-        emit telemetry("tengu_stop_hook_removed")
-        return renderMessage("Stop hook cleared")
-    else:
-        // Create new stop-hook
-        uuid     = crypto.randomUUID()       // Po1.randomUUID
-        newState = appState.getAppState()
-        hookRecord = buildHookRecord(uuid, kind="Stop", type="prompt")
-        newState = addHookEntry(newState, hookRecord)
-        appState.setAppState(newState)
-        appState.applyMessageOp("append", buildSystemMessage(...))
-        emit telemetry("tengu_stop_hook_added")
-        return renderMessage("Stop hook set")
-```
-
-Hook type literals observed: `"Stop"` (bundle.js:+9108411), `"prompt"` (bundle.js:+9108518)
-Confirmation messages: `"Stop hook not found"` (bundle.js:+11481706), `"Stop hook cleared"` (bundle.js:+11481728), `"Stop hook set"` (bundle.js:+11482024)
-
-Analysis basis: CC v2.1.143 bundle.js:+9109191, +9109202, +9109331, +9109400, +9109442, +9109455, +9108703, +9108728, +9108784, +9108788, +9108952, +9108990, +9109032, +9109074, +9109087, +9109457, +9109089
-
----
-
-### 8. Hook Gate Validation (`Yk_`)
-
-Before committing a stop-hook, two gate checks are evaluated: a hooks gate and a trust gate. Both must pass for the hook to be written to state.
+Sets or replaces the single active stop-hook for the current session.
 
 ```
-function validateHookGates(hookRecord, appState):
-    hooksGateResult = evaluateGate("hooks_gate", hookRecord, appState)
-    trustGateResult = evaluateGate("trust_gate", hookRecord, appState)
-    if hooksGateResult == "goal_set":
-        proceedWithGoalSet()
-    emit relevant sub-state signals (E_, L7)
-    return combinedGateResult
-```
+function setStopHook(hookDefinition, appState, context):
+    // validate hook definition structure
+    trustGateCheck(hookDefinition)           // gate: "trust_gate"
+    hooksGateCheck(hookDefinition)           // gate: "hooks_gate"
 
-Gate name literals: `"hooks_gate"` (bundle.js:+9108599), `"trust_gate"` (bundle.js:+9108653), `"goal_set"` (bundle.js:+9108731)
-
-Analysis basis: CC v2.1.143 bundle.js:+9108564, +9108570, +9108617, +9108624, +9108703
-
----
-
-### 9. Background Session Notifier (`V6` / `bt`)
-
-After creating a loop, the background session subsystem is notified. This may trigger a spare background worker to be claimed or spawned.
-
-```
-function notifyBackgroundSession(appState):
-    sessionRef = backgroundSessionManager.get()     // GV
-    if sessionRef is active:
-        sessionRef.claim()                          // may emit tengu_bg_spare_claim
-    else:
-        spawnNewSpare()                             // may emit tengu_bg_spare_spawn
-```
-
-Relevant telemetry emitted from this path: `tengu_bg_spare_enable`, `tengu_bg_spare_claim`, `tengu_bg_spare_claim_fail`, `tengu_bg_spare_spawn`, `tengu_bg_dispatch_sigkill_escalate`, `tengu_bg_dispatch_low_mem`
-
-Analysis basis: CC v2.1.143 bundle.js:+4699839, +4699875, +11481304, +11481331, +39546, +49567
-
----
-
-### 10. List Renderer (`AN7` → JSX)
-
-When no actionable argument is present, the command renders a JSX component listing all loops (type `"cron"`) and all stop-hooks (type `"stophook"`). Each loop entry is mapped to a display row with padded columns (column pad width: 40 characters).
-
-```
-function renderLoopList(loops, stopHooks):
-    rows = loops.map(entry => formatLoopRow(entry))   // A.map
-    stopHookRows = stopHooks.map(sh => formatStopHookRow(sh))  // q.map
-    allRows = rows.concat(stopHookRows)
-    return createElement(ListComponent, { rows: allRows })
-```
-
-Column pad width: 40 characters (bundle.js:+14528173)
-Column separator: two spaces `"  "` (bundle.js:+14526202)
-Loop type discriminator: `"cron"` (bundle.js:+11481361), `"stophook"` (bundle.js:+11481447)
-
-Analysis basis: CC v2.1.143 bundle.js:+11481343, +11481427, +11482067, +14526168, +14526181, +14528099
-
----
-
-### 11. Goal / Attachment Message Injection (`diH` / `QiH`)
-
-When a stop-hook is added or removed, a structured system message is appended to the conversation. The message includes a `goal` field and a `goal_status` field.
-
-```
-function buildHookSystemMessage(action, hookRecord):
-    msg = {
-        role:    "system",
-        content: [
-            {
-                type:        "attachment",
-                goal:        hookRecord.goal,
-                goal_status: determineGoalStatus(action)
-            }
-        ]
+    goalRecord = {
+        id   : randomUUID(),
+        type : "goal",
+        text : hookDefinition.prompt,
+        role : "system"
     }
-    return msg
+
+    // append goal message into conversation via applyMessageOp
+    context.applyMessageOp({
+        op      : "append",
+        message : goalRecord
+    })
+
+    // persist to appState
+    appState.stopHook = {
+        id     : goalRecord.id,
+        status : "goal_status",
+        prompt : hookDefinition.prompt
+    }
+    context.setAppState(appState)
+
+    emitTelemetry("tengu_stop_hook_added")
+    return "Stop hook set"
 ```
 
-Message role literal: `"system"` (bundle.js:+11481595)
-Content type: `"attachment"` (bundle.js:+9109529)
-Goal field: `"goal"` (bundle.js:+9109488)
-Goal status field: `"goal_status"` (bundle.js:+9109616)
-Op type: `"append"` (bundle.js:+9109423)
-
-Analysis basis: CC v2.1.143 bundle.js:+9109400, +9109442, +9109032
+Analysis basis: CC v2.1.143 bundle.js:+9108703, +9108731, +9108784, +9108788, +9108990, +9109032, +9109074, +9109087, +9109089
+Literal `"Stop hook set"`: +11482024
+Literals `"goal"`, `"goal_status"`, `"append"`, `"system"`, `"attachment"`: +9109488, +9109616, +9109423, +11481595, +9109529
 
 ---
 
-### 12. Skip / Close Handling (`f`)
-
-The JSX component registers a close/skip handler. When the user dismisses the loops UI without taking action, pending resources are closed cleanly.
+### 6. Stop-Hook Clear (`clearStopHook`)
 
 ```
-function onLoopsUiClose(event):
-    if event == "skip":
-        primaryStream.close()
-        secondaryStream.close()
-    forwardToParentHandler()
+function clearStopHook(hookId, appState, context):
+    if hookId not in appState.stopHooks:
+        return "Stop hook not found"
+
+    // remove goal message from conversation
+    context.applyMessageOp({
+        op : "remove",
+        id : hookId
+    })
+
+    delete appState.stopHooks[hookId]
+    context.setAppState(appState)
+
+    emitTelemetry("tengu_stop_hook_removed")
+    return "Stop hook cleared"
 ```
 
-Skip literal: `"skip"` (bundle.js:+11482173)
+Analysis basis: CC v2.1.143 bundle.js:+9109191, +9109198, +9109202, +9109331, +9109400, +9109442, +9109455
+Literal `"Stop hook not found"`: +11481706
+Literal `"Stop hook cleared"`: +11481728
 
-Analysis basis: CC v2.1.143 bundle.js:+11482141, +14513628, +14513638, +14513778
+---
+
+### 7. List Display (`buildLoopsTable`)
+
+```
+function buildLoopsTable(appState):
+    rows = []
+
+    // loops section
+    for loop in appState.loops (sorted by createdAt):
+        label = formatScheduleLabel(loop.schedule)    // e.g. "Every minute"
+        row   = {
+            id       : loop.id,
+            kind     : "cron",
+            schedule : label,
+            prompt   : truncate(loop.prompt, 40)      // pad to 40 chars
+        }
+        rows.push(row)
+
+    // stop-hooks section
+    for hook in appState.stopHooks:
+        row = {
+            id     : hook.id,
+            kind   : "stophook",
+            prompt : truncate(hook.prompt, 40)
+        }
+        rows.push(row)
+
+    return renderTable(rows, columnSeparator="  ")
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+11481343, +11481394, +11481427, +8384731, +8384739, +9108403
+Column truncation width 40: +14528173
+Column pad-end separator `"  "`: +14526202
+
+---
+
+### 8. Delete Dispatch (`deleteEntry`)
+
+```
+function deleteEntry(rawId, appState, context):
+    // try loop first
+    loop = appState.loops.find(l => l.id == rawId)
+    if loop:
+        unlinkLoopFile(projectRoot / ".claude" / loop.id + ".json")
+        appState.loops.remove(loop)
+        context.setAppState(appState)
+        return
+
+    // try stop-hook
+    hook = appState.stopHooks.find(h => h.id == rawId)
+    if hook:
+        clearStopHook(rawId, appState, context)
+        return
+
+    emitError("not found: " + rawId)
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+11481550, +4699510, +4699559, +4699568, +4699583, +4699632
+
+---
+
+### 9. File-State Reader (`readLoopState`)
+
+Called at command entry to hydrate `appState.loops` from disk when in-memory state is stale.
+
+```
+function readLoopState(claudeDir):
+    manifest = path.join(claudeDir, manifestFile)
+    try:
+        raw = readFile(manifest, encoding="utf-8")
+        parsed = JSON.parse(raw)
+        if not Array.isArray(parsed):
+            return []
+        return parsed.map(validateLoopRecord)
+    catch ENOENT | EACCES | EPERM | ENOTDIR | ELOOP:
+        return []        // missing directory is not an error
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+4697834, +4697853, +4697864, +4697903, +4697925, +4697997
+Error code literals: `"ENOENT"` +172343, `"EACCES"` +172357, `"EPERM"` +172371, `"ENOTDIR"` +172384, `"ELOOP"` +172399
+
+---
+
+### 10. Schedule Next-Fire Calculator (`computeNextFire`)
+
+Used for display only; not stored in the record.
+
+```
+function computeNextFire(cronExpr, fromDate):
+    d = new Date(fromDate)
+    // align to next whole minute
+    d.setUTCHours(...)
+    d.setUTCDate(...)
+
+    // weekday normalisation
+    utcDay = d.getUTCDay()
+    if utcDay does not match cronExpr.weekday:
+        advance d by (target - utcDay + 7) % 7 days
+
+    // apply Math.max, Math.ceil, Math.round for interval loops
+    nextMs = Math.max(
+        Math.ceil(interval / 60) * 60000,
+        Math.round(offset)
+    )
+    return new Date(fromDate + nextMs)
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+4695625, +4695766, +4695801, +4695999, +4696036, +4696170, +4696404, +4696434, +4696502, +4696521, +4696534, +4696552, +4696581, +11480852, +11480889, +11480974, +11480985, +11481058
 
 ---
 
@@ -369,19 +360,16 @@ Analysis basis: CC v2.1.143 bundle.js:+11482141, +14513628, +14513638, +14513778
 
 | Item | Detail |
 |---|---|
-| Telemetry — primary | `tengu_loops_command` — fired on every invocation (bundle.js:+11481266) |
-| Telemetry — stop-hook added | `tengu_stop_hook_added` (bundle.js:+9109089) |
-| Telemetry — stop-hook removed | `tengu_stop_hook_removed` (bundle.js:+9109457) |
-| Telemetry — BG session | `tengu_bg_spare_enable`, `tengu_bg_spare_claim`, `tengu_bg_spare_claim_fail`, `tengu_bg_spare_spawn` |
-| Telemetry — BG dispatch | `tengu_bg_dispatch_sigkill_escalate`, `tengu_bg_dispatch_low_mem` |
-| Telemetry — feature health | `tengu_feature_ok` (bundle.js:+955068), `tengu_feature_sad` (bundle.js:+955201) |
-| Hook registration | New stop-hooks written to `appState` via `setAppState`; hook entries registered via `K.set` |
-| Loop file persistence | Loop records written to `<projectRoot>/.claude/` via `fs.writeFile`; deleted via `fs.unlinkSync` |
-| `appState` changes | `getAppState` / `setAppState` called on both stop-hook add and remove paths; `applyMessageOp("append", ...)` appends system message to conversation |
-| Background session | `notifyBackgroundSession` may trigger spare worker creation (`fU.spawn`) or claim; SIGKILL escalation path exists at bundle.js:+14503217, +14503265 |
+| Telemetry — primary | `tengu_loops_command` — emitted on every invocation (bundle.js:+11481266) |
+| Telemetry — stop-hook added | `tengu_stop_hook_added` — emitted when a stop-hook is successfully written (bundle.js:+9109089) |
+| Telemetry — stop-hook removed | `tengu_stop_hook_removed` — emitted when a stop-hook is cleared (bundle.js:+9109457) |
+| Telemetry — daemon/bg (indirect) | `tengu_bg_dispatch_sigkill_escalate`, `tengu_daemon_control`, `tengu_feature_bad`, `tengu_feature_ok`, `tengu_bg_low_mem_mb`, `tengu_bg_dispatch_low_mem`, `tengu_daemon_idle_exit`, `tengu_bg_spare_enable`, `tengu_bg_sendclaim_failed`, `tengu_bg_spare_claim`, `tengu_bg_spare_spawn`, `tengu_bg_spare_claim_fail`, `tengu_daemon_yield`, `tengu_feature_sad` — emitted by background session infrastructure reachable from the call graph but not directly by the `/loops` command logic |
+| Hook registration | Stop-hooks are stored in `appState.stopHooks` and persisted as a goal message via `applyMessageOp` (bundle.js:+9109032) |
+| appState changes | `appState.loops` array mutated on create/delete; `appState.stopHook` object written or deleted on set/clear (bundle.js:+9108990, +11481315) |
+| Filesystem side effects | Loop JSON files written to / removed from `<projectRoot>/.claude/` (bundle.js:+4699022); directory created with `mkdir` recursive if absent (bundle.js:+4699001) |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| UUID generation | `crypto.randomUUID()` used for both loop IDs and stop-hook IDs |
-| File I/O encoding | UTF-8 for all loop file reads (bundle.js:+4697881) |
+| JSX rendering | Command renders output via `iU_.createElement` (bundle.js:+11482067); classified as `local-jsx` type |
+| `immediate` flag | Set to `true` — command executes without waiting for a model turn (bundle.js:+11482307) |
 
 ---
 
@@ -389,18 +377,23 @@ Analysis basis: CC v2.1.143 bundle.js:+11482141, +14513628, +14513638, +14513778
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis; supports `cron` loops and `stophook` management; `.claude` directory persistence; background session integration |
+| v2.1.143 | Initial analysis — list, create, delete for cron loops and stop-hooks confirmed; `immediate: true` registration; `.claude/` persistence; `tengu_loops_command` telemetry |
 
 ---
 
 ## Common Mistakes
 
-1. **Omitting the schedule argument for a new loop** — invoking `/loops` with no arguments produces the list view, not a creation prompt. A schedule expression or the `stophook` keyword must be provided to create an entry.
-2. **Supplying an invalid cron field range** — minute values must be 0–59, hours 0–23, and day-of-month 1–31. Values outside these ranges are clamped or rejected by the parser (bundle.js:+11480997, +11481031, +11481102, +11481155).
-3. **Expecting asynchronous loop deletion** — deletion uses `fs.unlinkSync`, a synchronous call. Callers that assume a promise-based return will not receive one (bundle.js:+14482768).
-4. **Referencing a stop-hook ID that does not exist** — the command returns the literal error `"Stop hook not found"` and does not throw; callers must inspect the rendered message (bundle.js:+11481706).
-5. **Assuming loop files are stored in the project root** — files are written inside the `.claude` subdirectory, not the root itself (bundle.js:+4699022).
-6. **Invoking `/loops stophook` without understanding gate checks** — both `hooks_gate` and `trust_gate` are evaluated before the hook is committed. If either gate fails the hook is not written to state (bundle.js:+9108599, +9108653).
+1. **Omitting the schedule argument for `cron` sub-command.** The parser (`scheduleInputParser`) expects a valid cron expression or a recognised human-readable label immediately after the `cron` token; an empty string causes a parse error with no loop created.
+
+2. **Assuming multiple stop-hooks can coexist.** The data model stores a single `appState.stopHook` record. Issuing `/loops stophook set` a second time replaces the existing hook silently; the old goal message is not explicitly removed from the conversation unless `/loops stophook clear` is called first.
+
+3. **Deleting a loop by prompt text instead of ID.** The delete branch matches against the UUID `id` field, not the human-readable prompt string. Use the ID shown in the list output.
+
+4. **Expecting the `.claude/` directory to pre-exist.** The write path calls `mkdir` recursively, so the directory is created on demand. However, if the project root is read-only, the `EACCES` error is silently swallowed by `readLoopState` but will surface as an uncaught exception during `writeLoopFiles`.
+
+5. **Using interval values outside 1–10 minutes.** The interval parser applies a hard cap of `10` (bundle.js:+4693953) before falling back to a parse error. Values of `0` or greater than `10` are rejected; use a full cron expression for finer or coarser granularity.
+
+6. **Confusing `stophook` (the sub-command token) with `stop-hook` (the concept label).** The routing logic matches the literal string `"stophook"` (bundle.js:+11481447); any other spelling is treated as an unrecognised token and routed to the error branch.
 
 ---
 
@@ -410,39 +403,109 @@ Analysis basis: CC v2.1.143 bundle.js:+11482141, +14513628, +14513638, +14513778
 
 | Identifier | Role |
 |---|---|
-| `AN7` | Loops command entry point / main handler function |
-| `bt` | Background session bootstrap / pre-flight caller |
-| `vTH` | Loop file reader (reads persisted loop records from disk) |
-| `ME` | Background session manager initialiser |
-| `giH` | Hook entry registrar (writes hook into registry map via `K.set`) |
-| `KDH` | Registry map setter (calls `K.set` and `pm1`) |
-| `V6` | Background session notifier (calls `GV`) |
-| `GV` | Global background session accessor |
-| `HZ` | Cron expression parser / schedule normaliser |
-| `H` | Random jitter / setTimeout scheduling helper |
-| `K` | Column formatter (pad + map for display rows) |
-| `w` | Background process dispatcher (spawn, kill, SIGKILL escalation) |
-| `L` | Async task queue manager (add / finally / delete) |
-| `J` | Session terminator (iterates values, calls `y.kill`) |
-| `D` | Background spare process spawner |
-| `$` | Hook record parser (calls `JZq`) |
-| `j` | Date/UTC alignment helper (used in weekday scheduling) |
-| `q` | Loop file remover / stop-hook list filter |
-| `Ct` | Loop list compositor (combines file list with active session data) |
-| `Wo` | Existence checker (calls `_.has`) |
-| `ZFH` | Loop file persister (mkdir + writeFile to `.claude` dir) |
-| `diH` | Stop-hook removal handler (getAppState / setAppState / applyMessageOp) |
-| `Go1` | UUID generator wrapper (calls `Po1.randomUUID`) |
-| `_N7` | Cron numeric field validator and range clamper |
-| `SI` | Prompt/argument tokeniser (trim + push tokens) |
-| `VFH` | Loop creator (UUID, timestamp, persist, notify) |
-| `pjH` | Loop record builder / struct factory |
-| `M` | Loop list in-memory store with session metadata |
-| `ha` | Hook entry finaliser (calls `lfH`) |
-| `QiH` | Stop-hook addition handler (gate check → setAppState → applyMessageOp) |
-| `Yk_` | Hook gate validator (`hooks_gate` + `trust_gate` evaluator) |
-| `J8` | Feature health reporter (emits `tengu_feature_ok` / `tengu_feature_sad`) |
-| `tj` | Token counter helper (reads `outputTokens` via `Object.values`) |
-| `SH` | Feature success reporter (calls `d`, emits `tengu_feature_ok`) |
-| `f` | Loops UI close / skip handler |
-| `_` | Application state accessor namespace (`getAppState`, `setAppState`, `applyMessageOp`, `readFile`) |
+| `AN7` | Top-level `/loops` command handler (entry point) |
+| `bt` | App-state bootstrap / initialisation helper |
+| `vTH` | Loop-state file reader (reads `.claude/` manifest) |
+| `E1H` | Manifest path resolver (`FH8.join` wrapper) |
+| `FK` | Filesystem permission checker (calls `GV`) |
+| `C9` | Loop record validator (calls `L8`) |
+| `NH` | Network/IPC error handler (log + retry) |
+| `v_` | Error stringifier |
+| `xH` | String coercion helper |
+| `zq` | Traffic-priority classifier (`"essential-traffic"`) |
+| `kNK` | Queue manager (shift/push on `Ch6`) |
+| `v` | Message formatting / debug-level router |
+| `G5K` | Schedule-to-display-string converter |
+| `hH` | JSON serialiser wrapper (`JSON.stringify`) |
+| `P7` | Prompt redaction helper (`[REDACTED]`) |
+| `cSH` | Attachment builder (calls `X6A`) |
+| `Z5K` | File write orchestrator (Buffer, writeFile, then-chain) |
+| `SI` | Cron-field tokeniser (splits input, validates fields) |
+| `O_4` | Individual cron-field parser (match, parseInt, Set.add) |
+| `ME` | Module export helper (calls `GV`) |
+| `giH` | Loop-table formatter (pads columns, maps rows) |
+| `KDH` | Table cell setter (`K.set`) |
+| `pm1` | Row mapper (`H.map`) |
+| `V6` | UI element factory (calls `GV`) |
+| `HZ` | Next-fire-time calculator (UTC date arithmetic) |
+| `w` | Background-session worker (spawn, kill, retry loop) |
+| `C` | Session lifecycle controller (kill, write, `Z_K`) |
+| `Z_K` | Realpath/stat resolver |
+| `MK5` | PTY setup helper |
+| `z` | Daemon I/O stream (`daemon_stop`, write) |
+| `mH` | Stream-error handler (calls `d`) |
+| `SH` | Stream-ok handler (calls `d`) |
+| `IG6` | Memory monitor (macOS freemem, 1024 MB threshold) |
+| `G6` | Feature-flag gate evaluator |
+| `x` | Settle/retire timer (clearTimeout, setTimeout, `retireIfSettled`) |
+| `h` | Timer handle wrapper |
+| `m` | Timer unref helper |
+| `Oo_` | Claim-send orchestrator (connect, write, frame) |
+| `Gd_` | Roster-entry writer (mkdir, writeFile, JSON.stringify) |
+| `uq5` | Claim timeout handler (5000 ms, `"send-claim timeout"`) |
+| `xq5` | Claim frame builder (`fU.buildClaimFrame`) |
+| `XH` | String coercion utility |
+| `mp` | Binary frame encoder (Buffer, writeUInt32BE, writeUInt8) |
+| `jo_` | Loop/session deletion orchestrator (unlink, NH, roster) |
+| `IK` | Path joiner + existence checker (`b0`) |
+| `s1` | Filesystem stat + cache resolver (`f3H`) |
+| `rw` | Active-state filter (filters on `"active"`) |
+| `Bf` | Loop-file serialiser (path.join, hH, `o2`) |
+| `SoH` | Stop-hook completion watcher (Date.now, `_j7`, catch) |
+| `wLH` | Hook-path builder (`p$.join`, `DNH`) |
+| `Bk` | Hook-file reader (split, DNH) |
+| `gp` | Hook-dir scanner (`Wx_`, `koH`) |
+| `zW6` | Hook-dir initialiser (`Ex_`, mkdir) |
+| `D` | Spare-pool dispatcher (spawn, dispose, IG6) |
+| `$` | Disposable wrapper (`JZq`) |
+| `$o_` | Spare-session spawner (`Bun.spawn`, randomBytes, unlink) |
+| `J` | Kill-all helper (`A.values`, `y.kill`) |
+| `y` | Individual session killer (`z.write`, `d`) |
+| `j` | Date proxy (delegates to `w`) |
+| `Ct` | Persistence synchroniser (vTH, filter, ZFH) |
+| `Wo` | Has-key guard (`_.has`) |
+| `ZFH` | Loop-manifest writer (mkdir, writeFile, map) |
+| `diH` | Stop-hook clear handler (setAppState, applyMessageOp) |
+| `Go1` | UUID generator (`Po1.randomUUID`) |
+| `_N7` | Schedule-expression parser (Math.max/ceil/round, SI) |
+| `VFH` | Loop-creation handler (randomUUID, Date.now, vTH, ZFH) |
+| `pjH` | Loop metadata builder |
+| `M` | MCP server manager (SvH, THK) |
+| `SvH` | MCP server-set synchroniser (connect, tools, state) |
+| `KHH` | MCP capability merger (Object.assign) |
+| `rI` | MCP response router (`X$`, `RG_`) |
+| `H_` | Message hook dispatcher |
+| `f26` | MCP filter predicate |
+| `_57` | Timestamp annotator (`bh_`, Date.now) |
+| `v78` | Tool-schema validator (`Ei`, Object.keys, `kj`) |
+| `I78` | Tool-schema normaliser (`dK`) |
+| `A8` | MCP debug logger (`xRH.push`, `Wc.logMCPDebug`) |
+| `Yh_` | OAuth flow initiator (PB, Promise.race, `complete_authentication`) |
+| `Dh_` | OAuth callback handler (PB, `callback_url`, `urH`) |
+| `x8q` | MCP reconnect backer (`bh_`, `tY8`, hH) |
+| `Oh_` | MCP tool executor (`kj`, `dK`, A8, XH) |
+| `NG_` | MCP include-list checker (`a6`, `A.includes`) |
+| `_7` | MCP error logger (`xRH.push`, `Wc.logMCPError`) |
+| `S8q` | MCP session tracker (`Yn`) |
+| `M26` | MCP integer parser (parseInt) |
+| `xh_` | MCP timeout parser (parseInt) |
+| `THK` | MCP update applier (`H.applyMcpUpdate`, `eY8`, `wv`) |
+| `eY8` | MCP update serialiser (hH) |
+| `wv` | MCP client cleanup (`drH`, `K.cleanup`) |
+| `B95` | MCP roster reconciler (Object.entries, SvH, THK) |
+| `k78` | MCP capability filter (`mm4.has`, `pm4.has`) |
+| `r8` | Retry-with-timeout helper (setTimeout, clearTimeout) |
+| `drH` | MCP debug serialiser (hH) |
+| `ha` | Prompt trimmer (`lfH`) |
+| `lfH` | Prompt cleaner (`Z_H`, `_.trim`) |
+| `Z_H` | String slicer (`H.slice`, `wzA`, `S6`) |
+| `QiH` | Stop-hook set handler (Yk_, giH, setAppState, applyMessageOp) |
+| `Yk_` | Hook validation runner (`bm`, `aY`, `E_`, `L7`) |
+| `bm` | Policy-settings gate reader (`I8`, `"policySettings"`) |
+| `I8` | Config section reader (`jC6`, `WB`) |
+| `aY` | Hook schema validator (`I8`, `_A`) |
+| `E_` | Hook execution environment checker |
+| `L7` | Trust-level resolver (`QhL`) |
+| `QhL` | Gate evaluator chain (`xH`, `zSH`, `T1`, `N6`, `ApH`, `DB`, `S6`) |
+| `J8` | Async result wrapper (`d`) |
+| `tj` | Token-count accessor (`eyH`, `Object.values`, `"outputTokens"`) |

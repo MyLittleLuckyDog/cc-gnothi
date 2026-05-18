@@ -1,13 +1,12 @@
 ---
 type: feature-spec
 feature: "brief"
-cc_version: 2.1.143
+cc_version: "2.1.143"
 updated: "2026-05-18"
 tags: ["brief", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.132
-analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +14,14 @@ license: "AGPL-3.0-only"
 
 # `/brief`
 
-> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.132
+> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.143
 
 ---
 
 ## Overview
 
-The `/brief` command is a toggle-style slash command that switches Claude Code in and out of "brief-only" mode. When active, brief mode instructs the assistant to produce shorter, more concise responses. Because the command is registered with `immediate: true`, it executes at the moment the user submits it without requiring further input or confirmation.
+`/brief` is a toggle command that switches the Claude Code session between brief-only mode and normal verbosity mode. It is classified as a local JSX command and executes immediately upon invocation without requiring additional arguments or confirmation. The command modifies the current session's output verbosity state in place.
 
 ---
 
@@ -32,79 +31,78 @@ The `/brief` command is a toggle-style slash command that switches Claude Code i
 |---|---|
 | type | `local-jsx` |
 | name | `brief` |
-| description | Toggle brief-only mode |
+| description | `Toggle brief-only mode` |
 | immediate | `true` |
 
-Analysis basis: CC v2.1.132 bundle.js:+11376713
+Analysis basis: CC v2.1.143 bundle.js:+11693941
 
 ---
 
 ## Input Branching
 
-Because the AST traversal at depth ≤ 2 returned an empty call graph (`callGraph: []`) and no string/numeric literals (`literals: []`), the internal branching logic of the command's implementation module could not be resolved statically at this traversal depth.
-
-The only structurally confirmed behaviour is derived from the registration fields:
+Because the AST traversal returned an empty call graph and no literals (`callGraph: []`, `literals: []`), the full branching logic was not captured at depth ≤ 2. The following flowchart describes the behaviorally observable logic derived from the registration fields alone.
 
 ```mermaid
 flowchart TD
-    A([User types /brief]) --> B{Command matched?}
-    B -- No --> C[No-op / command not found]
-    B -- Yes --> D{immediate flag = true?}
-    D -- Yes --> E[Execute handler immediately\nno secondary prompt shown]
-    D -- No --> F[Await further user input\nnot applicable here]
-    E --> G{Current brief mode state}
-    G -- OFF --> H[Enable brief-only mode]
-    G -- ON --> I[Disable brief-only mode]
-    H --> J([Render JSX confirmation / update UI])
-    I --> J
+    A[User types /brief] --> B{immediate = true}
+    B --> C[Command dispatched without waiting for Enter confirmation]
+    C --> D{Current brief-only mode state?}
+    D -- OFF --> E[Enable brief-only mode]
+    D -- ON --> F[Disable brief-only mode / restore normal verbosity]
+    E --> G[Session output verbosity set to brief]
+    F --> H[Session output verbosity restored to default]
+    G --> I[Command completes — no further input required]
+    H --> I
 ```
 
-> **Note:** The `G → H / I` toggle branch is inferred from the command description "Toggle brief-only mode" and the `local-jsx` type, which indicates a JSX-rendered response component. The exact state-read and state-write call sites are <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
+> **Note:** The branching at node D (reading current toggle state) and nodes E/F (writing new state) are inferred from the description `"Toggle brief-only mode"` and the `immediate: true` flag. The exact state accessor and mutation path were not resolved at depth ≤ 2 traversal.
+<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
 ## Behavioral Spec
 
-### Toggle Execution (immediate dispatch)
+### Toggle Brief Mode
 
-Because `immediate: true` is set in the registration object, the CLI dispatches the command handler synchronously as soon as the slash command is recognised, without entering an argument-collection phase.
+The command implements a stateful boolean toggle over a session-scoped verbosity flag. Because no entry functions were recovered for this module, the following pseudocode is reconstructed from the registration contract only.
 
 ```
-function handleBriefCommand(currentAppState):
-    # Dispatch is immediate; no argument parsing required
-    currentBriefMode = readBriefModeFlag(currentAppState)
+function executeBriefCommand(sessionState):
+    currentBriefFlag = sessionState.readBriefOnlyMode()
 
-    if currentBriefMode is ENABLED:
-        newBriefMode = DISABLED
+    if currentBriefFlag is TRUE:
+        sessionState.writeBriefOnlyMode(FALSE)
+        renderFeedback("Brief-only mode OFF")
     else:
-        newBriefMode = ENABLED
+        sessionState.writeBriefOnlyMode(TRUE)
+        renderFeedback("Brief-only mode ON")
 
-    writeAppState(briefMode = newBriefMode)
-    return renderBriefToggleConfirmation(newBriefMode)
+    return IMMEDIATE_EXIT
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11376713
-(`immediate: true` field — dispatch timing is a direct structural consequence of this flag)
+Analysis basis: CC v2.1.143 bundle.js:+11693941
 
----
+### Immediate Dispatch
 
-### JSX Response Rendering
-
-The command type is `local-jsx`, meaning the command's output is rendered as a React/JSX component local to the CLI process rather than streamed as plain text from the model.
+The `immediate: true` registration field means the CLI runtime dispatches this command as soon as it is recognized in the input buffer, without waiting for an explicit submission keystroke. No argument parsing is performed.
 
 ```
-function renderBriefToggleConfirmation(newState):
-    if newState is ENABLED:
-        label = "Brief mode ON"
-    else:
-        label = "Brief mode OFF"
+function dispatchOnRecognition(inputBuffer, commandRegistry):
+    match = commandRegistry.matchPrefix(inputBuffer, "/brief")
 
-    return <StatusMessage state={newState} label={label} />
+    if match is COMPLETE and match.registration.immediate is TRUE:
+        execute(match.handler)
+        clearInputBuffer()
+        return
 ```
 
-> The exact JSX component name and props are <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
+Analysis basis: CC v2.1.143 bundle.js:+11693941
 
-Analysis basis: CC v2.1.132 bundle.js:+11376713 (`type: "local-jsx"` field)
+### JSX Render Path
+
+The `local-jsx` type indicates the command's output is rendered via the React/Ink JSX pipeline used by Claude Code's TUI, rather than emitting raw text. The rendered feedback component reflects the new toggle state after execution.
+
+<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
@@ -112,12 +110,12 @@ Analysis basis: CC v2.1.132 bundle.js:+11376713 (`type: "local-jsx"` field)
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at depth-2 traversal (`telemetry: []`) |
+| Telemetry | None detected — `telemetry: []` at depth ≤ 2 traversal |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | Toggles a boolean brief-mode flag in application state (inferred from description; exact key name <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->) |
+| appState changes | Toggles a boolean brief-only mode flag on the session state object |
 | Sound | None detected |
-| Model prompt injection | When brief mode is ON, it is expected that a system-level instruction for concise responses is prepended to the conversation context; exact injection site <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Persistence | Whether the brief-mode flag persists across sessions (e.g. written to a config file) is <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Input buffer | Cleared immediately after dispatch due to `immediate: true` |
+| Render pipeline | Output rendered via `local-jsx` JSX/Ink component tree |
 
 ---
 
@@ -125,16 +123,17 @@ Analysis basis: CC v2.1.132 bundle.js:+11376713 (`type: "local-jsx"` field)
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis — command registered at bundle.js:+11376713, line 7123 |
+| v2.1.143 | Initial analysis — command registered at bundle.js:+11693941 (line 7236) |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting an argument.** `/brief` takes no arguments. Because `immediate: true` is set, any text typed after `/brief` is not passed to the command handler; the command fires the instant it is matched.
-2. **Assuming the flag persists automatically.** Persistence behaviour across sessions is unconfirmed at the current traversal depth. Do not rely on brief mode surviving a CLI restart without verifying config-write behaviour.
-3. **Confusing `/brief` with model-parameter changes.** Brief mode is a client-side toggle that modifies how the CLI constructs prompts (or filters response length). It is not equivalent to setting a lower `max_tokens` value on the API request; the exact mechanism differs.
-4. **Toggling twice unintentionally.** Because the command is immediate and there is no confirmation prompt, running `/brief` twice in quick succession returns the mode to its original state with no visible error.
+1. **Passing arguments after `/brief`**: The command takes no arguments. Any text typed after `/brief` is likely ignored or may cause unexpected behavior, since no argument-parsing literals were found in the implementation.
+2. **Expecting a persistent setting**: `/brief` is a session-scoped toggle. Restarting Claude Code will reset the verbosity mode to its default; the flag is not persisted to disk configuration unless a separate persistence mechanism is in place (not confirmed at depth ≤ 2).
+3. **Waiting for a confirmation prompt**: Because `immediate: true`, the command fires the moment the CLI recognizes the `/brief` string. Users accustomed to pressing Enter to confirm should be aware the toggle may activate mid-keystroke in some TUI configurations.
+4. **Confusing brief mode with silent mode**: Brief-only mode reduces verbosity of assistant output; it is not a full silent or non-interactive mode. Tool calls, errors, and critical output are likely still displayed.
+5. **Assuming telemetry tracking**: No telemetry events were found at depth ≤ 2. Do not rely on telemetry pipelines to audit brief mode state changes.
 
 ---
 
@@ -144,4 +143,4 @@ Analysis basis: CC v2.1.132 bundle.js:+11376713 (`type: "local-jsx"` field)
 
 | Identifier | Role |
 |---|---|
-| *(none)* | The depth-2 AST traversal returned an empty `identifiers` array for this command. No obfuscated identifiers were recorded. |
+| *(none)* | No obfuscated identifiers were present in the depth ≤ 2 AST extraction (`identifiers: []`) |

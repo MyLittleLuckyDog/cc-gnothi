@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/tui` command switches the terminal UI renderer between `default` and `fullscreen` modes at runtime. It validates the current session context and environment before applying the change, persisting the chosen mode to user settings and relaunching the process with the new renderer active. If preconditions are not met (background session, active background tasks, or environment-level overrides), the command refuses the switch and reports a descriptive error to the user.
+The `/tui` command allows users to switch the terminal UI renderer between `default` and `fullscreen` modes at runtime. It validates the current session context and active background task state before committing a renderer change, and triggers a full process relaunch to apply the new renderer. If the switch cannot be performed safely (background session, running tasks, or environment-forced overrides), the command emits an explanatory error message instead of proceeding.
 
 ---
 
@@ -41,274 +41,255 @@ Analysis basis: CC v2.1.143 bundle.js:+11390923
 
 ## Input Branching
 
-The command handler (`Hv7`) evaluates several sequential gate conditions before executing a renderer switch. The flowchart below summarises all documented branches.
+The command handler trims and lowercases the raw argument, then follows a multi-stage gate sequence before applying the renderer change.
 
 ```mermaid
 flowchart TD
-    A(["/tui invoked"]) --> B[Trim argument string]
-    B --> C{Session type?}
-    C -->|daemon / daemon-worker| D["Error: renderer switching unavailable in background session\n(bundle.js:+11389201)"]
-    C -->|foreground / system| E{Background tasks running?\nstate = running | pending\ntype = remote_agent | mcp_task}
-    E -->|Yes| F["Error: cannot switch while background tasks are active\n(bundle.js:+11389695)\nEmit: tengu_tui_refused"]
-    E -->|No| G[Resolve fullscreen eligibility via environment check]
-    G --> H{Argument supplied?}
-    H -->|No argument| I[Display current mode + eligibility status to user]
-    H -->|'fullscreen'| J{Fullscreen eligible?}
-    H -->|'default'| K[Set renderer = default]
-    J -->|Eligible| L[Set renderer = fullscreen]
-    J -->|Not eligible| M["Display eligibility reason\n(downsell / env_off / tmux_cc_auto_off / win_ssh_auto_off)"]
-    K --> N[Persist to userSettings via settings writer]
-    L --> N
-    N --> O[Emit tengu_tui_command with uptime + chosen mode]
-    O --> P[Relaunch process via relaunchHandler]
-    P --> Q([Process exits and respawns with new renderer])
-    D --> Z([Return error JSX to user])
-    F --> Z
-    M --> Z
-    I --> Z
+    A([User invokes /tui argument]) --> B[Trim whitespace from argument]
+    B --> C[Lowercase the trimmed value]
+    C --> D{Session type check}
+    D -- "daemon or daemon-worker\n(background session)" --> E[Emit error:\nRenderer switching unavailable in background session]
+    E --> F([Emit tengu_tui_refused · return])
+    D -- "foreground session" --> G{Background tasks running?\nrunning / pending / remote_agent / mcp_task}
+    G -- "Yes" --> H[Emit error:\nCannot switch while background tasks are running]
+    H --> F
+    G -- "No" --> I{Fullscreen eligibility check\nfor current environment}
+    I -- "tmux -CC / iTerm2 CC mode detected\nand CLAUDE_CODE_NO_FLICKER not set" --> J[Emit warning:\nFullscreen disabled – tmux -CC detected]
+    I -- "Windows-over-SSH / ConPTY detected\nand CLAUDE_CODE_NO_FLICKER not set" --> K[Emit warning:\nFullscreen disabled – Windows SSH detected]
+    I -- "Eligible" --> L{Parse requested mode}
+    J --> L
+    K --> L
+    L -- "argument = fullscreen" --> M[Set target mode = fullscreen]
+    L -- "argument = default or empty" --> N[Set target mode = default]
+    L -- "argument = bg" --> O[Set target mode = bg / forced-on]
+    M --> P[Determine effective fullscreen reason code\ne.g. settings_on / gb_on / env_on / downsell_on / …]
+    N --> P
+    O --> P
+    P --> Q[Emit tengu_tui_command with mode + reason]
+    Q --> R[Load settings · resolve config paths]
+    R --> S[Persist new renderer preference to settings.json]
+    S --> T[Flush analytics · drain output queue]
+    T --> U[Relaunch process via spawnSync / execve with --resume]
+    U --> V([New process starts with updated renderer])
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11388898, +11389187, +11389526, +11389654, +11390126, +11390436
+Analysis basis: CC v2.1.143 bundle.js:+11388898, +11389068, +11389187, +11389526, +11389652, +11389866, +11390126, +11390551
 
 ---
 
 ## Behavioral Spec
 
-### Argument Normalisation
+### 1. Argument Normalisation
 
 ```
 function normaliseArgument(rawInput):
-    trimmed = rawInput.trim()           // bundle.js:+11388898
-    lower   = trimmed.toLowerCase()     // bundle.js:+14528099
-    return lower
+    trimmed = rawInput.trim()                    // strip leading/trailing whitespace
+    normalised = trimmed.toLowerCase()           // case-insensitive comparison
+    return normalised
 ```
 
-The argument is trimmed then lower-cased before any comparison is made. Accepted values after normalisation are `"fullscreen"` and `"default"`. Any other value, including an empty string, triggers display-only (status) mode.
-
-Analysis basis: CC v2.1.143 bundle.js:+11388898, +14528099
+Analysis basis: CC v2.1.143 bundle.js:+11388898 (trim call), +14528099 (toLowerCase call)
 
 ---
 
-### Session-Type Guard
+### 2. Background-Session Gate
+
+The handler resolves the current session type. If the session type is `"daemon"` or `"daemon-worker"`, the command is refused immediately.
 
 ```
-function sessionTypeGuard(sessionType):
-    blockedTypes = ["daemon", "daemon-worker"]   // bundle.js:+2169293, +2169307
-    if sessionType in blockedTypes:
-        return Error(
+function checkSessionAllowed(sessionType):
+    if sessionType in ["daemon", "daemon-worker"]:
+        displayError(
             "Renderer switching isn't available in a background session" +
             " — press ← to detach and run /tui from a foreground session."
-        )                                         // bundle.js:+11389201
-    return OK
+        )
+        emitTelemetry("tengu_tui_refused")
+        return REFUSED
+    return ALLOWED
 ```
 
-If the current session context identifies as `daemon` or `daemon-worker`, the command immediately returns an error JSX node and performs no further processing.
+Blocking message (exact string from bundle):
+> `"Renderer switching isn't available in a background session — press ← to detach and run /tui from a foreground session."`
 
-Analysis basis: CC v2.1.143 bundle.js:+11389187, +2169293, +2169307, +11389201
+Analysis basis: CC v2.1.143 bundle.js:+11389201, +11389654
 
 ---
 
-### Background-Task Guard
+### 3. Active-Task Gate
+
+The handler inspects the set of background tasks for any entry whose state is one of `"running"`, `"pending"`, `"remote_agent"`, or `"mcp_task"`. If any such task exists, the switch is blocked.
 
 ```
-function backgroundTaskGuard(taskList):
-    blockedStates = ["running", "pending"]        // bundle.js:+11389565, +11389587
-    blockedTypes  = ["remote_agent", "mcp_task"]  // bundle.js:+11389608, +11389633
-
-    for each task in Object.values(taskList):     // bundle.js:+11389526
-        if task.state in blockedStates AND task.type in blockedTypes:
-            emit("tengu_tui_refused")             // bundle.js:+11389654
-            return Error(
+function checkNoActiveTasks(taskList):
+    blocked_states = {"running", "pending", "remote_agent", "mcp_task"}
+    for task in taskList:
+        if task.state in blocked_states:
+            displayError(
                 "Cannot switch renderers while background tasks are running" +
-                " — wait for them to finish (or stop them via /tasks)," +
-                " then run /tui again."
-            )                                     // bundle.js:+11389695
-    return OK
+                " — wait for them to finish (or stop them via /tasks), then run /tui again."
+            )
+            emitTelemetry("tengu_tui_refused")
+            return REFUSED
+    return ALLOWED
 ```
 
-All entries in the current task map are inspected. A single qualifying entry causes the command to emit a telemetry event and return an error.
+Blocking message (exact string from bundle):
+> `"Cannot switch renderers while background tasks are running — wait for them to finish (or stop them via /tasks), then run /tui again."`
 
-Analysis basis: CC v2.1.143 bundle.js:+11389526, +11389565, +11389587, +11389608, +11389633, +11389654, +11389695
+Analysis basis: CC v2.1.143 bundle.js:+11389565, +11389587, +11389608, +11389633, +11389695, +11389654
 
 ---
 
-### Fullscreen Eligibility Resolution
+### 4. Fullscreen Eligibility Detection
 
-The eligibility resolver (`$$H`) computes a labelled reason code that explains why fullscreen is or is not available. It reads environment variables, terminal-type checks, and persisted settings.
+Before resolving the final mode, the implementation detects two environment conditions that auto-disable fullscreen unless overridden by `CLAUDE_CODE_NO_FLICKER=1`.
+
+#### 4a. tmux Control-Client Detection
 
 ```
-function resolveFullscreenEligibility(env, terminalInfo, settings):
-
-    // Environment variable hard-disable
-    if env["CLAUDE_CODE_NO_FLICKER"] is set:      // bundle.js:+11387208
-        return { eligible: false, reason: "env_off" }   // bundle.js:+3332770
-
-    // Environment variable hard-enable override
-    if env["CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"] is set:  // bundle.js:+11387233
-        return { eligible: true,  reason: "env_on" }        // bundle.js:+3332828
-
-    // Automatic disable: tmux -CC (iTerm2 integration)
-    if terminalInfo indicates tmux-CC mode:
-        return { eligible: false, reason: "tmux_cc_auto_off" }  // bundle.js:+3332852
-
-    // Automatic disable: Windows over SSH (ConPTY)
-    if platform is "windows" AND session is SSH:
-        return { eligible: false, reason: "win_ssh_auto_off" }  // bundle.js:+3332886
-
-    // Background / flag forced-on path
-    if backgroundFlagActive:
-        return { eligible: true,  reason: "bg_forced_on" }  // bundle.js:+3332958
-
-    // Persisted settings checks
-    if settings.fullscreen == "on":
-        return { eligible: true,  reason: "settings_on" }   // bundle.js:+3333013
-    if settings.fullscreen == "off":
-        return { eligible: false, reason: "settings_off" }  // bundle.js:+3333047
-
-    // Downsell upsell path (CLAUDE_CODE_FORCE_FULLSCREEN_UPSELL)
-    if env["CLAUDE_CODE_FORCE_FULLSCREEN_UPSELL"] is set:   // bundle.js:+11387272
-        return { eligible: false, reason: "downsell_on" }   // bundle.js:+3333120
-
-    // Gradual-rollout gates
-    if gradualRolloutBucket in enabledSet:
-        return { eligible: true,  reason: "gb_on" }    // bundle.js:+3333185
-    else:
-        return { eligible: false, reason: "gb_off" }   // bundle.js:+3333193
+function detectTmuxControlClient(termProgram):
+    if termProgram.startsWith("screen") or termProgram.startsWith("tmux"):
+        result = spawnSync("tmux", ["display-message", "-p", "#{client_control_mode}"],
+                           {encoding: "utf8", timeout: 2000})
+        if result indicates control-client mode:
+            return true
+    return false
 ```
 
-Reason codes are string constants embedded in the bundle. They are used both for telemetry attribution and for selecting the appropriate UI message shown to the user.
+Warning message when detected (and `CLAUDE_CODE_NO_FLICKER` is unset):
+> `"fullscreen disabled: tmux -CC (iTerm2 integration mode) detected · set CLAUDE_CODE_NO_FLICKER=1 to override"`
 
-Analysis basis: CC v2.1.143 bundle.js:+3332770, +3332828, +3332852, +3332886, +3332958, +3333013, +3333047, +3333120, +3333185, +3333193, +11387208, +11387233, +11387272
+Analysis basis: CC v2.1.143 bundle.js:+3331099, +3331124, +3331309, +3331327, +3331332, +3331368, +3331383, +3331999
+
+#### 4b. Windows-over-SSH / ConPTY Detection
+
+```
+function detectWindowsSSH(platform, termProgram):
+    if platform == "windows":
+        // checks for ConPTY re-rendering artifacts over SSH
+        return true
+    return false
+```
+
+Warning message when detected (and `CLAUDE_CODE_NO_FLICKER` is unset):
+> `"fullscreen disabled: Windows over SSH (ConPTY re-rendering) detected · set CLAUDE_CODE_NO_FLICKER=1 to override"`
+
+Analysis basis: CC v2.1.143 bundle.js:+3331593, +3332185
 
 ---
 
-### Settings Persistence
+### 5. Renderer Mode Resolution
+
+After gates pass, the implementation maps the normalised argument to one of the known renderer tokens and computes an internal reason code used for telemetry and settings persistence.
 
 ```
-function persistRendererSetting(chosenMode):
-    // chosenMode is "fullscreen" (bundle.js:+3332389) or "default" (bundle.js:+3332415)
-    load current userSettings from disk        // bundle.js:+1206856
-    userSettings.preferredRenderer = chosenMode
-    write userSettings atomically to
-        path.join(configDir, ".claude", "settings.json")   // bundle.js:+1197610, +1197620
-    invalidate in-memory settings caches       // bundle.js:+26086, +26098
+function resolveMode(normalisedArg, envFlags, settingsValue, geofenceFlags):
+    // accepted mode tokens
+    if normalisedArg == "fullscreen":
+        targetMode = "fullscreen"
+    else if normalisedArg == "default" or normalisedArg == "":
+        targetMode = "default"
+    else if normalisedArg == "bg":
+        targetMode = "bg"           // background / force-on variant
+
+    // derive reason code for telemetry
+    reason = determineReasonCode(envFlags, settingsValue, geofenceFlags)
+    // reason is one of:
+    //   "env_off" | "env_on" | "tmux_cc_auto_off" | "win_ssh_auto_off"
+    //   "bg_forced_on" | "settings_on" | "settings_off"
+    //   "downsell_on" | "gb_on" | "gb_off"
+
+    return (targetMode, reason)
 ```
 
-The writer uses an atomic rename pattern (write to temp file, apply original permissions, then rename) to avoid partial writes.
+Known reason codes (from bundle literals):
 
-Analysis basis: CC v2.1.143 bundle.js:+1206856, +1197610, +1197620, +26086, +26098, +1001434, +1001628
+| Reason Code | Meaning |
+|---|---|
+| `env_off` | `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` env var forces default |
+| `env_on` | `CLAUDE_CODE_FORCE_FULLSCREEN_UPSELL` env var forces fullscreen |
+| `tmux_cc_auto_off` | Automatically disabled due to tmux -CC detection |
+| `win_ssh_auto_off` | Automatically disabled due to Windows SSH detection |
+| `bg_forced_on` | Background mode forced on |
+| `settings_on` | Fullscreen enabled via settings |
+| `settings_off` | Fullscreen disabled via settings |
+| `downsell_on` | Upsell/downsell logic engaged |
+| `gb_on` | Geofence/gate-B on |
+| `gb_off` | Geofence/gate-B off |
+
+Analysis basis: CC v2.1.143 bundle.js:+3332389, +3332415, +3332354, +3332770, +3332828, +3332852, +3332886, +3332958, +3333013, +3333047, +3333120, +3333185, +3333193
 
 ---
 
-### Telemetry Payload Construction
+### 6. Settings Persistence
+
+The resolved mode is written to the user settings file before relaunch.
 
 ```
-function buildTuiCommandEvent(chosenMode, eligibility):
-    uptimeSeconds = Math.round(process.uptime() * 1000) / 1000
-    // process.uptime() bundle.js:+11390216; Math.round bundle.js:+11390205
-    // 1000 ms divisor bundle.js:+11390233
-
-    payload = {
-        mode:             chosenMode,
-        eligibility:      eligibility.reason,
-        uptimeMs:         uptimeSeconds
-    }
-    emit("tengu_tui_command", payload)   // bundle.js:+11390126
+function persistRendererSetting(targetMode):
+    settingsPath = join(homedir(), ".claude", "settings.json")
+    existingSettings = readSettings(settingsPath)
+    existingSettings["renderer"] = targetMode
+    writeSettings(settingsPath, existingSettings)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11390126, +11390205, +11390216, +11390233
+Settings file paths observed in traversal:
+- User settings: `~/.claude/settings.json` (Analysis basis: CC v2.1.143 bundle.js:+1197610, +1197620)
+- Local settings: `~/.claude/settings.local.json` (Analysis basis: CC v2.1.143 bundle.js:+1197682)
+
+Analysis basis: CC v2.1.143 bundle.js:+1197378, +1197386, +1197395
 
 ---
 
-### Process Relaunch
-
-After settings are persisted and telemetry is emitted, the command triggers a full process relaunch so the new renderer is activated cleanly.
+### 7. Telemetry Emission
 
 ```
-function relaunchWithNewRenderer():
-    flush analytics with timeout 30000 ms    // bundle.js:+30000, "flush timeout (relaunch)" +11385870
-    wait for cleanup timeout 2000 ms         // bundle.js:+2000, "cleanup timeout" +11385926
-    clear signal handlers (SIGINT, SIGTERM, SIGHUP)   // bundle.js:+11386291, +11386300, +11386310
-    register beforeExit / exit handlers      // bundle.js:+11386466, +11386507
-    spawn new process with "--resume" flag   // bundle.js:+11385802
-        stdio: "inherit"                     // bundle.js:+11386412
-    on spawn error:
-        emit("relaunch_spawn_error")         // bundle.js:+11386602
-        process.exit(128 + signal)           // bundle.js:+11386739
-    send SIGTERM to old process              // bundle.js:+11386691
+function emitTuiCommandEvent(targetMode, reasonCode, uptimeSeconds):
+    emitTelemetry("tengu_tui_command", {
+        mode: targetMode,
+        reason: reasonCode,
+        uptime: Math.round(process.uptime())
+    })
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11385802, +11385870, +11385921, +11385926, +11386291, +11386300, +11386310, +11386412, +11386466, +11386507, +11386602, +11386626, +11386691, +11386739
+Analysis basis: CC v2.1.143 bundle.js:+11390126, +11390205, +11390216
 
 ---
 
-### Terminal Compatibility Check
+### 8. Relaunch Sequence
 
-Before rendering the fullscreen UI the terminal detector (`DI`) inspects the host environment.
+After persisting settings and emitting telemetry, the process re-execs itself with the `--resume` flag so that the new renderer takes effect from a fresh process start.
 
 ```
-function detectTerminalCompatibility(env, platform):
-    // Check for Cursor IDE terminal
-    if terminalProgram includes "cursor":        // bundle.js:+3403135
-        record compatibility note
-
-    // Check for VS Code terminal
-    if terminalProgram includes "vscode":        // bundle.js:+3403184
-        record compatibility note
-
-    // Check for JetBrains IDE terminal
-    if G56.isJetBrainsIdeTerminal():             // bundle.js:+3402466
-        record compatibility note
-
-    // Check for xterm.js-based terminal
-    if terminalProgram includes "xterm.js":      // bundle.js:+3403304
-        record compatibility note
-
-    // Determine safe scroll region height
-    rawHeight    = parseFloat(terminalRows)      // bundle.js:+3403586
-    clampedHeight = Math.min(rawHeight, 20)      // bundle.js:+3403642 (max 20 lines)
-    if Number.isNaN(clampedHeight):              // bundle.js:+3403607
-        fallback to default height
-
-    // Platform-specific paths
-    if platform == "darwin": ...                 // bundle.js:+3402670
-    if platform == "win32":  ...                 // bundle.js:+3402716
+function performRelaunch():
+    flushAnalyticsQueue(timeout=30000)         // "flush timeout (relaunch)"
+    drainOutputQueue()                         // XSH / at_.drain
+    removeAllProcessListeners()                // SIGINT, SIGTERM, SIGHUP
+    registerExitHandlers()                     // beforeExit, exit
+    newArgv = currentArgv + ["--resume"]
+    spawnSyncOrExecve(currentExecutable, newArgv, {stdio: "inherit"})
+    process.exit(0)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+3402438, +3402466, +3402670, +3402716, +3403135, +3403184, +3403304, +3403586, +3403607, +3403631, +3403642
+Timeout constants:
+- Flush timeout (relaunch): 30 000 ms (Analysis basis: CC v2.1.143 bundle.js:+11385864)
+- Cleanup timeout: referenced as `"cleanup timeout"` (Analysis basis: CC v2.1.143 bundle.js:+11385926)
+- Analytics flush timeout: referenced as `"analytics flush timeout"` (Analysis basis: CC v2.1.143 bundle.js:+11385982)
+- Abort timeout: 500 ms (Analysis basis: CC v2.1.143 bundle.js:+5228946)
+
+Analysis basis: CC v2.1.143 bundle.js:+11385802, +11385843, +11385856, +11385915, +11385971, +11386320, +11386350, +11386377, +11386466, +11386507, +11386626
 
 ---
 
-### Fullscreen Disqualification Messages
+### 9. Environment Variable Overrides
 
-Two static disqualification strings are embedded in the bundle:
+| Environment Variable | Effect |
+|---|---|
+| `CLAUDE_CODE_NO_FLICKER` | Overrides auto-disable of fullscreen for tmux-CC and Windows-SSH environments |
+| `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` | Forces renderer to `default` (reason: `env_off`) |
+| `CLAUDE_CODE_FORCE_FULLSCREEN_UPSELL` | Forces fullscreen upsell path (reason: `env_on`) |
 
-- **tmux -CC (iTerm2 integration) detected:**
-  `"fullscreen disabled: tmux -CC (iTerm2 integration mode) detected · set CLAUDE_CODE_NO_FLICKER=1 to override"`
-  Analysis basis: CC v2.1.143 bundle.js:+3331999
-
-- **Windows over SSH (ConPTY) detected:**
-  `"fullscreen disabled: Windows over SSH (ConPTY re-rendering) detected · set CLAUDE_CODE_NO_FLICKER=1 to override"`
-  Analysis basis: CC v2.1.143 bundle.js:+3332185
-
-Both messages instruct the user to set `CLAUDE_CODE_NO_FLICKER=1` to override the automatic disable.
-
----
-
-### Gradual-Rollout Gate
-
-```
-function gradualRolloutCheck(sessionId):
-    // Uses a deterministic bucket derived from sessionId
-    // Telemetry events recorded via tengu_amber_creek / tengu_pewter_brook
-    bucket = computeBucket(sessionId)            // bundle.js:+3332572, +3332480
-    if bucket in enabledBucketSet:
-        return true   // "gb_on"
-    else:
-        return false  // "gb_off"
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+3332480, +3332572, +3333185, +3333193
+Analysis basis: CC v2.1.143 bundle.js:+11387208, +11387233, +11387272
 
 ---
 
@@ -316,18 +297,18 @@ Analysis basis: CC v2.1.143 bundle.js:+3332480, +3332572, +3333185, +3333193
 
 | Item | Detail |
 |---|---|
-| Telemetry — `tengu_tui_refused` | Emitted when a background task blocks the switch (bundle.js:+11389654) |
-| Telemetry — `tengu_tui_command` | Emitted on every successful renderer selection, carries mode + uptime (bundle.js:+11390126) |
-| Telemetry — `tengu_amber_creek` | Emitted inside the gradual-rollout eligibility check (bundle.js:+3332572) |
-| Telemetry — `tengu_pewter_brook` | Emitted inside the gradual-rollout eligibility check (bundle.js:+3332480) |
-| Telemetry — `tengu_slate_kestrel` | Emitted during the analytics/account-tier check called during relaunch (bundle.js:+10022817) |
-| Settings write | `userSettings` section of `.claude/settings.json` updated with new renderer preference (bundle.js:+1206856, +1197620) |
-| Cache invalidation | In-memory settings caches (`kV6`, `EZ8`) cleared after write (bundle.js:+26086, +26098) |
-| Signal handlers | `SIGINT`, `SIGTERM`, `SIGHUP` handlers replaced during relaunch (bundle.js:+11386291–11386310) |
-| Process relaunch | `kXq.spawnSync` used to spawn replacement process with `--resume` flag (bundle.js:+11385802, +11386377) |
-| Event emission | `WCH.emit` called after settings persist (bundle.js:+1207214) |
-| Timestamp tracking | `RR6.set(Date.now())` records the moment of the settings write (bundle.js:+1086635, +1086645) |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry — `tengu_tui_refused` | Fired when the command is blocked (background session or active tasks) |
+| Telemetry — `tengu_tui_command` | Fired on every successful switch attempt; carries `mode`, `reason`, and `uptime` |
+| Telemetry — `tengu_amber_creek` | Fired inside the fullscreen-mode resolution path |
+| Telemetry — `tengu_pewter_brook` | Fired inside the fullscreen-mode resolution path |
+| Settings write | `~/.claude/settings.json` is updated with the new renderer value before relaunch |
+| Process relaunch | After a successful switch, the process re-execs itself with `--resume`; all existing signal listeners are removed and re-registered |
+| Output queue drain | The output/write queue (`at_.drain`) is flushed before relaunch to prevent data loss |
+| Analytics flush | In-flight analytics events are flushed before relaunch (30 000 ms timeout) |
+| Cache clear | Internal caches (`kV6`, `EZ8`) are cleared as part of the settings-reload path |
+| Hook registration | `at_.register` is called during the relaunch setup path |
+
+Analysis basis: CC v2.1.143 bundle.js:+11389654, +11390126, +3332572, +3332480, +57020, +26086, +26098, +56977
 
 ---
 
@@ -341,19 +322,17 @@ Analysis basis: CC v2.1.143 bundle.js:+3332480, +3332572, +3333185, +3333193
 
 ## Common Mistakes
 
-1. **Running `/tui` inside a background (daemon) session.** The command detects `daemon` and `daemon-worker` session types and refuses immediately. Detach to a foreground session first (press `←`), then invoke `/tui`. (bundle.js:+11389201)
+1. **Running `/tui` inside a background/daemon session.** The command is gated to foreground sessions only. Detach from the background session first, then invoke `/tui` in a foreground terminal.
 
-2. **Running `/tui` while MCP tasks or remote-agent tasks are active.** Any task with state `running` or `pending` and type `remote_agent` or `mcp_task` will block the switch. Use `/tasks` to stop them first. (bundle.js:+11389695)
+2. **Running `/tui fullscreen` while background tasks are active.** The switch is blocked until all tasks with states `running`, `pending`, `remote_agent`, or `mcp_task` have completed or been stopped via `/tasks`.
 
-3. **Expecting `/tui fullscreen` to work in tmux -CC mode without an override.** The iTerm2 tmux-CC integration is automatically detected and fullscreen is disabled. Set `CLAUDE_CODE_NO_FLICKER=1` to override. (bundle.js:+3331999)
+3. **Expecting an instant in-process renderer switch.** The renderer change requires a full process relaunch (`--resume`). All unsaved in-memory state that is not covered by the resume mechanism will be lost.
 
-4. **Expecting `/tui fullscreen` to work on Windows over SSH.** ConPTY re-rendering is detected and fullscreen is auto-disabled. Set `CLAUDE_CODE_NO_FLICKER=1` to override. (bundle.js:+3332185)
+4. **Assuming `fullscreen` always takes effect in tmux or Windows-SSH environments.** Both environments are auto-detected and fullscreen is suppressed unless `CLAUDE_CODE_NO_FLICKER=1` is set explicitly.
 
-5. **Not accounting for the gradual rollout.** Even on a compatible terminal, fullscreen may be gated to a subset of sessions via the gradual-rollout bucket mechanism. The `gb_off` reason code indicates the session is outside the enabled set.
+5. **Passing an unrecognised mode token.** Only `default`, `fullscreen`, and `bg` are valid tokens. Any other value will not match a known mode path.
 
-6. **Assuming the switch is instantaneous.** The command persists settings and then relaunches the entire process. A 30-second analytics flush timeout and a 2-second cleanup timeout are observed before the new process spawns. (bundle.js:+11385870, +11385926)
-
-7. **Passing an unrecognised argument (e.g., `/tui on`).** The argument is normalised to lowercase and compared against `"fullscreen"` and `"default"` only. Any other value puts the command into status-display mode rather than triggering a mode change.
+6. **Expecting the argument to be case-sensitive.** The argument is lowercased before evaluation; `Fullscreen` and `FULLSCREEN` are both accepted.
 
 ---
 
@@ -363,53 +342,158 @@ Analysis basis: CC v2.1.143 bundle.js:+3332480, +3332572, +3333185, +3333193
 
 | Identifier | Role |
 |---|---|
-| `Hv7` | Main `/tui` command handler (JSX component) |
-| `A` | Argument normalisation helper (trim → toLowerCase) |
-| `f` | Stream/terminal close helper called during relaunch teardown |
-| `R_` | Settings load-from-disk orchestrator |
-| `Lu` | Settings-from-disk loader (emits loadSettingsFromDisk_start / _end) |
-| `rA` | Fullscreen eligibility resolver (reads env, terminal state, settings) |
-| `VRH` | JetBrains-IDE terminal detector |
-| `u1_` | Windows-platform detection helper |
-| `xH` | String coercion utility |
-| `hl` | tmux-CC mode detection helper |
-| `v` | Debug / log level helper |
-| `x1_` | Boolean coercion / flag reader |
-| `ybL` | Gradual-rollout sub-resolver |
-| `G6` | Gradual-rollout gate (checks bucket sets, emits tengu_amber_creek / tengu_pewter_brook) |
-| `H` | Random number / setTimeout utility (used in relaunch timing) |
-| `T1` | Session-type classifier (daemon / daemon-worker / system) |
-| `cB` | Session-type constant store |
-| `d` | Task-map accessor |
-| `$$H` | Fullscreen eligibility reason-code builder (returns env_off / env_on / gb_on / etc.) |
-| `p_` | Settings persistence and relaunch orchestrator |
-| `wO` | Settings-write helper (reads k5H / WB) |
-| `x6` | Config directory resolver |
-| `lm8` | Atomic file-write helper |
-| `WB` | Full settings writer (handles policySettings, flagSettings, userSettings, etc.) |
-| `AP` | Post-write event emitter |
-| `$8` | ENOENT-safe file reader |
-| `nu8` | Write-timestamp recorder (RR6.set / Date.now) |
-| `XXH` | Settings-write cache coordinator |
-| `yA6` | Atomic rename writer (temp file, fchmod, fsync, rename, unlink) |
-| `hH` | JSON serialiser helper |
-| `hz` | In-memory settings cache invalidator (kV6.clear / EZ8.clear) |
-| `VR6` | Async settings file writer (mkdir, readFile, appendFile, writeFile) |
-| `hy` | Settings path builder (.claude/settings.json) |
-| `__` | Global-state accessor |
-| `NH` | Event hook registrar (WCH.emit wrapper) |
-| `DI` | Terminal compatibility checker (Cursor, VS Code, JetBrains, xterm.js) |
-| `h56` | Terminal program name accessor |
-| `hJ` | Terminal environment variable reader |
-| `vq_` | EpL-based terminal-version parser |
-| `P$H` | IDE-terminal flag setter |
-| `ZpL` | Terminal row-height clamper (parseFloat / Math.min / Number.isNaN) |
-| `jF` | Analytics flush initiator (Uu / RSL / OO / TA6) |
-| `Uu` | Analytics flush coordinator |
-| `uq` | Analytics/account-tier gate (emits tengu_slate_kestrel) |
-| `N1q` | wC_ network-request wrapper |
-| `bp` | Account-tier resolver (firstParty / enterprise / team) |
-| `zq` | Essential-traffic network classifier |
-| `K0H` | xH-based analytics key formatter |
-| `CXq` | Relaunch entry point (delegates to twH) |
-| `twH` | Full process-relaunch implementation (flush, spawn, signal, exit) |
+| `Hv7` | Top-level `/tui` command handler function |
+| `A` | Normalised argument string (post-trim, post-lowercase) |
+| `f` | File/stream handle used during relaunch cleanup |
+| `q` | Secondary file/stream handle; also temp-file unlink path |
+| `L` | Promise/task tracking set (add/delete/finally) |
+| `R_` | Settings load orchestrator (triggers `Lu`) |
+| `Lu` | Core settings-from-disk loader |
+| `ah` | Settings load sub-step A |
+| `P1` | Performance mark emitter (records memory usage) |
+| `px` | Dynamic `require` wrapper (loads `perf_hooks`) |
+| `nm8` | Settings load telemetry + merge pipeline |
+| `T8` | Log file appender (appendFileSync / mkdirSync) |
+| `SV6` | Settings layer merger — step 1 |
+| `j96` | Flag-settings layer handler |
+| `oDA` | Policy-settings layer handler |
+| `K` | Column-formatter for settings display (padEnd, width 40) |
+| `k5H` | Settings path resolver (userSettings / projectSettings / localSettings) |
+| `XB` | Settings validation / schema check |
+| `nDA` | SDK-inline-settings layer handler |
+| `WB` | Settings object builder / aggregator |
+| `__` | Shared utility / identity helper |
+| `fH6` | Settings builder sub-component F |
+| `RV8` | Settings builder sub-component R |
+| `_H6` | Settings builder sub-component underscore-H |
+| `xjH` | Settings builder sub-component xj |
+| `MH6` | Settings builder sub-component M |
+| `V5H` | Settings builder sub-component V5 |
+| `I5H` | Settings builder sub-component I5 |
+| `Um8` | Settings builder sub-component U |
+| `hDA` | Settings builder sub-component h |
+| `vc` | Settings builder sub-component vc |
+| `P96` | Settings builder sub-component P96 |
+| `yV6` | Post-load settings finaliser |
+| `rA` | Environment / terminal capability detector |
+| `VRH` | Terminal-type registry checker |
+| `u1_` | Terminal string renderer (uses `String`) |
+| `Sq` | String conversion helper A |
+| `xH` | String conversion helper B |
+| `hl` | iTerm / multiplexer detection dispatcher |
+| `kbL` | tmux control-client probe (spawnSync "display-message") |
+| `NbL` | TERM_PROGRAM prefix checker (`startsWith`) |
+| `v` | Telemetry event builder / logger |
+| `G5K` | Telemetry transport layer |
+| `tt_` | Telemetry encoder (TLK / ELK sub-encoders) |
+| `H` | Random / timer utility (Math.random, setTimeout) |
+| `hH` | JSON serialiser (JSON.stringify wrapper) |
+| `_` | String uppercaser / set-like container |
+| `P7` | Redaction / sensitive-value scrubber (`[REDACTED]`) |
+| `h6A` | Header-map builder for telemetry |
+| `cSH` | Terminal write wrapper |
+| `X6A` | Raw terminal write (H.write) |
+| `Z5K` | Conversation / file-write pipeline |
+| `PSH` | Buffered output scheduler (clearTimeout / setTimeout / setImmediate) |
+| `i8H` | Output chunk assembler |
+| `x6` | Logging / debug output helper |
+| `gv8` | Filesystem write helper L8 wrapper |
+| `U6A` | Path-join + write helper |
+| `p6A` | Atomic file rename helper (stat / rename / unlink) |
+| `E5K` | Async append-file-with-mkdir helper |
+| `h9` | Write-queue hook registrar (`at_.register`) |
+| `x1_` | Boolean / platform string resolver |
+| `ybL` | Fullscreen-mode decision tree entry point |
+| `G6` | Renderer-state machine / mode applier |
+| `m76` | Renderer sub-component M |
+| `p76` | Renderer sub-component P |
+| `Ts` | Renderer string formatter |
+| `Ci6` | Renderer deduplication guard |
+| `N6` | Renderer commit / timestamp recorder |
+| `T1` | Session-type classifier |
+| `cB` | Daemon / daemon-worker type constant holder |
+| `d` | JSX element factory / React-compat helper |
+| `$$H` | Fullscreen-mode context provider component |
+| `p_` | Process relaunch orchestrator |
+| `wO` | Pre-relaunch settings snapshot helper |
+| `lm8` | Settings serialiser for relaunch |
+| `AP` | Active-context / CWD resolver |
+| `Tc` | File reader with encoding detection (UTF-8 / UTF-16) |
+| `uM` | File stat + realpath helper (lstatSync / realpathSync) |
+| `Bh6` | File-read sub-helper B |
+| `Fh6` | File-read sub-helper F |
+| `$8` | Filesystem error classifier (L8 wrapper) |
+| `L8` | Low-level error-code normaliser |
+| `nu8` | Timestamp recorder (RR6.set + Date.now) |
+| `XXH` | Pre-relaunch settings + WB snapshot |
+| `JC6` | Settings path joiner (pV.resolve / pV.dirname) |
+| `yA6` | Atomic file write helper (randomBytes temp-file + fsync + rename) |
+| `O` | Background-session state inspector |
+| `N8` | Background-session type constant |
+| `hz` | Cache clearer (kV6.clear / EZ8.clear) |
+| `VR6` | Settings file writer (mkdir / readFile / appendFile / writeFile) |
+| `S6` | Async-local-storage context getter (Uh6 / ph6.getStore) |
+| `Uh6` | AsyncLocalStorage store accessor |
+| `Ru8` | Settings merge helper R |
+| `uu8` | Git-ignore checker for settings path |
+| `$_` | Git-spawn wrapper (check-ignore) |
+| `ySK` | Home-dir config path builder (pzA.homedir + ZR6.join) |
+| `hy` | `.claude` directory path builder (pV.join) |
+| `NH` | Error reporter / log-error dispatcher |
+| `v_` | Error / String converter |
+| `zq` | Error formatter |
+| `A$A` | Error string builder |
+| `kNK` | Error ring-buffer (Ch6 shift/push) |
+| `DI` | Terminal environment probe (JetBrains / Cursor / VS Code / xterm.js) |
+| `h56` | Terminal probe sub-component H |
+| `hJ` | Terminal probe sub-component hJ |
+| `vq_` | IDE terminal version detector (EpL) |
+| `EpL` | Version-string parser |
+| `P$H` | Terminal probe fallback handler |
+| `ZpL` | Terminal column-count calculator (parseFloat / Math.min, max 20) |
+| `Nq_` | Column-count sub-helper |
+| `jF` | Renderer component factory |
+| `Uu` | Renderer component builder (RSL / OO / TA6) |
+| `RSL` | Renderer layout component (xH / Sw) |
+| `Sw` | firstParty renderer sub-component |
+| `OO` | Renderer output handler |
+| `TA6` | Renderer async helper (A$A) |
+| `uq` | User-account / billing-plan resolver |
+| `N1q` | Account data fetcher (wC_ / I1q) |
+| `wC_` | Account fetch orchestrator |
+| `bp` | Account model (enterprise / team plan handler) |
+| `I1q` | Local account file reader (readFileSync) |
+| `K0H` | Account string formatter (xH) |
+| `CXq` | Relaunch executor (twH wrapper) |
+| `twH` | Full relaunch sequence (spawn, flush, exit) |
+| `Xb` | Version-file path resolver (p58 / se) |
+| `p58` | Version lookup via HJ6.join + zYH |
+| `se` | Local-bin path builder (`.local/bin`) |
+| `JM` | Array.isArray guard wrapper |
+| `Ip` | Ink / React render instance holder |
+| `V6` | GV-based component helper |
+| `GV` | Core React/Ink render function |
+| `SO6` | Interval-clear helper (oY_ / clearInterval) |
+| `oY_` | clearInterval wrapper |
+| `CEH` | Unmount / screen-clear helper (writeSync + unmount) |
+| `qS` | Screen-clear sub-helper |
+| `za6` | ANSI save/restore cursor emitter (`\x1b7` / `\x1b8`) |
+| `N_8` | Scroll / render-frame helper (EV / X91 / P91) |
+| `EV` | Scroll event emitter |
+| `X91` | Frame-render sub-component |
+| `P91` | Render-timing helper (Date.now / Math.max / Math.round) |
+| `jf` | Promise race with timeout helper |
+| `dZ` | Conversation-persistence helper (KL) |
+| `KL` | Conversation save + hook (h9) |
+| `XSH` | Output-queue drain caller (`at_.drain`) |
+| `k_8` | Async cleanup Promise.all / Promise.race runner |
+| `r8` | Timeout-with-abort helper (setTimeout / clearTimeout) |
+| `yU_` | Post-relaunch Ink re-mount helper |
+| `FK` | GV wrapper for re-mount |
+| `vXq` | Native-library loader (bun:ffi / dlopen / execve) |
+| `$` | Spawn-result accumulator (JZq) |
+| `w` | Background-process pool manager (spawn / kill / SIGKILL) |
+| `M` | Daemon process map manager (L.get / L.values) |
+| `z` | Daemon state accessor (SH / mH / xN / Ox) |
+| `XH` | String-coercion wrapper |
+| `wX` | Pre-exit file writer (writeFileSync + av8.join) |

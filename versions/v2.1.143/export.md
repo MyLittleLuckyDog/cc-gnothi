@@ -1,4 +1,3 @@
-```
 ---
 type: feature-spec
 feature: "export"
@@ -22,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/export` command serializes the current conversation session into a structured text representation and either writes it to a file on disk or copies it to the system clipboard. When a `[filename]` argument is supplied the output is persisted via the filesystem; when no argument is given the command falls back to clipboard delivery. The command emits telemetry on both success and failure paths.
+The `/export` command serializes the current conversation session — including messages of role `user`, `assistant`, `export`, and `prompt` — into a plain-text representation and either writes it to a named file on disk or copies it to the system clipboard when no filename is supplied. Path resolution applies tilde expansion, null-byte rejection, NFC normalization, and directory auto-creation before the UTF-8 write.
 
 ---
 
@@ -32,9 +31,9 @@ The `/export` command serializes the current conversation session into a structu
 |---|---|
 | type | `local-jsx` |
 | name | `export` |
-| description | `Export the current conversation to a file or clipboard` |
+| description | Export the current conversation to a file or clipboard |
 | argumentHint | `[filename]` |
-| module_id | `sTq` |
+| module\_id | `sTq` |
 
 Analysis basis: CC v2.1.143 bundle.js:+11659884
 
@@ -42,227 +41,216 @@ Analysis basis: CC v2.1.143 bundle.js:+11659884
 
 ## Input Branching
 
-The top-level dispatch function (`commandEntryPoint`) inspects the trimmed argument string and routes through four distinct paths:
+The command entry point (`commandEntryPoint`) receives the raw argument string and branches immediately on whether a filename was provided.
 
 ```mermaid
 flowchart TD
-    A(["/export invoked"]) --> B["Trim argument string\n(A.trim)"]
-    B --> C{Argument provided?}
-    C -- "No (empty string)" --> D["Clipboard path\n— build conversation text\n— write to clipboard"]
-    C -- "Yes (filename given)" --> E["Normalize filename\n(toLowerCase)"]
-    E --> F["Resolve date-stamp\n(generateTimestamp)"]
-    F --> G["Detect / append extension\n(resolveExtension via QP8.extname)"]
-    G --> H["Ensure parent directory exists\n(gP8.mkdir + QP8.dirname)"]
-    H --> I["Write file UTF-8\n(gP8.writeFile, encoding: utf-8)"]
-    I --> J{Write succeeded?}
-    J -- "Yes" --> K["Emit tengu_feature_ok\nShow success message"]
-    J -- "No" --> L["Emit tengu_feature_bad\nShow error: write_failed\nFallback: Unknown error"]
-    D --> M["Emit tengu_feature_ok"]
+    A(["/export called"]) --> B{Argument string\npresent and non-empty\nafter trim?}
+    B -- No --> C[Render conversation\nto text buffer]
+    C --> D[Copy to clipboard]
+    D --> E[Emit tengu_feature_ok\nor tengu_feature_bad]
+    B -- Yes --> F[Normalize & validate\nfile path]
+    F --> G{Path validation\npassed?}
+    G -- No: null bytes --> H[Return error:\n'Path contains null bytes']
+    G -- No: other error --> I[Return error message]
+    G -- Yes --> J[Determine file extension\nvia extname]
+    J --> K[Auto-create parent\ndirectory if missing]
+    K --> L[Write UTF-8 file]
+    L --> M{Write succeeded?}
+    M -- Yes --> N[Emit tengu_feature_ok\nlog export_file]
+    M -- No --> O[Emit tengu_feature_bad\nlog write_failed]
+    O --> P[Return 'Unknown error'\nif no message]
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11659325, +11659356, +11659365, +11659445
+Analysis basis: CC v2.1.143 bundle.js:+11659316, +11659356, +11659365, +11659445, +11659526
 
 ---
 
 ## Behavioral Spec
 
-### Conversation Serialization (`buildConversationText`)
+### 1. Argument Normalization
 
-This function iterates over the current message list, filters by role, and concatenates formatted blocks.
-
-```
-function buildConversationText(messages):
-    lines = []
-    for each message in messages:
-        if message.role == "user":          // literal "user"
-            prefix = "User"
-        else:
-            prefix = "Assistant"
-        contentText = extractTextContent(message.content)  // role "text" extraction
-        lines.push(prefix + ": " + contentText)
-    return lines.join(separator)
-```
-
-- Role filter literal `"user"`: Analysis basis: CC v2.1.143 bundle.js:+11658819
-- Content type literal `"text"`: Analysis basis: CC v2.1.143 bundle.js:+11658976
-- Array join call: Analysis basis: CC v2.1.143 bundle.js:+11658335
-
----
-
-### Argument Normalization (`normalizeArgument`)
-
-Lowercases the raw argument token before any further processing.
+When the user provides an argument string, the command trims whitespace before any path logic runs.
 
 ```
 function normalizeArgument(rawArg):
-    return rawArg.toLowerCase()
+    trimmed = rawArg.trim()
+    if trimmed is empty:
+        return null          // triggers clipboard path
+    return trimmed
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11659101
+Analysis basis: CC v2.1.143 bundle.js:+11659325
 
 ---
 
-### Timestamp Generation (`generateTimestamp`)
+### 2. Conversation Rendering
 
-Constructs a filesystem-safe timestamp string from the current local date/time. Each component is zero-padded to a fixed width by prepending `"0"` and slicing from a fixed offset.
+The render function (`renderConversation`) iterates over the messages in the current session and builds a flat text buffer. Only messages whose role matches recognized role strings are included.
 
 ```
-function generateTimestamp(now):
-    year   = String(now.getFullYear())
-    month  = zeroPad(now.getMonth() + 1)   // getMonth is 0-indexed; +1 applied
-    day    = zeroPad(now.getDate())
-    hour   = zeroPad(now.getHours())
-    minute = zeroPad(now.getMinutes())
-    second = zeroPad(now.getSeconds())
-    return year + month + day + "_" + hour + minute + second
-
-function zeroPad(n):
-    s = String(n)
-    return ("0" + s).slice(-2)             // always 2 digits
+function renderConversation(messages):
+    lines = []
+    for message in messages:
+        if message.role not in ["user", "assistant", "export", "prompt"]:
+            continue
+        if message.type == "message":
+            // locate text content blocks
+            textBlock = message.content.find(block => block.type == "text")
+            if textBlock exists:
+                prefix = buildRolePrefix(message.role)
+                body   = stripAnsiEscapes(textBlock.text)   // via Bun.stripANSI
+                lines.push(prefix + body)
+    return lines.join("\n")
 ```
 
-- `getFullYear` call: Analysis basis: CC v2.1.143 bundle.js:+11658524
-- `getMonth` call: Analysis basis: CC v2.1.143 bundle.js:+11658549
-- `getDate` call: Analysis basis: CC v2.1.143 bundle.js:+11658590
-- `getHours` call: Analysis basis: CC v2.1.143 bundle.js:+11658628
-- `getMinutes` call: Analysis basis: CC v2.1.143 bundle.js:+11658667
-- `getSeconds` call: Analysis basis: CC v2.1.143 bundle.js:+11658708
-- `String()` coercion: Analysis basis: CC v2.1.143 bundle.js:+11658542
+Role strings in use: `"user"` (bundle.js:+11658819), `"assistant"` (bundle.js:+11657448), `"export"` (bundle.js:+11657994), `"prompt"` (bundle.js:+11658010).
+Message type filter: `"message"` (bundle.js:+11657533), content-block type filter: `"text"` (bundle.js:+11658976).
+
+ANSI stripping is performed via `Bun.stripANSI` before text is appended.
+Analysis basis: CC v2.1.143 bundle.js:+11658224, +11658290, +11658308, +11658315, +11658335, +3718834
 
 ---
 
-### Extension Resolution (`resolveExtension`)
+### 3. Timestamp Suffix Generation
 
-Checks whether the normalized filename already carries a recognized extension; if not, appends a default.
+When the export produces a default filename (no argument supplied), a timestamp suffix is computed from the local wall clock.
 
 ```
-function resolveExtension(filename):
-    ext = path.extname(filename)           // QP8.extname
-    if ext is empty or not recognized:
-        return filename + defaultExtension(filename)  // H9 logic
-    return filename
+function buildTimestampSuffix(date):
+    year    = String(date.getFullYear())
+    month   = String(date.getMonth() + 1).padStart(2, "0")
+    day     = String(date.getDate()).padStart(2, "0")
+    hours   = String(date.getHours()).padStart(2, "0")
+    minutes = String(date.getMinutes()).padStart(2, "0")
+    seconds = String(date.getSeconds()).padStart(2, "0")
+    return year + month + day + "_" + hours + minutes + seconds
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11654711, +11654751
+Analysis basis: CC v2.1.143 bundle.js:+11658524, +11658542, +11658549, +11658590, +11658628, +11658667, +11658708
 
 ---
 
-### File Write (`writeExportFile`)
+### 4. Path Validation and Resolution
 
-Creates the target directory tree if absent, then writes the serialized conversation.
+The path validator (`resolveAndValidatePath`) enforces several security and portability rules before the write is attempted.
+
+```
+function resolveAndValidatePath(rawPath):
+    if rawPath contains null bytes:
+        throw Error("Path contains null bytes")
+
+    trimmed    = rawPath.trim()
+    normalized = trimmed.normalize("NFC")        // Unicode NFC normalization
+
+    if platform is "windows":
+        // apply Windows-specific path rules via d6 helper
+        normalized = applyWindowsPathRules(normalized)
+
+    if normalized starts with "~/":
+        home       = os.homedir()
+        normalized = path.join(home, normalized.slice(2))
+
+    if path.isAbsolute(normalized):
+        return path.resolve(normalized)
+    else:
+        return path.resolve(process.cwd(), normalized)
+```
+
+Literal constants used:
+- Null-byte error message: `"Path contains null bytes"` (bundle.js:+996499)
+- Unicode normalization form: `"NFC"` (bundle.js:+996581)
+- Tilde prefix: `"~/"` (bundle.js:+996653)
+- Platform check value: `"windows"` (bundle.js:+996735)
+
+Analysis basis: CC v2.1.143 bundle.js:+996293, +996499, +996533, +996555, +996606, +996640, +996666, +996688, +996735, +996795, +996859
+
+---
+
+### 5. File Write
+
+After the path is resolved, the parent directory is created (recursively, if needed), and the rendered conversation is written as a UTF-8 file.
 
 ```
 function writeExportFile(resolvedPath, content):
-    parentDir = path.dirname(resolvedPath)    // QP8.dirname
-    fs.mkdirSync(parentDir, { recursive: true })  // gP8.mkdir
-    fs.writeFileSync(resolvedPath, content, { encoding: "utf-8" })  // gP8.writeFile
+    extension  = path.extname(resolvedPath)   // for format selection if needed
+    parentDir  = path.dirname(resolvedPath)
+    fs.mkdir(parentDir, { recursive: true })
+    fs.writeFile(resolvedPath, content, { encoding: "utf-8" })
 ```
 
-- `mkdir` call: Analysis basis: CC v2.1.143 bundle.js:+11654807
-- `dirname` call: Analysis basis: CC v2.1.143 bundle.js:+11654817
-- `writeFile` call: Analysis basis: CC v2.1.143 bundle.js:+11654854
-- Encoding literal `"utf-8"`: Analysis basis: CC v2.1.143 bundle.js:+11654882
+Encoding constant: `"utf-8"` (bundle.js:+11654882).
+
+Analysis basis: CC v2.1.143 bundle.js:+11654711, +11654807, +11654817, +11654854
 
 ---
 
-### Message Lookup / Substring Extraction (`findMessageByIndex`)
+### 6. Clipboard Path (No Filename)
 
-Used to locate a specific message within the conversation array and extract a preview substring of up to 50 characters for display purposes.
+When no filename argument is present after trimming, the rendered text buffer is written to the system clipboard instead of a file. The clipboard utility (`clipboardWriter`) uses a temporary file internally, cleaning it up via `unlinkSync` on close.
 
 ```
-function findMessageByIndex(messages, query):
-    match = messages.find(predicate(query))  // A.find
-    if match is null:
-        return null
-    preview = match.content.substring(0, 50)   // q.substring, limit 50
-    // trim to 49 chars in display context     // literal 49
-    return preview
+function exportToClipboard(content):
+    tmpFile = openTempFile()
+    try:
+        tmpFile.write(content)
+        tmpFile.close()
+        clipboardProcess = openClipboardProcess()
+        clipboardProcess.close()
+    finally:
+        fs.unlinkSync(tmpFile.path)
 ```
 
-- `Array.isArray` guard: Analysis basis: CC v2.1.143 bundle.js:+11658931
-- `find` call: Analysis basis: CC v2.1.143 bundle.js:+11658955
-- Substring limit 50: Analysis basis: CC v2.1.143 bundle.js:+11659037
-- Display trim to 49: Analysis basis: CC v2.1.143 bundle.js:+11659056
-- `substring` call: Analysis basis: CC v2.1.143 bundle.js:+11659042
+Analysis basis: CC v2.1.143 bundle.js:+14482768, +14513628, +14513638, +14513778
+
+The active-process tracker (`activeProcessTracker`) adds the process handle on start and removes it on completion, using `Set.add` and `Set.delete`.
+Analysis basis: CC v2.1.143 bundle.js:+14507672, +14507681, +14507695
 
 ---
 
-### Clipboard Fallback (`copyToClipboard`)
+### 7. Role-Label Lookup
 
-When no filename is supplied the serialized text is placed on the system clipboard. The implementation uses a randomized token (via `Math.random`) and a short `setTimeout` delay to coordinate the async clipboard write.
+The display prefix for each message role is resolved through a lookup helper (`findRoleLabel`) that performs a case-insensitive match against a known-roles array.
 
 ```
-function copyToClipboard(text):
-    token = Math.random() * 2 + 1      // random sentinel in range [1, 3)
-    setTimeout(function():
-        writeToClipboard(text, token)
-    , delay)
+function findRoleLabel(roleString):
+    lower = roleString.toLowerCase()
+    match = knownRoles.find(entry => entry.key == lower)
+    return match ? match.label : roleString
 ```
 
-- `Math.random` call: Analysis basis: CC v2.1.143 bundle.js:+12638156
-- `setTimeout` call: Analysis basis: CC v2.1.143 bundle.js:+12638193
-- Numeric literals `2` and `1`: Analysis basis: CC v2.1.143 bundle.js:+12638154, +12638170
+Analysis basis: CC v2.1.143 bundle.js:+11659101, +11658798, +11658914
 
 ---
 
-### Temporary File Cleanup (`unlinkTempFile`)
+### 8. Content Substring Truncation
 
-A cleanup edge in the call graph invokes `fs.unlinkSync` via the `q` node, suggesting a temporary file written during clipboard operations is removed after the clipboard write completes.
+When rendering a message whose text content exceeds the display limit, the implementation takes a fixed-length substring.
 
-```
-function cleanupTempFile(tempPath):
-    fs.unlinkSync(tempPath)    // n8K.unlinkSync
-```
+- Substring start offset: `50` characters (bundle.js:+11659037)
+- Substring end offset: `49` characters from start (bundle.js:+11659056)
 
-Analysis basis: CC v2.1.143 bundle.js:+14482768
+<!-- TODO: full truncation semantics not found in depth-2 traversal; needs --depth 4 -->
 
----
-
-### Resource Teardown (`closeHandles`)
-
-Two handles (`f` and `q`) are explicitly closed after the export operation finalizes, followed by an `L` callback indicating overall completion.
-
-```
-function closeHandles(handleF, handleQ, completionCallback):
-    handleF.close()      // index 0 handle
-    handleQ.close()
-    completionCallback() // L
-```
-
-- `f.close` at index 0: Analysis basis: CC v2.1.143 bundle.js:+14513626, +14513628
-- `q.close`: Analysis basis: CC v2.1.143 bundle.js:+14513638
-- Completion callback `L`: Analysis basis: CC v2.1.143 bundle.js:+14513778
+Analysis basis: CC v2.1.143 bundle.js:+11659037, +11659056
 
 ---
 
-### Display Name Normalization (`normalizeDisplayName`)
+### 9. Error Fallback
 
-A secondary lowercase pass is applied to a display-facing string (separate from filename normalization) with a display width cap of 40 characters.
-
-```
-function normalizeDisplayName(raw):
-    lower = raw.toLowerCase()       // f.toLowerCase
-    return lower.slice(0, 40)       // limit 40
-```
-
-- `toLowerCase` call: Analysis basis: CC v2.1.143 bundle.js:+14528099
-- Limit 40: Analysis basis: CC v2.1.143 bundle.js:+14528173
-
----
-
-### Path Component Extraction (`extractPathComponent`)
-
-Used during filename resolution to isolate a base path segment by scanning for a separator character index and slicing.
+If the write operation fails and the caught error object carries no message string, the string `"Unknown error"` is substituted before surfacing to the user.
 
 ```
-function extractPathComponent(fullPath):
-    idx = fullPath.indexOf(separator)
-    if idx == -1:
-        return fullPath
-    return fullPath.slice(0, idx)
+function normalizeErrorMessage(err):
+    if err.message is defined and non-empty:
+        return err.message
+    return "Unknown error"
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+190915, +190944
+Literal constant: `"Unknown error"` (bundle.js:+11659526).
+Telemetry event on failure: `tengu_feature_bad`, logged with key `"write_failed"` (bundle.js:+11659445).
+
+Analysis basis: CC v2.1.143 bundle.js:+11659445, +11659526
 
 ---
 
@@ -270,15 +258,14 @@ Analysis basis: CC v2.1.143 bundle.js:+190915, +190944
 
 | Item | Detail |
 |---|---|
-| Telemetry — success | `tengu_feature_ok` emitted after successful file write or clipboard copy (Analysis basis: bundle.js:+955068) |
-| Telemetry — failure | `tengu_feature_bad` emitted when write fails; error code `"write_failed"` passed as property (Analysis basis: bundle.js:+955126, +11659445) |
-| Filesystem — write | Creates parent directories recursively, writes UTF-8 file at resolved path (Analysis basis: bundle.js:+11654807, +11654854) |
-| Filesystem — cleanup | Removes temporary file via `unlinkSync` after clipboard operations (Analysis basis: bundle.js:+14482768) |
-| Clipboard | Async write via `setTimeout`-deferred operation when no filename argument is given (Analysis basis: bundle.js:+12638193) |
-| Error fallback string | `"Unknown error"` used when the caught error object carries no message (Analysis basis: bundle.js:+11659526) |
+| Telemetry — success | `tengu_feature_ok` fired on successful file write or clipboard copy (bundle.js:+955068) |
+| Telemetry — failure | `tengu_feature_bad` fired on write error, carries `write_failed` key (bundle.js:+955126, +11659445) |
+| File-system side effect | Parent directories created recursively via `fs.mkdir` before file write (bundle.js:+11654807) |
+| Clipboard side effect | Content written to system clipboard when no filename argument is given; temporary file removed with `unlinkSync` (bundle.js:+14482768) |
+| Active-process tracking | Clipboard subprocess handle added to a tracked `Set` on launch and deleted on completion (bundle.js:+14507672, +14507695) |
 | appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Hook registration | Clipboard process subscribes to a `"data"` event via `K.on` (bundle.js:+7549288, +7549293) |
 
 ---
 
@@ -292,12 +279,12 @@ Analysis basis: CC v2.1.143 bundle.js:+190915, +190944
 
 ## Common Mistakes
 
-1. **Omitting the filename argument and expecting a file on disk** — when no `[filename]` is provided the command routes to the clipboard path exclusively; no file is written.
-2. **Providing a path whose parent directory does not exist** — the command creates missing parent directories automatically (`mkdir recursive`), so manual pre-creation is unnecessary and harmless but not required.
-3. **Assuming the filename is case-preserved** — the argument is lowercased before use; passing `MyExport.MD` yields `myexport.md` on disk.
-4. **Expecting instant clipboard availability** — the clipboard write is deferred via `setTimeout`; pasting immediately after the command returns may race the async operation.
-5. **Ignoring the `"write_failed"` error code** — on filesystem permission errors the command surfaces `"write_failed"` with a fallback message of `"Unknown error"` when no OS error string is available; check filesystem permissions on the target path.
-6. **Expecting full message content in the confirmation preview** — the displayed preview is capped at 50 characters (trimmed to 49 in some display contexts); the exported file always contains the full conversation.
+1. **Omitting the filename causes clipboard export, not an error.** If you intend to write a file, always supply a filename argument; `/export` with no argument silently writes to the clipboard.
+2. **Tilde expansion is handled internally — do not pre-expand `~`.** Passing an already-expanded absolute path works, but passing a `~/…` path also works correctly; double-expanding the path manually may produce incorrect results.
+3. **Null bytes in the path argument cause an immediate hard error.** Any filename that has been constructed programmatically and may contain `\0` will be rejected with `"Path contains null bytes"` before any I/O is attempted.
+4. **The parent directory is created automatically.** There is no need to `mkdir` the destination directory before running `/export`; the command performs a recursive `mkdir` on the parent itself.
+5. **ANSI escape codes are stripped from output.** If you need colour-coded or styled output preserved, `/export` is not the right tool — all ANSI sequences are removed via `Bun.stripANSI` before writing.
+6. **Role filtering is strict.** Only messages with roles `user`, `assistant`, `export`, and `prompt` appear in the exported file; internal tool-result or system messages are excluded.
 
 ---
 
@@ -307,21 +294,27 @@ Analysis basis: CC v2.1.143 bundle.js:+190915, +190944
 
 | Identifier | Role |
 |---|---|
-| `aTq` | Argument normalization function (lowercases raw argument token) |
-| `oTq` | Message lookup and substring extraction function |
-| `qS7` | Command entry point / top-level dispatch function |
-| `AS7` | Intermediate dispatch wrapper called by entry point |
-| `cP8` | Conversation serialization function (builds text from message list) |
-| `dP8` | File write orchestrator (mkdir + writeFile) |
-| `ay7` | Extension resolution function (uses `path.extname`) |
-| `_S7` | Timestamp generation function |
-| `SH` | Success handler (emits `tengu_feature_ok`) |
-| `mH` | Failure handler (emits `tengu_feature_bad`) |
-| `e4` | Path component extraction helper |
-| `m1` | Index-and-slice utility for path segments |
-| `H` | Clipboard async write coordinator (uses `Math.random` + `setTimeout`) |
-| `A` | Display name normalization function (toLowerCase + length cap) |
-| `f` | First resource handle subject to `.close()` teardown |
-| `q` | Second resource handle / temp file reference (`.close()` + `unlinkSync`) |
-| `d` | Shared telemetry emission function reached by both `SH` and `mH` |
-```
+| `aTq` | Role-label lookup function (toLowerCase normalization entry point) |
+| `oTq` | Conversation message iterator / content extractor |
+| `qS7` | Top-level command handler (entry point for `/export`) |
+| `AS7` | Export orchestrator (coordinates render → path → write pipeline) |
+| `cP8` | Conversation-to-text renderer (assembles lines array and joins) |
+| `HS7` | Message-processing core (filters by role and content type) |
+| `ty7` | Role-string constant provider |
+| `sC` | Session / UI context accessor |
+| `dcH` | Clipboard process spawner (registers `data` event, creates React element) |
+| `ey7` | Array-guard / content-block validator |
+| `O` | Background-session state checker |
+| `Q5` | ANSI-strip wrapper around `Bun.stripANSI` |
+| `dP8` | File-write coordinator (mkdir + writeFile) |
+| `ay7` | File-extension resolver (wraps `path.extname`) |
+| `H9` | Path validation and resolution function |
+| `S6` | Platform-detection helper |
+| `x6` | Windows path normalizer |
+| `e4` | Substring / truncation helper (delegates to `m1`) |
+| `m1` | Low-level string slicer (indexOf + slice) |
+| `_S7` | Timestamp suffix builder (date component formatter) |
+| `SH` | Success telemetry emitter (`tengu_feature_ok`) |
+| `mH` | Failure telemetry emitter (`tengu_feature_bad`) |
+| `d` | Generic telemetry dispatch function |
+| `L` | Active-process set manager (add / finally / delete) |

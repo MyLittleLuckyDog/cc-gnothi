@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/toggle-memory` command flips the automemory feature on or off for the current session. When automemory is disabled, Claude Code will neither reference saved memory content nor persist new memories; invoking the command again re-enables those behaviors. The toggle state is session-scoped and is communicated back to the user as a plain-text response.
+The `/toggle-memory` command toggles the automemory subsystem on or off for the current session. When invoked, it reads the current automemory state, flips it, emits a telemetry event, and outputs a `"text"` response message confirming the new state. Because the command is registered as `local` and does not support non-interactive mode, it is intended for interactive terminal sessions only.
 
 ---
 
@@ -31,11 +31,11 @@ The `/toggle-memory` command flips the automemory feature on or off for the curr
 |---|---|
 | type | `local` |
 | name | `toggle-memory` |
-| description | `Toggle automemory off/on for this session` |
+| description | Toggle automemory off/on for this session |
 | supportsNonInteractive | `false` |
 | thinClientDispatch | `post-text` |
 | isHidden | `false` |
-| module_id | `s5q` |
+| module\_id | `s5q` |
 
 Analysis basis: CC v2.1.143 bundle.js:+10612554
 
@@ -43,71 +43,69 @@ Analysis basis: CC v2.1.143 bundle.js:+10612554
 
 ## Input Branching
 
-The command accepts no user-supplied arguments. All branching is driven by the **current automemory state** at invocation time.
+The command accepts no user-supplied arguments. Its entire branching logic depends on the **current automemory enabled state** read from application state at invocation time.
 
 ```mermaid
 flowchart TD
-    A(["/toggle-memory invoked"]) --> B{Read current\nautomemory state}
-    B -->|automemory is ON| C[Disable automemory\nset state = OFF]
-    B -->|automemory is OFF| D[Enable automemory\nset state = ON]
-    C --> E[Fire telemetry\ntengu_memory_toggled]
-    D --> E
-    E --> F{New state?}
-    F -->|OFF| G["Return text:\n'Automemory disabled…'"]
-    F -->|ON| H["Return text:\n'Automemory re-enabled · memory content\nmay be referenced and new memories\ncan be saved.'"]
-    G --> I([Done])
-    H --> I
+    A["/toggle-memory invoked"] --> B["Read current automemory state\nfrom appState via getAutomemoryState()"]
+    B --> C{Is automemory\ncurrently enabled?}
+    C -- "Yes (true)" --> D["Set automemory state to disabled (false)\nvia setAutomemoryState(false)"]
+    C -- "No (false)" --> E["Set automemory state to enabled (true)\nvia setAutomemoryState(true)"]
+    D --> F["Emit telemetry: tengu_memory_toggled\n(new_state = false)"]
+    E --> G["Emit telemetry: tengu_memory_toggled\n(new_state = true)"]
+    F --> H["Compose disabled confirmation message\n<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->"]
+    G --> I["Compose enabled confirmation message:\n'Automemory re-enabled · memory content may\nbe referenced and new memories can be saved.'"]
+    H --> J["Return response object\nwith type: 'text'"]
+    I --> J
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10612107 – +10612391
+Analysis basis: CC v2.1.143 bundle.js:+10612107 (call to `getAutomemoryState`), +10612119 (call to `setAutomemoryState`), +10612126 (call to `dispatchResponse`), +10612128 (telemetry emit), +10612174 (response type literal `"text"`), +10612391 (re-enabled message literal)
 
 ---
 
 ## Behavioral Spec
 
-### Command Handler — Toggle Automemory
+### Toggle Automemory State
+
+The command handler reads the live automemory flag, negates it, persists the new value, fires a telemetry event, and returns a text message to the terminal.
 
 ```
-function handleToggleMemory(context):
-    currentState  = readAutomemoryState(context)        // calls getAutomemoryState
-    newState      = NOT currentState
+function handleToggleMemory(appState):
 
-    writeAutomemoryState(context, newState)             // calls setAutomemoryState
+    currentState = getAutomemoryState(appState)
+    newState     = NOT currentState
 
-    emitTelemetry("tengu_memory_toggled", {
-        new_state: newState
-    })                                                  // immediately after state write
+    setAutomemoryState(appState, newState)
 
-    if newState == OFF:
-        message = buildDisabledMessage()                // derived from UI string constants
+    emitTelemetry("tengu_memory_toggled", { new_state: newState })
+
+    if newState == true:
+        message = "Automemory re-enabled · memory content may be referenced and new memories can be saved."
     else:
-        message = "Automemory re-enabled · memory content may be referenced " +
-                  "and new memories can be saved."
+        message = <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
-    return Response(kind="text", body=message)
+    return buildResponse(type="text", content=message)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10612107 (getAutomemoryState call), +10612119 (setAutomemoryState call), +10612126 (dispatch/return call), +10612128 (telemetry emit), +10612174 (response kind `"text"`), +10612391 (re-enabled message literal)
+Analysis basis: CC v2.1.143 bundle.js:+10612107 (`getAutomemoryState` call), +10612119 (`setAutomemoryState` call), +10612126 (`buildResponse` call), +10612128 (`tengu_memory_toggled` emit), +10612174 (`"text"` type constant), +10612391 (re-enabled message string)
 
-### Response Construction
+### Response Object Shape
 
-The command always returns a response object whose `kind` field is the string `"text"`.
+The return value of the handler is a structured response whose `type` field is always the string literal `"text"`.
 
 ```
-function buildTextResponse(body: string) -> Response:
-    return Response {
-        kind : "text",          // literal "text" — loc +10612174
-        body : body
+function buildResponse(type, content):
+    return {
+        type:    type,      // always "text"  (bundle.js:+10612174)
+        content: content
     }
 ```
 
-The `thinClientDispatch` registration value `"post-text"` instructs thin-client environments to post this text response directly into the conversation stream rather than handling it as a structured action.
+Analysis basis: CC v2.1.143 bundle.js:+10612174
 
-Analysis basis: CC v2.1.143 bundle.js:+10612174, +10612554
+### Thin-Client Dispatch
 
-### Non-Interactive Guard
-
-`supportsNonInteractive` is `false`, meaning the command is rejected before the handler runs when Claude Code is invoked in a non-interactive (headless / pipe) context. No state mutation or telemetry fires in that code path.
+Because `thinClientDispatch` is set to `"post-text"`, thin-client environments forward the resulting text response back through the standard post-text pipeline rather than handling it locally.
 
 Analysis basis: CC v2.1.143 bundle.js:+10612554
 
@@ -117,12 +115,12 @@ Analysis basis: CC v2.1.143 bundle.js:+10612554
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_memory_toggled` — fired once per invocation, after the state flip, before the response is returned (bundle.js:+10612128) |
-| Automemory state | Toggled between `ON` and `OFF` in session-scoped application state via `setAutomemoryState` (bundle.js:+10612119) |
-| Response channel | Plain `"text"` message posted to the conversation; thin-client dispatch strategy: `post-text` (bundle.js:+10612174, +10612554) |
+| Telemetry | `tengu_memory_toggled` — fired once per invocation, immediately after the state flip (bundle.js:+10612128) |
+| appState changes | The automemory enabled flag in `appState` is mutated from its previous boolean value to its logical inverse via `setAutomemoryState` (bundle.js:+10612119) |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Persistence beyond session | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Persistence scope | Session-scoped; the toggle applies only to the running session (registration description: "for this session", bundle.js:+10612554) |
+| Non-interactive support | Not supported (`supportsNonInteractive: false`); invoking from a non-interactive context is undefined behavior per registration (bundle.js:+10612554) |
 
 ---
 
@@ -130,21 +128,17 @@ Analysis basis: CC v2.1.143 bundle.js:+10612554
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis — command registered as `local`, non-hidden, non-interactive unsupported, `thinClientDispatch: post-text` |
+| v2.1.143 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting the toggle to persist across sessions.** The description explicitly scopes the toggle to "this session." Starting a new Claude Code session will reset automemory to its default state; re-running `/toggle-memory` is required each session if a non-default state is desired.
-
-2. **Passing arguments to the command.** The handler reads no user-supplied input — any text after `/toggle-memory` is silently ignored. The only input that matters is the pre-existing automemory state.
-
-3. **Running in non-interactive mode and expecting a result.** Because `supportsNonInteractive` is `false`, scripted or headless invocations will not execute the toggle; operators automating Claude Code via pipes or CI should not rely on this command.
-
-4. **Assuming the re-enabled message means memories were immediately reloaded.** The re-enabled confirmation string (`"Automemory re-enabled · memory content may be referenced and new memories can be saved."`) describes the restored capability, not a guarantee that a specific memory was loaded at that exact moment.
-
-5. **Toggling rapidly and checking telemetry counts.** Each invocation emits exactly one `tengu_memory_toggled` event regardless of direction (on→off or off→on). Downstream analytics that need directionality must correlate the event with the resulting session state independently.
+1. **Invoking in non-interactive mode**: `/toggle-memory` has `supportsNonInteractive: false`. Calling it from scripts or piped input contexts is not supported and may produce no output or an error.
+2. **Expecting persistent cross-session state**: The description explicitly scopes the toggle to "this session." Restarting Claude Code resets automemory to its default state; the toggle does not write to a persistent configuration file (as far as depth-2 traversal reveals).
+3. **Assuming arguments are accepted**: The command registration defines no argument schema. Passing any text after `/toggle-memory` has no defined effect and may be silently ignored.
+4. **Expecting a disabled-state confirmation message**: The re-enabled confirmation string is confirmed in the bundle (bundle.js:+10612391). The corresponding disabled-state message was not found within the depth-2 call graph traversal; do not rely on its exact wording matching the enabled message's format.
+5. **Conflating `thinClientDispatch: "post-text"` with interactive output**: In thin-client deployments the response travels through the post-text pipeline, not a direct terminal write; downstream consumers should handle it accordingly.
 
 ---
 
@@ -154,7 +148,7 @@ Analysis basis: CC v2.1.143 bundle.js:+10612554
 
 | Identifier | Role |
 |---|---|
-| `AP7` | Command handler function — the top-level entry point for `/toggle-memory` |
-| `gd` | `getAutomemoryState` — reads the current automemory enabled/disabled flag from session state |
-| `IV8` | `setAutomemoryState` — writes the new automemory flag into session state |
-| `d` | `dispatchTextResponse` — constructs and returns the final `"text"`-kind response object |
+| `AP7` | Command handler function — top-level entry point for `/toggle-memory` |
+| `gd` | `getAutomemoryState` — reads the current automemory boolean from `appState` |
+| `IV8` | `setAutomemoryState` — writes the new automemory boolean into `appState` |
+| `d` | `buildResponse` / dispatch helper — constructs and returns the `"text"` response object |

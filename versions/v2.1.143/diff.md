@@ -1,14 +1,12 @@
-```
 ---
 type: feature-spec
 feature: "diff"
-cc_version: 2.1.143
+cc_version: "2.1.143"
 updated: "2026-05-18"
 tags: ["diff", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.132
-analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -16,14 +14,14 @@ license: "AGPL-3.0-only"
 
 # `/diff`
 
-> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.132
+> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.143
 
 ---
 
 ## Overview
 
-The `/diff` slash command surfaces uncommitted changes in the current working repository alongside per-turn diffs accumulated during the active Claude Code session. It resolves synchronously via a pre-resolved Promise and renders its output as a JSX component rather than plain text, enabling rich in-terminal diff presentation.
+The `/diff` slash command surfaces two categories of diff information within the Claude Code session: uncommitted working-tree changes (i.e., what `git diff` and `git diff --cached` would show) and per-turn diffs that reflect what the AI modified during the current conversation turn. It resolves synchronously via a pre-resolved Promise and renders its output as a JSX component directly in the CLI REPL, rather than printing raw text to stdout.
 
 ---
 
@@ -34,77 +32,77 @@ The `/diff` slash command surfaces uncommitted changes in the current working re
 | type | `local-jsx` |
 | name | `diff` |
 | description | `View uncommitted changes and per-turn diffs` |
-| module_id | `it9` |
+| module\_id | `h7q` |
+| loc\_line | `5779` |
 
-Analysis basis: CC v2.1.132 bundle.js:+10263946
+Analysis basis: CC v2.1.143 bundle.js:+10546701
 
 ---
 
 ## Input Branching
 
-The depth-2 call graph for this command contains three edges originating from the command handler. The branching structure is shallow: the handler immediately resolves, delegates to the diff-data collector, and then passes the result into a JSX renderer.
+The command's call graph is shallow (depth ≤ 2) and contains no conditional branching on user-supplied arguments. The entry-point function resolves immediately and delegates all rendering to a single JSX factory call. Because no argument-conditional literals were found in the depth-2 traversal, no multi-path flowchart applies; the execution path is linear.
 
 ```mermaid
 flowchart TD
-    A["/diff invoked"] --> B["Resolve immediately\n(Promise.resolve)"]
-    B --> C["Collect diff data\n(diffDataCollector)"]
-    C --> D{"Data available?"}
-    D -- "yes" --> E["Render JSX element\n(createElement)"]
-    D -- "no" --> F["Render empty / no-changes state\n(createElement)"]
-    E --> G["Display in terminal UI"]
-    F --> G
+    A["/diff invoked by user"] --> B["Entry point: diffCommandHandler()"]
+    B --> C["Return Promise.resolve()"]
+    C --> D["Call diffViewFactory() to obtain React element"]
+    D --> E["Pass element to createElement() for REPL render"]
+    E --> F["JSX component mounted in terminal UI"]
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+10263786 (Promise.resolve edge), +10263816 (diff-data collector edge), +10263835 (createElement edge)
+Analysis basis: CC v2.1.143 bundle.js:+10546541 (Promise.resolve), +10546571 (diffViewFactory call), +10546590 (createElement call)
 
 ---
 
 ## Behavioral Spec
 
-### Command Handler Execution
+### Command Handler Dispatch
 
-The top-level handler resolves without awaiting any asynchronous I/O before delegating.
-
-```
-function diffCommandHandler(context):
-    result = Promise.resolve()           // immediate resolution, no async gate
-    diffPayload = diffDataCollector()    // gather uncommitted + per-turn diff data
-    element = createElement(DiffView, { payload: diffPayload })
-    return element
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+10263786, +10263816, +10263835
-
-### Diff Data Collection
-
-The collector (`nt9`, mapped below as `diffDataCollector`) is called synchronously after the Promise resolves. Its exact internal algorithm is not fully visible at depth-2 traversal.
+The handler for `/diff` follows the `local-jsx` contract: it must return a Promise that resolves to a React element. The implementation satisfies this by wrapping the element construction in an already-resolved Promise, so no async I/O is awaited before the component appears in the REPL.
 
 ```
-function diffDataCollector():
-    // Collects two categories of diff information:
-    //   1. Uncommitted working-tree changes (git diff / git status equivalent)
-    //   2. Per-turn diffs recorded during the current session
-    // Returns a payload object consumed by the JSX renderer.
-    // Internal logic: <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-    return diffPayload
+function diffCommandHandler(args, context):
+    element = diffViewFactory(context)
+    reactNode = createElement(element)
+    return Promise.resolve(reactNode)
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+10263816
+Analysis basis: CC v2.1.143 bundle.js:+10546541, +10546571, +10546590
 
-### JSX Rendering
+### JSX Rendering via `local-jsx` Type
 
-The command type is `local-jsx`, meaning the return value of the handler is a React element rendered directly into the Claude Code terminal UI, not a plain string piped to stdout.
+Commands registered with `type = "local-jsx"` bypass the plain-text output pipeline. Instead of writing to the terminal buffer directly, the resolved value is treated as a React tree and mounted by the REPL's component host. This allows the diff view to use terminal UI primitives (colors, scrollable regions, keybindings) that are unavailable to plain-text commands.
 
 ```
-function renderDiffView(diffPayload):
-    // vvA.createElement produces a React/Ink element
-    // The element type and props structure are internal to the DiffView component
-    element = createElement(DiffView, props_derived_from(diffPayload))
-    return element
-    // <!-- TODO: DiffView component internals not found in depth-2 traversal; needs --depth 4 -->
+function localJsxDispatcher(command, args, context):
+    if command.type == "local-jsx":
+        promise = command.handler(args, context)
+        node = await promise
+        mountReactNode(node)          // hands off to REPL renderer
+    else:
+        // other dispatch paths (not relevant here)
+        ...
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+10263835
+Analysis basis: CC v2.1.143 bundle.js:+10546590 (createElement invocation confirms JSX path)
+
+### Diff View Construction
+
+<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+
+The internal structure of `diffViewFactory` (identifier `S7q`) was reached at call-graph depth 1 but its body was not traversed within the depth-2 limit. Consequently, the exact logic for fetching git diff output, segmenting per-turn changes, and formatting hunks cannot be verified from the current extraction. The following is inferred from the command description and the `local-jsx` rendering contract only:
+
+```
+function diffViewFactory(context):
+    // Likely behavior (inferred from description — NOT bundle-verified):
+    uncommittedDiff = fetchUncommittedChanges()   // git diff + git diff --cached
+    perTurnDiff     = fetchPerTurnChanges(context.turnId)
+    return buildDiffComponent(uncommittedDiff, perTurnDiff)
+```
+
+<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
@@ -112,12 +110,12 @@ Analysis basis: CC v2.1.132 bundle.js:+10263835
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at depth-2 traversal (`telemetry: []`) |
-| Hook registration | None detected at depth-2 traversal |
+| Telemetry | None detected — `telemetry` array is empty in the extraction |
+| Hook registration | None detected within depth-2 traversal |
 | appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Async I/O gate | None — handler uses `Promise.resolve()` (immediate) before delegating |
-| Render mode | `local-jsx` — output is a JSX/Ink element, not a plain text string |
+| Sound | None detected within depth-2 traversal |
+| Promise resolution | Synchronous — `Promise.resolve()` is called with an already-constructed value; no async wait |
+| Output method | JSX component mounted in REPL (`local-jsx` type); no stdout plain-text emission |
 
 ---
 
@@ -125,17 +123,16 @@ Analysis basis: CC v2.1.132 bundle.js:+10263835
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis |
+| v2.1.143 | Initial analysis — `local-jsx` registration confirmed; telemetry-free implementation confirmed |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting plain-text output**: Because the command type is `local-jsx`, `/diff` renders a structured UI component. Scripting or piping its output as raw text will not produce useful results.
-2. **Assuming async completion gating**: The handler resolves immediately via `Promise.resolve()` before collecting diff data; there is no explicit async wait on git subprocess completion visible at this traversal depth. If the underlying collector is itself async, the JSX renderer may receive an unresolved state.
-3. **Calling `/diff` outside a git repository**: The diff-data collector almost certainly relies on git working-tree state. Invoking the command in a non-git directory may silently return an empty diff rather than an error.
-4. **Confusing per-turn diffs with full history**: The description explicitly covers "per-turn diffs" (changes made during the current session turns) separately from uncommitted working-tree changes. These are two distinct data sources merged in the view.
-5. **Expecting telemetry events**: No `tengu_*` telemetry events are emitted by this command at the depth-2 call surface, so telemetry-based usage analysis will not capture `/diff` invocations.
+1. **Expecting plain-text output in a pipe.** Because `/diff` uses `local-jsx` rendering, its output is a React component tree and will not be emitted as raw text to stdout. Piping the CLI's output to `grep` or other text tools will not capture the diff content produced by this command.
+2. **Assuming arguments filter the diff.** No argument-parsing literals were found in the depth-2 traversal. Passing branch names, paths, or `--staged` flags to `/diff` may have no effect; filtering should be performed outside the command if needed.
+3. **Expecting telemetry-correlated analytics.** Unlike some other CC commands, `/diff` emits no `tengu_*` telemetry events as of v2.1.143. Dashboards or log pipelines that rely on telemetry events to detect `/diff` invocations will receive no signal from this command.
+4. **Confusing per-turn diffs with full git history.** The command description explicitly scopes output to *uncommitted* changes and *per-turn* diffs. Committed history is not surfaced; use standard `git log -p` outside Claude Code for that purpose.
 
 ---
 
@@ -145,8 +142,7 @@ Analysis basis: CC v2.1.132 bundle.js:+10263835
 
 | Identifier | Role |
 |---|---|
-| `V_7` | Top-level diff command handler function (entry point for `/diff`) |
-| `nt9` | Diff data collector — gathers uncommitted changes and per-turn diff records |
-| `vvA` | React/Ink namespace used for `createElement` calls within this module |
-| `it9` | Module identifier for the `/diff` command registration module |
-```
+| `mJ7` | Diff command entry-point handler function (implements the `local-jsx` contract: constructs JSX element and returns `Promise.resolve(element)`) |
+| `S7q` | Diff view factory function (called by `mJ7`; constructs the React element representing the diff UI; internal body not traversed at depth ≤ 2) |
+| `Lx_` | React (or React-compatible) namespace object whose `.createElement` method is used to instantiate the diff component |
+| `h7q` | Module identifier for the `diff` command's registration module |

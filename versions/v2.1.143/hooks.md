@@ -2,8 +2,8 @@
 type: feature-spec
 feature: "hooks"
 cc_version: "2.1.143"
-tags: ["hooks", "commands", "slash-commands"]
 updated: "2026-05-18"
+tags: ["hooks", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
 analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/hooks` command renders a read-only view of all hook configurations that are currently registered for tool events in the active Claude Code session. It resolves the current tool-permission context, collects hook entries from configuration, evaluates their enabled state and any blocking conditions, and renders the result as a JSX component directly in the terminal UI. The command executes immediately upon invocation — no sub-command or argument is required.
+The `/hooks` command renders an inline JSX panel that displays all currently registered hook configurations for tool events. It queries the active tool-permission context, collects hook entries from internal registries, and presents them in a structured list within the Claude Code terminal UI. The command is immediate (no async wait) and fires a telemetry event on every invocation.
 
 ---
 
@@ -41,180 +41,273 @@ Analysis basis: CC v2.1.143 bundle.js:+11472793
 
 ## Input Branching
 
-The command entry point (`commandHandler`) takes no user-supplied arguments. All branching is driven by internal state: the current tool-permission context, the set of registered hook entries, and per-hook enabled/blocked flags.
+The command entry point (`hooksCommandHandler`) performs no free-text argument parsing; the only input path is the invocation itself. Internal rendering (`hooksViewRenderer`) does branch on multiple conditions sourced from the tool-permission context and hook registry state.
 
 ```mermaid
 flowchart TD
-    A(["/hooks invoked"]) --> B[Emit telemetry: tengu_hooks_command]
-    B --> C[Resolve tool-permission context via getToolPermissionContext]
-    C --> D[Load hook configuration via hookConfigLoader]
-    D --> E{Any hooks registered?}
-    E -- No --> F[Render empty-state view]
-    E -- Yes --> G[Filter hooks: discard entries whose type is in blocked-set]
-    G --> H[Map remaining hooks through enabledChecker]
-    H --> I{Session type check}
-    I -- background session / stopped --> J[Mark hook as disabled: reason = background session]
-    I -- active session --> K[Check Wq.isEnabled per hook]
-    K --> L{Hook enabled?}
-    L -- No --> M[Render hook row with disabled indicator]
-    L -- Yes --> N[Check O.isEnabled for sdk / cli origin]
-    N --> O2{Origin type}
-    O2 -- cli --> P[Render hook row: origin = cli]
-    O2 -- remote --> Q[Render hook row: origin = remote]
-    O2 -- sdk-ts / sdk-py / sdk-cli / local-agent --> R[Render hook row: origin = sdk variant]
-    P & Q & R --> S[Assemble hook list via hookListComponent]
-    M --> S
-    S --> T[Pad columns to width 40 with two-space separator]
-    T --> U([Return rendered JSX element via createElement])
-    F --> U
+    A["/hooks invoked"] --> B[Emit tengu_hooks_command telemetry]
+    B --> C[Resolve tool permission context]
+    C --> D[Call hooksViewRenderer]
+    D --> E{Hook registry has any entries?}
+    E -- No entries --> F[Render empty-state message]
+    E -- Has entries --> G[Iterate hook list]
+    G --> H{Permission source == 'cli' ?}
+    H -- Yes --> I[Mark entry as CLI-sourced]
+    H -- No, source == 'remote' --> J[Mark entry as remote-sourced]
+    H -- Other --> K[Mark entry with default label]
+    I & J & K --> L{Entry blocked?}
+    L -- blocked == true --> M[Apply blocked indicator]
+    L -- Not blocked --> N[Apply active indicator]
+    M & N --> O{Wq feature flag enabled?}
+    O -- Enabled --> P[Include extended hook metadata]
+    O -- Disabled --> Q[Omit extended metadata]
+    P & Q --> R{YpH set contains hook id?}
+    R -- Yes --> S[Mark hook as known/seen]
+    R -- No --> T[Mark hook as new]
+    S & T --> U[Render hook row via createElement]
+    U --> V{O.isEnabled check for background session?}
+    V -- Stopped / background session --> W[Append session-state annotation]
+    V -- Active --> X[No annotation]
+    W & X --> Y[Final JSX panel returned to shell]
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11472573, +11472607, +11472638, +11472668
+Analysis basis: CC v2.1.143 bundle.js:+11472573, +11472638, +9074386, +9074425, +9074601, +9074629, +9074652, +9074743, +9074782
 
 ---
 
 ## Behavioral Spec
 
-### 1. Command Handler (`commandHandler`)
+### Entry Point — Hooks Command Handler
 
 ```
-function commandHandler(appState, permissionContext):
-    emitTelemetry("tengu_hooks_command")
-    ctx = getToolPermissionContext(appState)
-    output = buildHooksView(ctx, appState)
-    return createElement(output)
+function hooksCommandHandler(commandContext):
+    emit telemetry("tengu_hooks_command")
+    toolPermCtx = commandContext.getToolPermissionContext()
+    panel = hooksViewRenderer(toolPermCtx)
+    return createElement(panel)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11472573, +11472607, +11472638, +11472668
+Analysis basis: CC v2.1.143 bundle.js:+11472573, +11472575, +11472607, +11472638, +11472668
 
 ---
 
-### 2. Boolean String Normalisation (`booleanStringNormaliser`)
-
-During hook-enabled evaluation, string values are normalised to boolean. The strings `"yes"` and `"on"` are treated as truthy; all other string values fall through to standard truthiness rules.
+### Hook Registry Lookup
 
 ```
-function booleanStringNormaliser(value):
-    s = String(value)           // coerce via String()
-    if s == "yes": return true
-    if s == "on":  return true
-    return Boolean(value)
+function hookRegistryLookup(permissionContext):
+    // Normalize boolean-like strings for enabled/disabled flags
+    // Accepted truthy values: "yes", "on"
+    // Accepted falsy values:  "no", "off"
+    entries = flatMapHookSources(permissionContext)
+    filtered = entries.filter(isActiveHookEntry)
+    return filtered
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+26373, +26422, +26428
+Truthy string literals recognized: `"yes"`, `"on"` (bundle.js:+26422, +26428).
+Falsy string literals recognized: `"no"`, `"off"` (bundle.js:+26573, +26578).
+
+Analysis basis: CC v2.1.143 bundle.js:+9074457, +9073738
 
 ---
 
-### 3. Hook Configuration Loader (`hookConfigLoader`)
-
-Reads the flat hook registry and partitions entries by origin class. The origin classes recognised are: `"cli"`, `"remote"`, `"sdk-ts"`, `"sdk-py"`, `"sdk-cli"`, and `"local-agent"`. The index `0` is used as the base offset when iterating entries.
+### Hook Source Classification
 
 ```
-function hookConfigLoader(permissionContext):
-    allHooks = readHookRegistry()          // flat list
-    blocked  = buildBlockedSet()           // entries with type == "blocked"
-    result   = []
-    for entry in allHooks:
-        if entry.origin in ["cli", "remote",
-                            "sdk-ts", "sdk-py",
-                            "sdk-cli", "local-agent"]:
-            result.append(entry)
-    return result
+function classifyHookSource(hookEntry):
+    source = hookEntry.source
+    if source == "cli":
+        return label("CLI argument")
+    else if source == "remote":
+        return label("Remote configuration")
+    else:
+        return label("Unknown / SDK source")
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+3192540, +3192557, +3192602, +3192642, +3192692, +3192703, +3192949, +3192963, +3192977, +3192992
+Source string literals: `"cli"` (bundle.js:+3192692), `"remote"` (bundle.js:+3192703).
+
+Additional SDK-origin labels recognized in the registry pipeline:
+- `"sdk-ts"` (bundle.js:+3192949)
+- `"sdk-py"` (bundle.js:+3192963)
+- `"sdk-cli"` (bundle.js:+3192977)
+- `"local-agent"` (bundle.js:+3192992)
+
+These values influence how the source tag is rendered in the hook row but do not suppress display.
+
+Analysis basis: CC v2.1.143 bundle.js:+3192692, +3192703, +3192719
+
+Telemetry fired during source resolution: `tengu_slate_harbor` (bundle.js:+3192722).
 
 ---
 
-### 4. Blocked-Hook Filter (`blockedHookFilter`)
-
-Iterates the hook list and removes any entry whose resolved type equals the string `"blocked"`.
+### Hook Entry Rendering
 
 ```
-function blockedHookFilter(hooks):
-    return hooks.filter(h => resolveHookType(h) != "blocked")
+function renderHookEntry(hookEntry, featureFlags, seenSet):
+    row = newRow()
+
+    // Source label
+    row.source = classifyHookSource(hookEntry)
+
+    // Blocked indicator
+    if hookEntry.status == "blocked":
+        row.indicator = BLOCKED_SYMBOL
+    else:
+        row.indicator = ACTIVE_SYMBOL
+
+    // Extended metadata (feature-flag gated)
+    if featureFlags.wqEnabled:
+        row.metadata = hookEntry.extendedMeta
+    else:
+        row.metadata = null
+
+    // New-vs-known badge
+    if seenSet.has(hookEntry.id):
+        row.badge = "known"
+    else:
+        row.badge = "new"
+
+    // Pad columns for alignment (width constant: 40 chars)
+    row.formattedSource = hookEntry.source.padEnd(40)
+
+    return row
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+9073738, +9073753, +9073799
+Blocked status literal: `"blocked"` (bundle.js:+9073799).
+Column padding width: `40` characters (bundle.js:+14528173).
+Column separator: `"  "` (two spaces, bundle.js:+14526202).
+
+Analysis basis: CC v2.1.143 bundle.js:+9073799, +9074743, +9074652, +14528173, +14526202
 
 ---
 
-### 5. Hook Row Builder (`hookRowBuilder`)
-
-Constructs the display row for a single hook. Column widths are padded to **40 characters** using a **two-space** (`"  "`) separator between columns.
+### Permission Context Evaluation
 
 ```
-function hookRowBuilder(hook):
-    nameCol   = hook.name.padEnd(40)       // pad to 40 chars
-    statusCol = deriveStatusLabel(hook)
-    return nameCol + "  " + statusCol      // two-space separator
+function evaluatePermissionContext(toolPermCtx):
+    // Windows platform requires special path handling
+    if platform == "windows":
+        applyWindowsPathNormalization()
+
+    // Resolve deny-listed tools
+    denyList = resolveDenyList(toolPermCtx)   // literal "deny" at +9891032
+    
+    // Resolve narrowing from CLI args
+    cliArgNarrowing = resolveCliArgNarrowing(toolPermCtx)   // "cliArg" at +9891618
+
+    // Resolve tool-set narrowing
+    toolsNarrowing = resolveToolsNarrowing(toolPermCtx)   // "toolsNarrowing" at +9891639
+
+    return PermissionSummary(denyList, cliArgNarrowing, toolsNarrowing)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+14526168, +14526181, +14526202, +14528099, +14528173
+Platform literal: `"windows"` (bundle.js:+3194022).
+Deny literal: `"deny"` (bundle.js:+9891032).
+CLI-arg narrowing literal: `"cliArg"` (bundle.js:+9891618).
+Tools narrowing literal: `"toolsNarrowing"` (bundle.js:+9891639).
+
+Telemetry fired during permission resolution: `tengu_cobalt_ridge` (bundle.js:+3194116).
+Telemetry fired during agent-teams flag evaluation: `tengu_amber_flint` (bundle.js:+5298220).
+
+Analysis basis: CC v2.1.143 bundle.js:+3194015, +3194022, +9891032, +9891618, +9891639
 
 ---
 
-### 6. Enabled-State Resolver (`enabledStateResolver`)
-
-Checks whether a given hook is active. Two fast-exit conditions exist before the per-hook flag is consulted:
-
-1. If the session state is `"stopped"`, the hook is considered inactive regardless of its own flag.
-2. If the session is a `"background session"`, the hook is also considered inactive.
+### Background Session State Annotation
 
 ```
-function enabledStateResolver(hook, session):
-    if session.state == "stopped":         return false
-    if session.type  == "background session": return false
-    return booleanStringNormaliser(Wq.isEnabled(hook))
+function resolveSessionAnnotation(sessionState):
+    if sessionState == "stopped":
+        return annotation("background session")
+    else:
+        return null
 ```
+
+Literals: `"stopped"` (bundle.js:+14538107), `"background session"` (bundle.js:+14538150).
 
 Analysis basis: CC v2.1.143 bundle.js:+14538107, +14538145, +14538150
 
 ---
 
-### 7. Hook List Component (`hookListComponent`)
-
-Assembles the full display, iterating over the filtered and mapped hook rows. Delegates per-row rendering to `hookRowBuilder` and per-hook enabled resolution to `enabledStateResolver`. Uses `YpH.has` to gate inclusion of hooks whose event type is present in a tracked set, and `$.includes` (backed by `JZq`) to verify allowed event categories.
+### Daemon Status Integration
 
 ```
-function hookListComponent(hooks, trackedEventSet, allowedCategories):
-    rows = []
-    for hook in hooks.filter(h => trackedEventSet.has(h.eventType)):
-        if allowedCategories.includes(hook.category):
-            enabled = enabledStateResolver(hook, currentSession)
-            rows.append(hookRowBuilder(hook, enabled))
-    return renderRows(rows)
+function loadDaemonStatus():
+    statusPath = joinPath(workingDirectory, "daemon.status.json")
+    raw = readFile(statusPath)
+    return JSON.parse(raw)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+9073114, +9073130, +9073251, +9073344, +9073415, +9073434, +9073475, +9073481, +9073487, +9073626, +9073667, +9073694, +9074601, +9074629, +9074641, +9074652, +9074728, +9074743, +9074771, +9074782, +9074824, +9074869
+Status filename literal: `"daemon.status.json"` (bundle.js:+11707334).
+
+Analysis basis: CC v2.1.143 bundle.js:+11707334, +11707329
 
 ---
 
-### 8. Platform Guard (`platformGuard`)
-
-Before rendering certain hook controls, a Windows platform check is performed. The string `"windows"` is matched against the resolved platform identifier.
+### Tool-Search Feature-Flag Guard
 
 ```
-function platformGuard(platform):
-    if platform == "windows":
-        return WINDOWS_RESTRICTED_MODE
-    return DEFAULT_MODE
+function checkToolSearchFlag(provider):
+    if provider == "vertex":
+        if ENABLE_TOOL_SEARCH env var not set:
+            log("[ToolSearch:optimistic] disabled: Vertex AI does not accept " +
+                "the tool-search beta header. Set ENABLE_TOOL_SEARCH=true to override.")
+            return DISABLED
+    return ENABLED
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+3194158, +3194165, +3194191
+Vertex AI tool-search suppression message literal (bundle.js:+9595991).
+Provider literals checked: `"bedrock"` (+2020544), `"foundry"` (+2020594), `"anthropicAws"` (+2020650), `"mantle"` (+2020704), `"vertex"` (+2020752), `"firstParty"` (+2020761).
+Canonical API host: `"api.anthropic.com"` (bundle.js:+2021450).
+
+Analysis basis: CC v2.1.143 bundle.js:+9595455, +9595991, +2020544
 
 ---
 
-### 9. Telemetry Emission (`emitSlateHarbor`)
-
-A secondary telemetry event `"tengu_slate_harbor"` is fired within the hook configuration loading path (inside `ZP`), distinct from the command-invocation event. This event appears to track hook-config resolution activity.
+### Hook Deduplication Guard
 
 ```
-function emitSlateHarbor(context):
-    emitTelemetry("tengu_slate_harbor", context)
+function deduplicateHookRegistration(hookId, registeredSet, pendingMap):
+    if registeredSet.has(hookId):
+        existing = pendingMap.get(hookId)
+        return existing   // skip re-registration
+    registeredSet.add(hookId)
+    entry = buildHookEntry(hookId)
+    pendingMap.set(hookId, entry)
+    scheduleHookActivation(entry)
+    return entry
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+3192722
+Analysis basis: CC v2.1.143 bundle.js:+3139736, +3139760, +3139776, +3142184, +3142207
+
+---
+
+### Timestamp Stamping on Hook Entries
+
+```
+function stampHookEntry(entry):
+    entry.createdAt = Date.now()
+    entry.sessionId = generateSessionId()
+    return entry
+```
+
+`Date.now` is called at two distinct sites: bundle.js:+3161214 (hook entry stamping) and bundle.js:+11707446 (daemon status timestamp).
+
+Analysis basis: CC v2.1.143 bundle.js:+3161214, +11707446
+
+---
+
+### Random Jitter for Hook Retry Scheduling
+
+```
+function scheduleWithJitter(callback):
+    jitter = Math.floor(Math.random() * 2)   // range 0–1
+    delay = BASE_DELAY + jitter
+    setTimeout(callback, delay)
+```
+
+Numeric literal `2` used as upper bound for `Math.random()` multiplication (bundle.js:+12638154).
+
+Analysis basis: CC v2.1.143 bundle.js:+12638154, +12638156, +12638193
 
 ---
 
@@ -222,14 +315,16 @@ Analysis basis: CC v2.1.143 bundle.js:+3192722
 
 | Item | Detail |
 |---|---|
-| Telemetry — invocation | `tengu_hooks_command` emitted immediately on command entry (bundle.js:+11472575) |
-| Telemetry — config load | `tengu_slate_harbor` emitted during hook-config resolution (bundle.js:+3192722) |
-| Hook registration | Command is registered as `local-jsx` / `immediate: true`; no hooks are mutated — this command is read-only (bundle.js:+11472793) |
-| `appState` changes | None observed within depth-2 traversal; command renders current state without writing back |
-| Column padding | Hook name column padded to **40 characters**; columns separated by `"  "` (two spaces) (bundle.js:+14528173, +14526202) |
-| Platform handling | Windows path (`"windows"`) triggers a restricted rendering mode (bundle.js:+3194165) |
-| Session-state gating | Hooks are shown as inactive when session state is `"stopped"` or session type is `"background session"` (bundle.js:+14538107, +14538150) |
+| Telemetry — invocation | `tengu_hooks_command` fired on every `/hooks` call (bundle.js:+11472575) |
+| Telemetry — source resolution | `tengu_slate_harbor` fired during hook-source classification (bundle.js:+3192722) |
+| Telemetry — permission context | `tengu_cobalt_ridge` fired during permission-context evaluation (bundle.js:+3194116) |
+| Telemetry — agent teams | `tengu_amber_flint` fired during agent-teams feature-flag check (bundle.js:+5298220) |
+| Hook registry reads | Reads from `sMH` (pending-map) and `nA_` (registered-set); no writes triggered by display alone |
+| Seen-set read | Reads `YpH` set to determine new-vs-known badge; no mutation on display |
+| appState changes | None observed at depth-2 traversal; the command is display-only |
+| Daemon status file | Reads `daemon.status.json` from working directory for session-state annotation |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| File system (cleanup) | `unlinkSync` reachable via file-handle close path (`q` → `n8K.unlinkSync`, bundle.js:+14482768); triggered only on handle teardown, not on `/hooks` display |
 
 ---
 
@@ -237,18 +332,18 @@ Analysis basis: CC v2.1.143 bundle.js:+3192722
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis — command registered as `local-jsx`, immediate, module `qWq` |
+| v2.1.143 | Initial analysis — `local-jsx` immediate command; four telemetry events; Vertex AI tool-search guard; daemon status integration |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting `/hooks` to modify configuration** — the command is strictly read-only. Use the settings file or the dedicated hook-registration API to add or remove hooks; `/hooks` only displays what is already registered.
-2. **Misreading disabled hooks as absent** — a hook shown with a disabled indicator is still registered; it is suppressed because the session is stopped or is a background session, not because the hook was deleted.
-3. **Assuming all origin types are displayed equally** — hooks are partitioned by origin (`"cli"`, `"remote"`, `"sdk-ts"`, `"sdk-py"`, `"sdk-cli"`, `"local-agent"`); entries that do not match a recognised origin class are silently excluded from the view.
-4. **Overlooking the `"blocked"` filter** — hooks whose resolved type is `"blocked"` are removed before display. If a hook is missing from the `/hooks` output, verify it has not been placed in the blocked set.
-5. **Treating `"yes"` / `"on"` as non-boolean** — the enabled-state resolver normalises the strings `"yes"` and `"on"` to `true`; configuration values stored as these strings will show the hook as enabled.
-6. **Windows-specific rendering differences** — on a Windows platform the display enters a restricted rendering mode; column layout or control availability may differ from non-Windows environments.
+1. **Expecting argument parsing** — `/hooks` accepts no arguments. Anything typed after `/hooks` is ignored; the command always renders the full hook list.
+2. **Confusing `immediate: true` with async behavior** — `immediate` means the command renders synchronously without waiting for a model turn. It does not mean hooks themselves execute immediately.
+3. **Assuming the display mutates hook state** — the command is read-only. It reads registry sets (`sMH`, `nA_`, `YpH`) but does not register, unregister, or modify any hook entry.
+4. **Expecting Vertex AI tool-search hooks to appear active** — if the provider is `"vertex"` and `ENABLE_TOOL_SEARCH` is not set, tool-search hooks are suppressed and will not appear in the list (bundle.js:+9595991).
+5. **Misreading source labels** — `"cli"` and `"remote"` are the two primary source discriminators. SDK-origin values (`"sdk-ts"`, `"sdk-py"`, `"sdk-cli"`, `"local-agent"`) are secondary labels within the same classification system, not separate hook types.
+6. **Expecting `daemon.status.json` to always exist** — the background-session annotation is only rendered when the file is present and its status field equals `"stopped"`. Missing file silently suppresses the annotation.
 
 ---
 
@@ -258,18 +353,55 @@ Analysis basis: CC v2.1.143 bundle.js:+3192722
 
 | Identifier | Role |
 |---|---|
-| `av7` | Command handler — entry point for `/hooks`, emits telemetry and calls `buildHooksView` |
-| `d` | Telemetry emitter utility — general-purpose event dispatch called at command entry |
-| `pZ` | Hook view builder — orchestrates config loading, filtering, mapping, and JSX assembly |
-| `xH` | Boolean/string normaliser — coerces values via `String()`, recognises `"yes"` / `"on"` |
-| `ZP` | Hook configuration loader — reads registry, partitions by origin, emits `tengu_slate_harbor` |
-| `UHH` | Blocked-hook filter — applies `Array.filter` to remove `"blocked"`-type entries |
-| `_k_` | Hook state collector — calls enabled-check helpers `Qu`, `piH`, `s_` |
-| `YK` | Platform guard — checks for `"windows"` platform string before rendering controls |
-| `FHH` | Hook list component — assembles all hook rows, delegates to `YK`, `nz`, `oY`, `xH`, `CiH`, `B87`, `q1`, `p87`, `U87`, `_k_`, `er1`, `tS` |
-| `A` | Tool-name set — stores lowercase tool names; uses `f.toLowerCase` for normalisation |
-| `K` | Hook display row set — uses `L.map` and `f.padEnd` for column formatting |
-| `XL` | Auxiliary enabled-state checker — consulted alongside `Wq.isEnabled` |
-| `O` | SDK/session enabled resolver — checks `N8` for `"stopped"` / `"background session"` state |
-| `nz` | Hook name formatter — delegates to `xH` for string normalisation |
-| `$` | Allowed-category list — backed by `JZq`; used with `Array.includes` to gate hook display |
+| `av7` | Hooks command handler (entry point) |
+| `d` | Telemetry emit helper |
+| `pZ` | Hooks view renderer (main JSX component) |
+| `xH` | String coercion / display formatter |
+| `ZP` | Hook source classifier |
+| `$F` | Source label builder |
+| `Sq` | Secondary string converter |
+| `G6` | Hook deduplication and registry coordinator |
+| `m76` | Registry pre-check helper A |
+| `p76` | Registry pre-check helper B |
+| `Ts` | Hook entry formatter |
+| `Ci6` | Hook registration deduplication guard |
+| `N6` | Hook entry timestamp stamper |
+| `UHH` | Hook list filter (active entries) |
+| `H` | Utility collection / array with random-jitter scheduler |
+| `pP6` | Permission context resolver |
+| `HLH` | Deny-list flat-mapper |
+| `yR_` | CLI-arg and tool-narrowing resolver |
+| `H9q` | Narrowing result assembler |
+| `_k_` | Hook row builder |
+| `Qu` | Windows-path-aware row constructor |
+| `s_` | ES-module export initializer |
+| `dZ6` | Module export binder |
+| `YK` | Hook row data assembler |
+| `FHH` | Full hook panel renderer |
+| `nz` | Inline string normalizer |
+| `oY` | Alternate string converter |
+| `CiH` | Blocked-status indicator renderer |
+| `B87` | Hook row sub-renderer A |
+| `q1` | Agent-teams flag evaluator |
+| `$$4` | Agent-teams flag reader |
+| `p87` | Hook row sub-renderer B |
+| `U87` | Hook row sub-renderer C |
+| `tS` | Tool-search / provider feature-flag guard |
+| `iS_` | TST / standard mode resolver |
+| `v` | Provider type classifier |
+| `DA` | Provider-specific branch handler |
+| `bf` | Final flag state emitter |
+| `A` | File-handle registry (toLowerCase normalizer wrapper) |
+| `f` | File-handle manager |
+| `q` | Temp-file set (unlinkSync site) |
+| `L` | File-handle lifecycle coordinator |
+| `K` | Column formatter / padEnd applier |
+| `XL` | Extra layout helper |
+| `O` | Background-session state checker |
+| `N8` | Session stopped-state resolver |
+| `$` | Daemon / background session includes-checker |
+| `JZq` | Daemon status loader |
+| `ha` | Daemon status file path helper |
+| `d1` | Async-local storage store reader |
+| `r06` | Daemon status JSON path builder |
+| `hH` | JSON serializer wrapper |

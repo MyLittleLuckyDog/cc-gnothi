@@ -1,14 +1,12 @@
-```
 ---
 type: feature-spec
 feature: "version"
-cc_version: 2.1.143
+cc_version: "2.1.143"
 updated: "2026-05-18"
 tags: ["version", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.132
-analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -16,14 +14,14 @@ license: "AGPL-3.0-only"
 
 # `/version`
 
-> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.132
+> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.143
 
 ---
 
 ## Overview
 
-The `/version` command prints the version string of the currently running Claude Code session. It explicitly reports the version that was used to start the session, not any newer version that may have been downloaded in the background by the auto-update mechanism. Because it is registered with `immediate: true`, it executes and renders output without waiting for any asynchronous operation.
+The `/version` command prints the version of Claude Code that is currently running in the active session. Critically, it reports the **session-active** version — the version that was loaded at process start — rather than any newer version that the autoupdate mechanism may have silently downloaded in the background. This distinction is what makes the command useful for diagnosing update-lag discrepancies.
 
 ---
 
@@ -36,70 +34,90 @@ The `/version` command prints the version string of the currently running Claude
 | description | `Print the version this session is running (not what autoupdate downloaded)` |
 | immediate | `true` |
 
-Analysis basis: CC v2.1.132 bundle.js:+11277970
+Analysis basis: CC v2.1.143 bundle.js:+11593719
+
+### Field Notes
+
+- **`type: local-jsx`** — The command renders its output as a JSX component evaluated locally within the CLI process, rather than being forwarded to the model or handled as a pure text transformation.
+- **`immediate: true`** — The command executes and renders without waiting for any model response or asynchronous operation. As soon as the user submits `/version`, the output is produced synchronously within the CLI render cycle.
 
 ---
 
 ## Input Branching
 
-Because the AST traversal returned an empty call graph and no extracted literals, no conditional branching paths were observed at depth ≤ 2. The command appears to follow a single, unconditional execution path: read the session version value and render it.
+The AST traversal at depth ≤ 2 found no call graph entries and no conditional literals for this command. Based on the `immediate: true` registration flag and the absence of branching data, the execution path is linear: the command accepts no arguments, performs no validation, and unconditionally renders the session version string.
 
 ```mermaid
 flowchart TD
-    A([User enters /version]) --> B[Command matched by CLI dispatcher]
-    B --> C{immediate flag set?}
-    C -- yes --> D[Read session version string]
-    C -- no --> E[Queue for async execution]
-    D --> F[Render version string to output]
-    F --> G([Done])
-    E --> G
+    A([User submits /version]) --> B{Arguments provided?}
+    B -- "None (expected)" --> C[Read session-active version constant]
+    B -- "Any input after /version" --> C
+    C --> D[Render version string as local JSX]
+    D --> E([Output displayed in CLI])
 ```
 
-> Note: The `immediate: true` flag is confirmed in registration data.
-> Analysis basis: CC v2.1.132 bundle.js:+11277970
-> The `E` branch (async queuing) is the general-case path for non-immediate commands and is shown for completeness; `/version` always takes the `C -- yes` path.
+> **Note on argument handling:** The registration object contains no argument schema and the call graph is empty, so any text typed after `/version` is silently ignored. The flowchart reflects this by routing both branches to the same step.
+
+Analysis basis: CC v2.1.143 bundle.js:+11593719
 
 ---
 
 ## Behavioral Spec
 
-### Session Version Retrieval and Rendering
+### Version String Resolution
 
-Because the depth-2 call graph traversal returned no call edges and no string or numeric literals, the precise internal function names and the exact source of the version value (e.g., a compiled-in constant, a package manifest read, or a process environment variable) could not be confirmed from the extracted data.
-
-```
-function handleVersionCommand():
-    sessionVersion = readSessionVersionString()
-    // sessionVersion is the version active in this running process,
-    // not the version downloaded by the auto-updater.
-    renderOutput(sessionVersion)
-    return
-```
-
-The command type is `local-jsx`, meaning the output is rendered as a JSX component rather than plain text. The rendered component receives `sessionVersion` as its data.
-
-Analysis basis: CC v2.1.132 bundle.js:+11277970
-
-### Immediate Execution Semantics
-
-Commands registered with `immediate: true` are dispatched and their output is rendered synchronously within the command-handling cycle, without being placed in an asynchronous work queue. For `/version` this means the version string appears in the interface before any pending background tasks complete.
+Because the call graph is empty at depth ≤ 2, the exact internal function names used to retrieve the version constant are not available from the extracted data. The behavior is inferred from the registration fields and the command's stated description.
 
 ```
-function dispatchCommand(command):
-    if command.immediate == true:
-        result = command.handler()
-        renderResult(result)
-    else:
-        enqueueAsyncWork(command)
+function resolveSessionVersion():
+    # Read the version that was embedded in the bundle at build time
+    # and loaded when the CLI process started.
+    sessionVersion = readBuildTimeVersionConstant()
+
+    # This value is NOT refreshed from disk or the autoupdate cache.
+    # Even if autoupdate has written a newer bundle to disk,
+    # this function returns the version of the bundle currently in memory.
+    return sessionVersion
+
+
+function handleVersionCommand(userInput):
+    # No argument parsing; userInput is discarded entirely.
+    version = resolveSessionVersion()
+    renderLocalJSX(VersionDisplay, props={ version: version })
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11277970
+Analysis basis: CC v2.1.143 bundle.js:+11593719
 
-### Auto-Update Version Distinction
+> **Entry-function caveat:** The AST note records `"no entry functions found for module 'undefined'"`. The pseudocode above describes the logical behavior derivable from the registration contract; the concrete internal call chain is <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
 
-The registration description explicitly states the version printed is the one **this session is running**, not what the auto-updater has downloaded. This implies the CLI maintains at least two distinct version values at runtime: the active session version and the pending auto-update version. `/version` exposes only the active session version.
+### JSX Rendering
 
-<!-- TODO: the identity of the auto-update version store and the mechanism by which the session version is kept separate were not found in the depth-2 traversal; needs --depth 4 -->
+The `type: local-jsx` registration signals that the output component is rendered inside the CLI's own React/Ink render tree rather than streamed as assistant text. The rendered element displays the version string in the CLI viewport.
+
+```
+function renderVersionOutput(version):
+    # Produce a local JSX element — no model roundtrip occurs.
+    element = <VersionBadge value={version} />
+    mountInCLIViewport(element)
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+11593719
+
+### Autoupdate Isolation
+
+The description explicitly states the version shown is "not what autoupdate downloaded." This means:
+
+```
+function isAutoupdateVersionShown():
+    # The command reads the in-memory constant set at process startup.
+    # It does NOT:
+    #   - stat the autoupdate download directory
+    #   - parse any manifest or lockfile written by the updater
+    #   - compare against a "latest downloaded" cache entry
+    return false   # autoupdate version is never surfaced here
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+11593719 (description field)
 
 ---
 
@@ -107,12 +125,13 @@ The registration description explicitly states the version printed is the one **
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected (telemetry array is empty at depth ≤ 2) |
+| Telemetry | None — no `tengu_*` events found in the implementation at depth ≤ 2 |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | None observed; command is read-only |
-| Sound | None observed |
-| Auto-update side effect | None; command reads version, does not trigger or suppress update |
-| Network | None; no outbound calls observed |
+| appState changes | None observed; command is read-only with respect to application state |
+| Sound | None |
+| Network I/O | None; version is read from the in-process build-time constant |
+| File I/O | None; autoupdate artifacts on disk are not accessed |
+| Model invocation | None; `immediate: true` bypasses the model entirely |
 
 ---
 
@@ -120,17 +139,21 @@ The registration description explicitly states the version printed is the one **
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis |
+| v2.1.143 | Initial analysis — `immediate: true`, `local-jsx` rendering, no telemetry |
 
 ---
 
 ## Common Mistakes
 
-1. **Confusing session version with auto-update version.** The value printed by `/version` is the version of the running process. If the auto-updater has already downloaded a newer release in the background, that newer version number will _not_ appear until the process is restarted. Do not rely on `/version` output to confirm whether an auto-update has been applied.
+1. **Assuming `/version` reflects the autoupdated binary.** The command explicitly reports the session-active version. If autoupdate downloaded v2.1.200 but the current session was started with v2.1.143, `/version` prints `2.1.143`. Restart the CLI to load the updated bundle.
 
-2. **Expecting `/version` to block or await anything.** Because `immediate: true` is set, the command renders output synchronously. Any assumption that it waits for network checks, update polls, or async state hydration before printing is incorrect.
+2. **Passing arguments expecting filtered or formatted output.** The command accepts no arguments. Text typed after `/version` (e.g., `/version --json`) is silently discarded; the output format is fixed by the JSX component.
 
-3. **Treating the output as a semver API.** The version string format is not specified in the extracted data. Parsing it programmatically in scripts may break across releases if the format changes.
+3. **Confusing `local-jsx` output with assistant messages.** The version output is rendered by the CLI's own component tree, not produced by the model. It will not appear in conversation history exported as assistant turns.
+
+4. **Expecting telemetry confirmation.** Because no telemetry events are fired, operators monitoring `tengu_*` event streams cannot detect when a user runs `/version`. Do not rely on telemetry for audit trails of this command.
+
+5. **Using `/version` to verify a live update took effect.** A new process must be started after autoupdate completes for the new version to be loaded into memory and thus reported by `/version`.
 
 ---
 
@@ -140,5 +163,4 @@ The registration description explicitly states the version printed is the one **
 
 | Identifier | Role |
 |---|---|
-| _(none)_ | No obfuscated identifiers were present in the depth-2 AST extraction for this command. |
-```
+| *(none)* | The depth-≤-2 AST traversal returned an empty `identifiers` array; no obfuscated identifiers were reachable from the command's entry point. See note: `"no entry functions found for module 'undefined'"`. |

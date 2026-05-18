@@ -1,14 +1,12 @@
-```
 ---
 type: feature-spec
 feature: "recap"
-cc_version: 2.1.143
-tags: ["recap", "commands", "slash-commands"]
+cc_version: "2.1.143"
 updated: "2026-05-18"
+tags: ["recap", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.132
-analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -16,14 +14,14 @@ license: "AGPL-3.0-only"
 
 # `/recap`
 
-> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.132
+> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.143
 
 ---
 
 ## Overview
 
-The `/recap` command triggers an immediate, on-demand generation of a one-line summary of the current session. It is a local command that delegates output via the `post-text` thin-client dispatch mechanism, meaning the recap text is posted back into the conversation as a normal assistant text response rather than being handled by a dedicated UI panel.
+The `/recap` command triggers an immediate one-line summary of the current session's activity. It is a thin-client–dispatched command, meaning the execution payload is forwarded as post-text to the server rather than handled entirely within the local CLI process. No user-supplied arguments are defined for this command.
 
 ---
 
@@ -37,65 +35,67 @@ The `/recap` command triggers an immediate, on-demand generation of a one-line s
 | supportsNonInteractive | `false` |
 | thinClientDispatch | `post-text` |
 
-Analysis basis: CC v2.1.132 bundle.js:+11612924
+Analysis basis: CC v2.1.143 bundle.js:+11932233
 
 ---
 
 ## Input Branching
 
-The AST traversal returned an empty call graph and no literals for this command's entry module. The registration fields, however, imply the following top-level dispatch path:
+The AST traversal for this command returned an empty call graph and no associated literals or telemetry events at depth ≤ 2. The only confirmed branching point is therefore at the dispatch layer, which is determined by the `thinClientDispatch` registration field.
 
 ```mermaid
 flowchart TD
-    A[User types /recap] --> B{Is session interactive?}
-    B -- No --> C[Command rejected\nsupportsNonInteractive = false]
-    B -- Yes --> D[Command handler invoked]
-    D --> E[Generate one-line session recap]
-    E --> F{thinClientDispatch = post-text}
-    F --> G[Post recap string as assistant text\ninto conversation thread]
-    G --> H[Done]
+    A[User invokes /recap] --> B{Running in interactive mode?}
+    B -- No --> C[Reject: supportsNonInteractive = false]
+    B -- Yes --> D{thinClientDispatch value?}
+    D -- post-text --> E[Forward command as post-text payload to server]
+    E --> F[Server generates one-line session recap]
+    F --> G[Recap text rendered in terminal output]
+    D -- other / absent --> H[<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->]
 ```
 
-> **Note:** The internal call graph for the `/recap` handler module was not resolved during depth-2 AST traversal (the extractor reported `"no entry functions found for module 'undefined'"`). The branching above reflects what can be mechanically inferred from the registration fields alone.
-
-Analysis basis: CC v2.1.132 bundle.js:+11612924
+Analysis basis: CC v2.1.143 bundle.js:+11932233
 
 ---
 
 ## Behavioral Spec
 
-### Non-Interactive Guard
+### Dispatch Gate (Interactive Mode Check)
 
-Because `supportsNonInteractive` is `false`, the command is rejected when Claude Code is invoked in a non-interactive pipeline context (e.g., `--no-interactive`, CI mode, or piped stdin).
-
-```
-function checkInteractiveGuard(sessionContext):
-    if sessionContext.isNonInteractive == true:
-        raise CommandNotSupportedError("/recap requires an interactive session")
-    else:
-        proceed to generateRecap()
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+11612924
-
-### Recap Generation and Dispatch
-
-Once the interactive guard passes, the handler requests a one-line textual summary of the session and emits it through the `post-text` dispatch channel.
+Because `supportsNonInteractive` is `false`, the command must be invoked from an interactive terminal session. Invocation outside an interactive context (for example, piped or scripted non-interactive use) is not supported and is expected to be rejected before dispatch.
 
 ```
-function generateRecap(sessionContext):
-    recapText = requestOneLineSessionSummary(sessionContext)
-    dispatchPostText(recapText)
-    return
+function recapDispatchGate(context):
+    if context.isNonInteractive:
+        raise UnsupportedError("/recap does not support non-interactive mode")
+    return allowDispatch(context)
 ```
 
-`dispatchPostText` is the concrete action implied by `thinClientDispatch: "post-text"`. It means the output string is injected into the conversation as a normal assistant text turn, making it visible inline in the terminal output stream.
+Analysis basis: CC v2.1.143 bundle.js:+11932233
 
-Analysis basis: CC v2.1.132 bundle.js:+11612924
+### Thin-Client Post-Text Dispatch
 
-### One-Line Summary Constraint
+The `thinClientDispatch` field is set to `"post-text"`, which indicates that when the command is invoked, the CLI serializes the command invocation as a text-type post payload and forwards it to the remote server endpoint. Local processing of recap logic is not performed within the CLI bundle at this layer.
 
-The description field ("Generate a **one-line** session recap now") indicates the output is intentionally constrained to a single line. The exact truncation or enforcement mechanism is:
+```
+function recapThinClientDispatch(command):
+    payload = buildPostTextPayload(command.name, arguments=[])
+    response = sendToServer(payload)
+    renderOutput(response.text)
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+11932233
+
+### Session Recap Generation
+
+The actual one-line recap content is generated server-side. The nature of the recap (e.g., what session data is summarised, token window considered, summarisation model used) is <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
+
+```
+function generateSessionRecap(sessionContext):
+    # Executed server-side; not resolvable at depth-2 AST traversal
+    summary = model.summariseSession(sessionContext, maxLines=1)
+    return summary
+```
 
 <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
@@ -105,12 +105,12 @@ The description field ("Generate a **one-line** session recap now") indicates th
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected in depth-2 traversal (`telemetry: []`) |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Output channel | `post-text` — recap is posted as an inline assistant text message |
-| Non-interactive | Command is rejected; no side effects occur |
+| Telemetry | None detected at depth ≤ 2 traversal. <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Hook registration | None detected at depth ≤ 2 traversal. <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| appState changes | None detected at depth ≤ 2 traversal. <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Sound | None detected at depth ≤ 2 traversal. <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Dispatch side effect | Emits a `post-text` payload to the server endpoint as a side effect of invocation. |
+| Interactive requirement | Will not execute and produces no side effects when invoked in non-interactive mode. |
 
 ---
 
@@ -118,16 +118,16 @@ The description field ("Generate a **one-line** session recap now") indicates th
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis |
+| v2.1.143 | Initial analysis. Command registered as `local` type with `post-text` thin-client dispatch. |
 
 ---
 
 ## Common Mistakes
 
-1. **Running `/recap` in non-interactive mode.** Because `supportsNonInteractive` is `false`, invoking `/recap` inside a script or CI pipeline will fail. Use it only in a live terminal session.
-2. **Expecting a structured or multi-line output.** The description explicitly constrains the result to a single line. Do not rely on `/recap` for rich, multi-paragraph session summaries; use a dedicated prompt instead.
-3. **Confusing `post-text` dispatch with a sidebar or panel action.** The recap is emitted as a plain text message in the current conversation thread, not into a separate UI component or file.
-4. **Assuming telemetry data is captured.** No `tengu_*` telemetry events were found at depth-2. Do not build observability pipelines that assume `/recap` emits usage events.
+1. **Invoking `/recap` in a non-interactive script or pipe**: Because `supportsNonInteractive` is `false`, this command will be rejected in any non-interactive context. Use only within a live interactive Claude Code session.
+2. **Expecting local execution of recap logic**: The `thinClientDispatch: "post-text"` registration means the command is forwarded to the server. Any assumption that the recap is generated purely client-side within the CLI is incorrect.
+3. **Supplying arguments**: No argument schema is defined in the registration. Passing positional or named arguments to `/recap` is not supported and their handling is undefined at the depth-2 traversal level.
+4. **Expecting rich multi-line output**: The command description explicitly states "one-line session recap". Downstream logic that expects multi-paragraph summaries may be misaligned with the intended output contract.
 
 ---
 
@@ -137,6 +137,4 @@ The description field ("Generate a **one-line** session recap now") indicates th
 
 | Identifier | Role |
 |---|---|
-
-> No obfuscated identifiers were present in the depth-2 AST extraction for this command (`identifiers: []`). The entry module was unresolved (`"no entry functions found for module 'undefined'"`). A deeper traversal (`--depth 4` or higher) is required to populate this table.
-```
+| *(none)* | No obfuscated identifiers were reached during depth ≤ 2 AST traversal for this command. The `identifiers` array returned empty. |

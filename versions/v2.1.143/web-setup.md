@@ -1,14 +1,12 @@
-```
 ---
 type: feature-spec
 feature: "web-setup"
-cc_version: 2.1.143
+cc_version: "2.1.143"
 updated: "2026-05-18"
 tags: ["web-setup", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.132
-analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -16,14 +14,16 @@ license: "AGPL-3.0-only"
 
 # `/web-setup`
 
-> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.132
+> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.143
 
 ---
 
 ## Overview
 
-The `/web-setup` command initiates the setup flow for Claude Code in a web environment, requiring the user to connect a GitHub account as a prerequisite. It is implemented as a `local-jsx` command, meaning its output is rendered as a JSX component rather than plain text. The command's core mechanism is the creation of a React element via the registered render function.
+The `/web-setup` command initiates the process of connecting Claude Code to a web environment by guiding the user through GitHub account integration. It is implemented as a local JSX command, meaning its output is rendered directly as a React element tree rather than as plain text. The command's primary mechanism is the invocation of a JSX render function that produces the setup UI component.
+
+---
 
 ## Registration
 
@@ -32,87 +32,88 @@ The `/web-setup` command initiates the setup flow for Claude Code in a web envir
 | type | `local-jsx` |
 | name | `web-setup` |
 | description | `Setup Claude Code on the web (requires connecting your GitHub account)` |
-| module_id | `iwq` |
-| loc_line | 7643 |
+| module_id | `dvq` |
 
-Analysis basis: CC v2.1.132 bundle.js:+11619873
+Analysis basis: CC v2.1.143 bundle.js:+11943586
+
+---
 
 ## Input Branching
 
-The depth-2 call graph extracted for this command contains a single outbound edge: the render function calls `nI.createElement` to produce a JSX element. No branching on user-supplied arguments was detected within the traversal depth. The command appears to accept no parameters and follows a single execution path.
+The depth-2 call-graph traversal for this command yielded a single call edge: the render function (`webSetupRenderer`) calls `RW.createElement` to produce its JSX output. No conditional branch literals, argument-dependent paths, or multi-step sub-command logic were found within the traversal depth.
 
 ```mermaid
 flowchart TD
-    A[User invokes /web-setup] --> B[CLI dispatches to local-jsx render function]
-    B --> C[renderWebSetup creates React element via createElement]
-    C --> D[JSX component returned to CLI output layer]
-    D --> E[Component rendered in terminal UI]
+    A[User types /web-setup] --> B[CLI resolves command by name]
+    B --> C{Command type?}
+    C -- local-jsx --> D[Invoke webSetupRenderer]
+    C -- other types --> E[Other dispatch path — not applicable here]
+    D --> F[webSetupRenderer calls RW.createElement]
+    F --> G[Returns React element tree]
+    G --> H[CLI renders JSX output to terminal/web UI]
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11619649
+Analysis basis: CC v2.1.143 bundle.js:+11943362 (createElement call edge), +11943586 (type: local-jsx)
+
+---
 
 ## Behavioral Spec
 
-### Web Setup Component Rendering
+### Web Setup Renderer
 
-The command handler is a `local-jsx` type, meaning the CLI framework expects the registered function to return a React element that the terminal UI renders inline.
+The sole implementation unit discovered at depth ≤ 2 is the render function responsible for producing the command's visual output.
 
 ```
-function renderWebSetup(commandContext):
-    element = createElement(WebSetupComponent, props_derived_from_context)
+function webSetupRenderer(props):
+    element = createReactElement(
+        componentType  = <SetupUIComponent>,   // resolved via RW.createElement
+        componentProps = props
+    )
     return element
 ```
 
-When the user types `/web-setup` and confirms, the CLI:
+- The function does not perform any detected branching based on input arguments within the traversal depth.
+- No string literals, numeric constants, or configuration values were extracted from the implementation at depth ≤ 2.
+- No telemetry events are fired within the traversal boundary (see State & Side Effects).
+- Because the command type is `local-jsx`, the returned element is handled by the CLI's JSX rendering pipeline rather than printed as raw text.
 
-1. Looks up the command registration by name `"web-setup"` in the local command registry.
-2. Confirms the command type is `local-jsx`.
-3. Invokes the render function (see Appendix: `KP7`).
-4. The render function calls `nI.createElement` to instantiate the web-setup JSX component.
-5. The resulting React element is handed to the CLI's JSX output pipeline for display.
+Analysis basis: CC v2.1.143 bundle.js:+11943362
 
-Analysis basis: CC v2.1.132 bundle.js:+11619649
+<!-- TODO: The internal structure of the SetupUIComponent (sub-components, GitHub OAuth flow steps, error handling, success state) was not reachable within depth-2 traversal; needs --depth 4 -->
 
-### GitHub Account Requirement
+<!-- TODO: Any argument or flag parsing logic for /web-setup was not found in depth-2 traversal; needs --depth 4 -->
 
-The command description explicitly states that connecting a GitHub account is required. Based on the registration descriptor, the setup flow is gated on GitHub OAuth or equivalent account-linking. The exact branching logic for the GitHub connection check was not reachable within depth-2 traversal.
-
-```
-function webSetupEntryPoint():
-    // GitHub connection prerequisite is declared in the command description.
-    // Enforcement logic is inside the rendered JSX component (depth > 2).
-    component = buildWebSetupJSX()
-    return component
-```
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-The specific steps for GitHub account linking, OAuth redirect handling, token storage, and error states are implemented inside the JSX component tree and were not reachable at the current traversal depth.
-
-Analysis basis: CC v2.1.132 bundle.js:+11619873
+---
 
 ## State & Side Effects
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected within depth-2 traversal (`telemetry` array is empty) |
-| Hook registration | `local-jsx` type; registered under module `iwq` at bundle line 7643 |
+| Telemetry | No `tengu_*` events detected within depth-2 traversal |
+| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| GitHub account linking | Declared as a prerequisite in the command description; side-effect details not reachable at depth ≤ 2 |
+| GitHub OAuth flow | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Network side effects | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+
+---
 
 ## Version History
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis — `local-jsx` command registered at bundle.js:+11619873; single `createElement` call edge confirmed at bundle.js:+11619649 |
+| v2.1.143 | Initial analysis — command registered as `local-jsx`, single render function confirmed, GitHub account connection noted in description |
+
+---
 
 ## Common Mistakes
 
-1. **Running `/web-setup` without a web-compatible environment** — This command is specifically described as a web setup flow. Running it in a purely local terminal context with no web layer may result in an incomplete or non-functional setup UI, since the JSX component likely expects a browser-backed rendering surface or a web-connected CLI host.
-2. **Skipping GitHub account connection** — The command description explicitly names GitHub account connection as a hard requirement. Attempting to proceed through the setup flow without a linked GitHub account will likely block progress at a step inside the JSX component tree.
-3. **Expecting plain-text output** — Because this is a `local-jsx` command, its output is a rendered component, not a text string. Tooling or scripts that parse `/web-setup` output as plain text will not receive structured data.
-4. **Assuming telemetry is emitted** — No telemetry events were found in the depth-2 traversal. Do not rely on `tengu_*` events from this command for observability or usage tracking at this version.
+1. **Running `/web-setup` in a purely offline or local-only environment** — the command description explicitly states it requires connecting a GitHub account, implying network access is necessary for the setup flow to complete successfully.
+2. **Expecting plain-text output** — because the command type is `local-jsx`, the output is a rendered React component tree. Tooling or scripts that intercept raw CLI text output may not capture the full interaction surface.
+3. **Assuming the command is idempotent without verification** — whether re-running `/web-setup` on an already-connected account is safe or produces side effects is <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
+4. **Confusing `/web-setup` with other setup commands** — this command is specifically scoped to the web integration path (GitHub); local project setup or authentication commands are separate.
+
+---
 
 ## Appendix — Identifier Mapping
 
@@ -120,5 +121,4 @@ Analysis basis: CC v2.1.132 bundle.js:+11619873
 
 | Identifier | Role |
 |---|---|
-| `KP7` | Web-setup command render function; entry point that calls `nI.createElement` to produce the setup JSX element (bundle.js:+11619649) |
-```
+| `ob7` | Web setup render function — the top-level `local-jsx` handler for the `/web-setup` command; calls `RW.createElement` to produce its output |

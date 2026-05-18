@@ -2,8 +2,8 @@
 type: feature-spec
 feature: "radio"
 cc_version: "2.1.143"
-updated: "2026-05-18"
 tags: ["radio", "commands", "slash-commands"]
+updated: "2026-05-18"
 source: "bundle-analysis"
 bundle_verified: true
 analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/radio` command opens the Claude FM lo-fi radio stream in the user's default web browser by navigating to a fixed URL (`https://clau.de/radio`). It is a local, interactive-only command that performs a cross-platform browser launch and emits a status message regardless of success or failure.
+The `/radio` command opens the Claude FM lo-fi radio stream (`https://clau.de/radio`) in the user's default system browser. It is a purely side-effectful, interactive-only command: it launches a platform-appropriate browser-open utility, emits a confirmation message on success, and falls back to a plain-text URL on failure. No AI inference is involved.
 
 ---
 
@@ -41,147 +41,123 @@ Analysis basis: CC v2.1.143 bundle.js:+11622654
 
 ## Input Branching
 
-The command accepts no user-supplied arguments. All branching is internal, driven by URL scheme validation and runtime platform detection.
+The command accepts no user-supplied arguments. All branching is driven by runtime platform detection and whether the browser-open call succeeds.
 
 ```mermaid
 flowchart TD
-    A(["/radio invoked"]) --> B[Resolve target URL:\nhttps://clau.de/radio]
-    B --> C{URL scheme valid?\nstarts with 'http:' or 'https:'}
-    C -- No --> D[Throw Error\n— scheme rejected]
-    C -- Yes --> E[Emit status text:\n'Opening Claude FM in your browser…']
-    E --> F{Detect platform\nprocess.platform}
-    F -- darwin --> G["Spawn: open <url>"]
-    F -- win32 --> H["Spawn: rundll32\nurl,OpenURL <url>"]
-    F -- other --> I["Spawn: xdg-open <url>"]
-    G --> J{Exit code === 0?}
-    H --> J
-    I --> J
-    J -- Success\nexit code 0 --> K([Done — browser launched])
-    J -- Failure\nexit code ≠ 0 --> L["Emit fallback text:\n'Couldn't open the browser.\nListen at: https://clau.de/radio'"]
-    L --> M([Done — fallback shown])
+    A["/radio invoked"] --> B[Validate target URL scheme]
+    B -->|scheme is http: or https:| C[Detect host platform]
+    B -->|scheme is neither| E[Reject with Error]
+    C -->|darwin| D1["Spawn: open <url>"]
+    C -->|win32| D2["Spawn: rundll32 url,OpenURL <url>"]
+    C -->|other| D3["Spawn: xdg-open <url>"]
+    D1 --> F{Exit code == 0?}
+    D2 --> F
+    D3 --> F
+    F -->|success| G["Emit: 'Opening Claude FM in your browser…'"]
+    F -->|failure| H["Emit fallback: 'Couldn't open the browser. Listen at: https://clau.de/radio'"]
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11622412, +7543066, +7543088, +7543303, +7543316, +7543375, +7543391, +7543424
+Analysis basis: CC v2.1.143 bundle.js:+7543066 (scheme check), +7543375 (darwin), +7543391 (win32), +7543475 (rundll32), +7543549 (open), +7543556 (xdg-open), +11622415 (target URL), +7543341 (exit-code zero check)
 
 ---
 
 ## Behavioral Spec
 
-### Command Entry Point
+### URL Validation
+
+Before attempting to open any URL, the open-URL utility validates that the protocol is either `http:` or `https:`. If neither matches, the utility rejects with an `Error` object rather than proceeding.
+
+```
+function validateUrlScheme(targetUrl):
+    parsed = parseUrl(targetUrl)
+    if parsed.protocol not in ["http:", "https:"]:
+        throw Error("unsupported protocol")
+    return parsed
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+7543066, +7543088, +7543016
+
+---
+
+### Platform Detection and Browser Launch
+
+After URL validation, the implementation inspects `process.platform` to select the correct system command for opening a URL in the default browser.
+
+```
+function openUrlInBrowser(targetUrl):
+    validateUrlScheme(targetUrl)
+    platform = process.platform
+    if platform == "darwin":
+        command = "open"
+        args    = [targetUrl]
+    else if platform == "win32":
+        command = "rundll32"
+        args    = ["url,OpenURL", targetUrl]
+    else:
+        command = "xdg-open"
+        args    = [targetUrl]
+    result = spawnProcess(command, args)
+    return result
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+7543375 (darwin branch), +7543391 (win32 branch), +7543475 (rundll32), +7543487 (url,OpenURL argument), +7543549 (open), +7543556 (xdg-open)
+
+---
+
+### Command Handler
+
+The top-level command handler calls the browser-launch utility with the fixed target URL and selects the appropriate user-facing message based on the outcome.
 
 ```
 function radioCommandHandler():
-    url = "https://clau.de/radio"
-    openUrlInBrowser(url)
-    emit({ type: "text", content: "Opening Claude FM in your browser…" })
-    return
+    TARGET_URL = "https://clau.de/radio"
+    try:
+        openUrlInBrowser(TARGET_URL)
+        yield textMessage("Opening Claude FM in your browser…")
+    catch error:
+        yield textMessage(
+            "Couldn't open the browser. Listen at: https://clau.de/radio"
+        )
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11622415, +11622452, +11622465
+Analysis basis: CC v2.1.143 bundle.js:+11622415 (target URL), +11622452 (text message type), +11622465 (success message), +11622533 (fallback message), +11622412 (handler entry point)
 
 ---
 
-### URL Scheme Validation
+### Async Render / Output Sink
 
-Before any browser launch attempt, the URL is checked against an allowlist of permitted schemes.
+The text messages yielded by the handler are passed to the terminal output pipeline via an async rendering layer. This layer collects streamed output items and forwards them to the display subsystem. An internal concurrency limit of 10 parallel tasks is applied within this pipeline.
 
-```
-function validateUrlScheme(url):
-    scheme = extractScheme(url)          // portion before and including ":"
-    if scheme is not in ["http:", "https:"]:
-        raise Error("URL scheme not permitted")
-    return url
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+7543066, +7543088, +7543016, +7543303
+Analysis basis: CC v2.1.143 bundle.js:+1038172 (concurrency limit 10)
 
 ---
 
-### Platform-Aware Browser Launch
+### Background Process Management (Side Path)
 
-After scheme validation succeeds, the runtime platform is read and the appropriate system command is selected to open the URL.
+During execution, the runtime's background-spare-process manager may be consulted. It checks available system memory (threshold: 1 000 000 bytes) and uses a polling interval of 2 000 ms when deciding whether to spawn or recycle a spare background worker.
 
 ```
-function openUrlInBrowser(url):
-    validateUrlScheme(url)               // raises on invalid scheme
-    platform = process.platform
-
-    if platform == "darwin":
-        cmd  = "open"
-        args = [url]
-    else if platform == "win32":
-        cmd  = "rundll32"
-        args = ["url,OpenURL", url]
-    else:                                // Linux and all other POSIX platforms
-        cmd  = "xdg-open"
-        args = [url]
-
-    exitCode = spawnSync(cmd, args)
-
-    if exitCode != 0:
-        emitFallbackMessage()
+function backgroundSpareCheck():
+    freeMem = os.freemem()
+    if freeMem >= 1_000_000:
+        emitTelemetry("tengu_bg_spare_enable")
+        scheduleSpawn(intervalMs=2000)
+    ...
+    emitTelemetry("tengu_bg_spare_spawn")
 ```
 
-Numeric sentinel for success exit code: `0` (Analysis basis: CC v2.1.143 bundle.js:+7543341)
-Numeric sentinel for failure exit code: `1` (Analysis basis: CC v2.1.143 bundle.js:+7543623)
+This path is not specific to `/radio`; it is part of the shared runtime lifecycle invoked whenever the command executor runs.
 
-Analysis basis: CC v2.1.143 bundle.js:+7543316, +7543375, +7543391, +7543424, +7543475, +7543487, +7543549, +7543556
+Analysis basis: CC v2.1.143 bundle.js:+14502714 (freemem call), +1038694 (1 000 000 threshold), +14502927 (2 000 ms interval), +14502634 (tengu\_bg\_spare\_enable), +14502994 (tengu\_bg\_spare\_spawn)
 
 ---
 
-### Fallback Message Emission
+### Error Logging
 
-When the browser spawn exits with a non-zero code, the command falls back to printing the direct URL so the user can navigate manually.
+If the spawned process emits an error-level event, the runtime logs it via the shared error-logging facility. The string literal `"error"` is used as the event discriminator for this path.
 
-```
-function emitFallbackMessage():
-    emit({
-        type: "text",
-        content: "Couldn't open the browser. Listen at: https://clau.de/radio"
-    })
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+11622533
-
----
-
-### URL Open Helper Internals
-
-The open-URL helper delegates to a spawn wrapper (`openUrlSpawner`) which itself contains error-constructor integration (`spawnErrorFactory`) for structured error reporting on scheme rejection.
-
-```
-function openUrlSpawner(url):
-    spawnErrorFactory = buildSpawnError   // wraps native Error
-    validateUrlScheme(url)               // calls spawnErrorFactory on failure
-    platform = detectPlatform()
-    return selectAndSpawn(platform, url)
-```
-
-<!-- TODO: internal retry logic or timeout not found in depth-2 traversal; needs --depth 4 -->
-
-Analysis basis: CC v2.1.143 bundle.js:+7543303, +7543316, +7543424
-
----
-
-### Spawn Utility (`$_` / `S6`)
-
-The platform-spawn path calls two lower-level utilities reachable from the `openUrlSpawner`:
-
-- **spawnSyncWrapper** (`$_`) — wraps the synchronous child-process spawn, enforcing a maximum retry/argument count of **10** (Analysis basis: CC v2.1.143 bundle.js:+1038172, +1038227).
-- **spawnResultHandler** (`S6`) — processes the raw spawn result and surfaces the exit code upstream (Analysis basis: CC v2.1.143 bundle.js:+1038338).
-
-```
-function spawnSyncWrapper(cmd, args):
-    if length(args) > 10:
-        raise Error("argument list exceeds limit")
-    result = nativeSpawnSync(cmd, args)
-    return spawnResultHandler(result)
-
-function spawnResultHandler(result):
-    return result.exitCode
-```
-
-Maximum argument count: **10** (Analysis basis: CC v2.1.143 bundle.js:+1038172)
+Analysis basis: CC v2.1.143 bundle.js:+960530, +960555
 
 ---
 
@@ -189,14 +165,12 @@ Maximum argument count: **10** (Analysis basis: CC v2.1.143 bundle.js:+1038172)
 
 | Item | Detail |
 |---|---|
-| Telemetry | None — no `tengu_*` events are emitted by this command |
-| Hook registration | None detected at depth ≤ 2 |
-| appState changes | None detected at depth ≤ 2 |
-| Sound | None — audio is browser-side only; the CLI itself plays no audio |
-| Network | No network request from the CLI process; browser navigation is delegated entirely to the OS launcher |
-| Process spawn | One synchronous child process (`open` / `rundll32` / `xdg-open`) is spawned per invocation |
-| stdout / UI output | Always emits `"Opening Claude FM in your browser…"` (type `text`) on invocation; conditionally emits the fallback URL string on spawn failure |
-| Interactive requirement | `supportsNonInteractive: false` — command is rejected when the CLI is run in non-interactive / pipe mode |
+| Telemetry | `tengu_bg_spare_enable` (bundle.js:+14502634), `tengu_bg_spare_spawn` (bundle.js:+14502994) — both emitted by the shared background-process manager, not by the radio handler directly |
+| Hook registration | None detected at depth-2 traversal |
+| appState changes | None detected at depth-2 traversal |
+| Sound / media | None — the command only opens a browser URL; audio playback is handled entirely by the browser at `https://clau.de/radio` |
+| Process spawn | One short-lived child process (`open`, `rundll32`, or `xdg-open`) is spawned per invocation and not persisted |
+| Non-interactive support | `false` — the command cannot be used in `--print` / pipe mode |
 
 ---
 
@@ -204,17 +178,16 @@ Maximum argument count: **10** (Analysis basis: CC v2.1.143 bundle.js:+1038172)
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis — command registered, URL `https://clau.de/radio`, cross-platform browser launch, no telemetry |
+| v2.1.143 | Initial analysis — command registered; opens `https://clau.de/radio` via platform-native browser launcher |
 
 ---
 
 ## Common Mistakes
 
-1. **Running `/radio` in non-interactive mode** (e.g., piped input or `--no-interactive` flag) will cause the command to be unavailable, because `supportsNonInteractive` is `false`. Use the URL `https://clau.de/radio` directly in that context.
-2. **Expecting in-process audio** — the CLI does not stream or play audio itself. It only opens a browser tab. If the default browser is a headless or text-mode browser, no audio will be heard.
-3. **Assuming telemetry is emitted** — unlike most other commands, `/radio` emits zero telemetry events. Do not rely on `tengu_*` events to confirm invocation in logs.
-4. **Assuming the command accepts arguments** — the target URL is hard-coded to `https://clau.de/radio`. Any text typed after `/radio` is not forwarded and has no effect.
-5. **Expecting asynchronous spawn** — the browser-launch spawn is synchronous (`spawnSync`). The CLI process blocks until the launcher exits (typically near-instant), which means a hung launcher would block the CLI session.
+1. **Running in non-interactive mode.** Because `supportsNonInteractive` is `false`, invoking `/radio` inside a script or with `--print` will be rejected before the handler runs. Use an interactive terminal session.
+2. **Expecting audio inside the terminal.** The command opens a browser tab; no audio is routed through the CLI. If the browser does not launch (e.g., headless server), the fallback message provides the direct URL to use manually.
+3. **Firewall / sandbox blocking `xdg-open` on Linux.** In restricted environments (containers, CI), the xdg-open call may fail silently or return a non-zero exit code. The fallback message will be displayed; copy the URL manually.
+4. **Passing arguments.** The command signature accepts no arguments. Any text after `/radio` is ignored or may cause a parse error depending on the shell integration layer.
 
 ---
 
@@ -224,8 +197,16 @@ Maximum argument count: **10** (Analysis basis: CC v2.1.143 bundle.js:+1038172)
 
 | Identifier | Role |
 |---|---|
-| `Yy7` | Radio command handler — top-level entry point registered under `/radio` |
-| `qK` | Open-URL dispatcher — orchestrates scheme validation and platform-aware browser launch |
-| `ex4` | Spawn error factory — constructs structured Error objects for invalid URL schemes |
-| `hJ` | Platform detector — reads `process.platform` and returns the appropriate launcher command |
-| `Y8` | Spawn sync wrapper — executes the OS-level browser-open command synchronously |
+| `Yy7` | Radio command entry-point / handler function |
+| `qK` | Open-URL utility (URL validation + platform dispatch + spawn) |
+| `ex4` | URL scheme validator (throws Error on unsupported protocol) |
+| `hJ` | Process-spawn helper called after platform selection |
+| `Y8` | Async output-render pipeline coordinator |
+| `$_` | Async task queue / concurrency-limited executor |
+| `KXH` | Core async queue implementation (manages task scheduling) |
+| `D` | Background spare-process manager (telemetry, freemem, polling) |
+| `_SK` | String conversion utility used within the task queue |
+| `NH` | Error-event handler / error-logging dispatcher |
+| `S6` | Output sink that routes rendered items to the display layer |
+| `Uh6` | AsyncLocalStorage store accessor for the current execution context |
+| `__` | Base display/render primitive (leaf renderer) |

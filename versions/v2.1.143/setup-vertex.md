@@ -21,7 +21,9 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-`/setup-vertex` is a local JSX slash command that launches an interactive reconfiguration flow for Google Vertex AI integration. It allows users to update authentication credentials, GCP project identifiers, deployment region, and model pin settings without restarting the CLI. The command fires a telemetry event immediately upon invocation and renders a React component tree to guide the user through the setup wizard.
+The `/setup-vertex` command launches an interactive reconfiguration flow for Google Vertex AI integration, allowing users to update authentication credentials, project identifiers, region selection, or model pins without restarting the Claude Code CLI session. The command is implemented as a local JSX component, meaning it renders an interactive UI element inline within the terminal rather than executing a purely imperative script. Upon invocation, it immediately emits a telemetry event to signal that the setup flow has been initiated, then delegates rendering to a dedicated setup component.
+
+---
 
 ## Registration
 
@@ -34,92 +36,95 @@ license: "AGPL-3.0-only"
 
 Analysis basis: CC v2.1.143 bundle.js:+11222763
 
+---
+
 ## Input Branching
 
-The depth-2 call graph for this command is shallow: the command handler calls exactly two functions — a setup-initialisation helper and React's `createElement`. There are no documented argument-driven code paths surfaced at this traversal depth.
+The depth-2 call graph reveals a minimal branching structure: the command handler fires telemetry and then immediately delegates to a JSX rendering call. No argument-based branching was observed at this traversal depth.
 
 ```mermaid
 flowchart TD
-    A[User invokes /setup-vertex] --> B[Fire telemetry: tengu_vertex_setup_started]
-    B --> C[Call setup-initialisation helper]
-    C --> D[Render JSX setup wizard via createElement]
-    D --> E{Wizard interaction}
-    E -->|Authentication branch| F[<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->]
-    E -->|Project / Region branch| G[<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->]
-    E -->|Model pin branch| H[<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->]
-    E -->|Cancel / Complete| I[Wizard dismissed, state persisted]
+    A["/setup-vertex invoked"] --> B["Emit telemetry: tengu_vertex_setup_started"]
+    B --> C["Call setup-helper initializer"]
+    C --> D["Render Vertex setup JSX component via ap.createElement"]
+    D --> E["Interactive Vertex AI configuration UI displayed to user"]
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11222042 (call to setup-initialisation helper), +11222077 (call to `ap.createElement`)
+Analysis basis: CC v2.1.143 bundle.js:+11222042, +11222044, +11222077
+
+> **Note:** Internal branching within the rendered JSX component (e.g., auth-method selection, project/region input flows) was not captured at traversal depth ≤ 2.
+> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+
+---
 
 ## Behavioral Spec
 
-### Command Handler Entry Point
+### Command Entry and Telemetry Dispatch
+
+When the user invokes `/setup-vertex`, the command handler function (see Appendix) runs synchronously before any UI is shown. Its first action is to dispatch the `tengu_vertex_setup_started` telemetry event. This event carries no user-supplied payload — it is a presence signal only, confirming that the setup flow was entered.
 
 ```
-function setupVertexCommandHandler(commandContext):
-    fireAnalyticsEvent("tengu_vertex_setup_started")
-    wizardState = initializeVertexSetup(commandContext)
-    return createElement(VertexSetupWizardComponent, wizardState)
+function vertexSetupCommandHandler(context):
+    dispatchTelemetry("tengu_vertex_setup_started")
+    setupHelperResult = invokeSetupHelper(context)
+    return renderJSXComponent(setupHelperResult)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11222044 (telemetry emission), +11222042 (setup-initialisation call), +11222077 (JSX render call)
+Analysis basis: CC v2.1.143 bundle.js:+11222042, +11222044
 
-### Setup Initialisation Helper
+### JSX Component Rendering
 
-```
-function initializeVertexSetup(context):
-    // Loads existing Vertex AI configuration from persistent app state
-    // Prepares mutable wizard state object for the React component
-    // Returns initial props passed to the JSX wizard
-    existingConfig = readVertexConfigFromAppState(context)
-    return buildWizardProps(existingConfig)
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+11222042
-
-### JSX Wizard Rendering
+After telemetry dispatch, the handler calls a setup-helper initializer (see Appendix — `d`) and passes its result to `ap.createElement`, which is the React/JSX element factory used throughout the CC bundle. The resulting element is returned to the CC shell, which mounts it into the terminal UI.
 
 ```
-function renderVertexSetupWizard(props):
-    // ap.createElement is the aliased React.createElement in this bundle
-    return createElement(
-        VertexSetupWizardComponent,
-        props
-    )
+function renderVertexSetupUI(setupHelperResult):
+    element = createElement(VertexSetupComponent, setupHelperResult)
+    return element
 ```
 
 Analysis basis: CC v2.1.143 bundle.js:+11222077
 
-### Internal Numeric Constant
+### Numeric Constant
 
-A numeric literal with value `1` is present in the implementation context.
-Its precise role within the Vertex setup flow (e.g., a step index, a retry limit, or an enum sentinel) could not be determined at depth-2 traversal.
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+A numeric literal with value `1` appears in the implementation context reachable from this command.
 
 Analysis basis: CC v2.1.143 bundle.js:+56028
+
+> Its precise role (e.g., step index, retry count, enum value) could not be determined at traversal depth ≤ 2.
+> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+
+---
 
 ## State & Side Effects
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_vertex_setup_started` — fired synchronously at command entry (bundle.js:+11222044) |
+| Telemetry | `tengu_vertex_setup_started` — emitted immediately on command invocation (bundle.js:+11222044) |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | Vertex AI configuration fields (auth, project, region, model pins) are expected to be written upon wizard completion; precise keys <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Persistent config writes | Expected (project ID, region, model pins, auth method) but not confirmed at depth ≤ 2 <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Environment variables affected | Expected (`ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION`, or equivalent) but not confirmed at depth ≤ 2 <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+
+---
 
 ## Version History
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis |
+| v2.1.143 | Initial analysis — registration, telemetry event, and top-level call graph documented |
+
+---
 
 ## Common Mistakes
 
-1. **Invoking `/setup-vertex` when no Vertex AI integration is configured** — the command is a *reconfiguration* flow; behaviour when no prior Vertex configuration exists is not confirmed at depth-2 and may produce unexpected wizard states.
-2. **Expecting the command to accept inline arguments** — no argument-parsing logic was detected at depth-2 traversal; the command appears to be argument-free and opens an interactive wizard instead.
-3. **Assuming changes take effect immediately in the current session** — the exact moment at which updated Vertex AI settings are applied to in-flight requests is not confirmed by the available traversal data; verify session restart requirements if authentication changes appear not to take effect.
+1. **Assuming `/setup-vertex` applies to standard Anthropic API keys.** This command is specific to Google Vertex AI integration. Running it on a non-Vertex workspace will either show irrelevant options or fail silently depending on the current auth context.
+2. **Expecting immediate model availability after reconfiguration.** The command reconfigures credentials and pins but does not validate them against live Google Cloud endpoints within the setup flow itself (confirmation pending deeper traversal).
+3. **Confusing `/setup-vertex` with a one-time initialization command.** The description explicitly uses the word "Reconfigure," indicating it is safe and intended for repeated invocation to update existing Vertex settings.
+4. **Overlooking that telemetry fires before any user interaction.** The `tengu_vertex_setup_started` event is emitted at the moment of invocation, not upon completion. Analytics consumers should not treat this event as a signal that setup was successfully completed.
+5. **Expecting command-line arguments to control sub-flow.** No argument parsing was detected at traversal depth ≤ 2; the interactive UI component appears to handle all sub-selections internally.
+
+---
 
 ## Appendix — Identifier Mapping
 
@@ -127,5 +132,5 @@ Analysis basis: CC v2.1.143 bundle.js:+56028
 
 | Identifier | Role |
 |---|---|
-| `sZ7` | Command handler / entry-point function for `/setup-vertex` |
-| `d` | Setup-initialisation helper called at wizard launch |
+| `sZ7` | Vertex setup command handler function — top-level entry point for `/setup-vertex` |
+| `d` | Setup-helper initializer — called by the command handler before JSX rendering; likely prepares props or context for the setup component |

@@ -2,10 +2,14 @@
 type: feature-spec
 feature: "btw"
 cc_version: "2.1.143"
+updated: "2026-05-18"
 tags: ["btw", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
 analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+author: "ryujaeuk <ryujaeuk@gmail.com>"
+repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
+license: "AGPL-3.0-only"
 ---
 
 # `/btw`
@@ -17,7 +21,7 @@ analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
 
 ## Overview
 
-The `/btw` command allows the user to ask a quick side question without disrupting the current primary conversation context. It is classified as a `local-jsx` command that dispatches immediately via the `control-request` thin-client channel, injecting the question as a `system`-role message. When no argument is supplied the command emits a usage hint and returns without sending any request.
+`/btw` is a local JSX slash command that lets a user inject a quick side question into Claude Code without breaking the current conversational thread. When invoked, it immediately dispatches the question as a `control-request` to a background session, routing around the primary conversation queue. If no question text is provided, the command returns a usage hint instead of dispatching.
 
 ---
 
@@ -31,7 +35,7 @@ The `/btw` command allows the user to ask a quick side question without disrupti
 | argumentHint | `<question>` |
 | immediate | `true` |
 | thinClientDispatch | `control-request` |
-| module\_id | `Aqq` |
+| module_id | `Aqq` |
 
 Analysis basis: CC v2.1.143 bundle.js:+10059586
 
@@ -39,18 +43,23 @@ Analysis basis: CC v2.1.143 bundle.js:+10059586
 
 ## Input Branching
 
+The command entry point (render function of the JSX component) evaluates the user-supplied argument immediately and branches on whether text was provided.
+
 ```mermaid
 flowchart TD
-    A([User runs /btw]) --> B{Argument provided?}
-    B -- No / empty --> C[Emit usage string\n'Usage: /btw <your question>'\nvia system message]
-    C --> Z([Return — no request sent])
-    B -- Yes --> D[Build system-role message\ncontaining the question text]
-    D --> E[Dispatch via control-request\nthin-client channel]
-    E --> F[Render JSX response element\nvia lK.createElement]
-    F --> Z2([Return to caller])
+    A([User types /btw]) --> B{Argument text present?}
+    B -- No --> C[Return usage string\n'Usage: /btw <your question>']
+    B -- Yes --> D[Build system message\nwith role='system']
+    D --> E[Dispatch via thinClientDispatch\n= 'control-request']
+    E --> F[Background session handler\nresolves question asynchronously]
+    F --> G{Config lock available?}
+    G -- Contention detected --> H[Emit tengu_config_lock_contention\nLog warning]
+    G -- Lock acquired --> I[Read / write config via\natomic file operations]
+    I --> J[Return result to UI\nwithout disturbing main thread]
+    H --> I
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10059182, +10059184, +10059223, +10059292
+Analysis basis: CC v2.1.143 bundle.js:+10059182 (entry point), +10059184 (usage literal), +10059223 (system role literal), +10059292 (JSX render)
 
 ---
 
@@ -58,148 +67,137 @@ Analysis basis: CC v2.1.143 bundle.js:+10059182, +10059184, +10059223, +10059292
 
 ### 1. Argument Validation and Usage Guard
 
-When the command handler (`commandHandler`) is invoked it immediately checks whether the user supplied a non-empty argument string.
+When the command component renders, it immediately inspects the argument string passed by the CLI input layer. If the trimmed argument is empty or absent, the component returns a static usage string to the UI and halts further processing.
 
 ```
-function commandHandler(userInput):
-    question = userInput.trim()
-
-    if question is empty:
-        emit systemMessage("Usage: /btw <your question>")
-        return early   // no side-effects beyond the hint
+function renderBtwCommand(argumentText):
+    if argumentText is null or trim(argumentText) == "":
+        return StaticMessage("Usage: /btw <your question>")
+    else:
+        return dispatchSideQuestion(argumentText)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10059182, +10059184
+Analysis basis: CC v2.1.143 bundle.js:+10059184 (usage string literal), +10059182 (validation branch)
 
 ---
 
 ### 2. Side-Question Dispatch
 
-When a non-empty question is present the handler constructs a message envelope with role `"system"` and forwards it through the `control-request` thin-client dispatch path. Because `immediate: true` is set in the registration the dispatch occurs synchronously in the same event-loop turn rather than being queued.
+A non-empty argument is wrapped in a message object with role `"system"` and forwarded through the `thinClientDispatch` channel tagged `"control-request"`. Because `immediate: true` is set on the registration, the CLI invokes this render path synchronously without queuing it behind pending assistant turns.
 
 ```
-function dispatchSideQuestion(question):
-    envelope = {
+function dispatchSideQuestion(questionText):
+    message = {
         role: "system",
-        content: question
+        content: questionText
     }
-    sendViaControlRequest(envelope)
+    send via thinClientDispatch("control-request", message)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10059223, +10059246
+Analysis basis: CC v2.1.143 bundle.js:+10059223 (role literal), +10059246 (dispatch call edge `JO7` → `a6`), +10059586 (registration `thinClientDispatch` field)
 
 ---
 
-### 3. JSX Render
+### 3. Background Session Routing
 
-After dispatch the handler constructs and returns a React element (via `lK.createElement`) that surfaces the response inline in the terminal UI without replacing the primary conversation view.
-
-```
-function renderResponse(responsePayload):
-    return createElement(InlineResponseComponent, { payload: responsePayload })
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+10059292
-
----
-
-### 4. Jitter Helper (Internal Utility — `randomJitterDelay`)
-
-The call-graph reaches a utility used elsewhere in the config subsystem that introduces random jitter before retrying a locked resource. It is not specific to `/btw` user-visible behavior but is reachable through the shared config-persistence layer invoked on dispatch.
+The dispatch reaches the background session manager (`a6` → `P9_` call chain). The session manager resolves a target background worker, acquires a file-system config lock, and forwards the question as a lightweight control message. The main conversation thread is not paused during this operation.
 
 ```
-function randomJitterDelay():
-    base       = 1          // lower bound multiplier
-    ceiling    = 2          // upper bound multiplier
-    jitter     = Math.random() * ceiling + base
-    setTimeout(retryCallback, jitter)
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+12638154, +12638156, +12638170, +12638193
-
----
-
-### 5. Config Persistence Layer (`saveConfigWithLock`)
-
-The dispatch path calls into the shared config-persistence subsystem to durably record any session state change. Key behavioral invariants observed in this subsystem are documented below because they affect whether `/btw` dispatch succeeds or is refused.
-
-```
-function saveConfigWithLock(configDelta):
-
-    // Attempt file-system lock
-    acquired = acquireLock()
-
-    if not acquired within timeout (60000 ms):
+function routeToBackgroundSession(controlMessage):
+    lock = acquireConfigLock()           // may emit lock-contention telemetry
+    if lock.contentionDetected:
         emitTelemetry("tengu_config_lock_contention")
         logWarning("Lock acquisition took longer than expected - another Claude instance may be running")
-        // continues with degraded path after warning
+    session = resolveOrSpawnBackgroundSession()
+    session.send(controlMessage)
+    releaseConfigLock(lock)
+```
 
-    // Re-read config from disk before writing
-    diskConfig = readFileSync(configPath, encoding="utf-8")
+Analysis basis: CC v2.1.143 bundle.js:+10059246 (`JO7`→`a6`), +3159299 (`a6`→`P9_`), +3162208 (lock-contention warning literal), +3162297 (`tengu_config_lock_contention` event)
 
-    if diskConfig is missing auth AND cachedConfig has auth:
+---
+
+### 4. Config Access and Atomic Write Path
+
+Whenever the background session must persist state, the config subsystem (`P9_` / `H$H`) performs atomic file writes: it reads the current config, validates that auth fields are still present, writes to a temp file, and renames atomically. If auth data would be lost, the write is aborted and telemetry is emitted.
+
+```
+function saveConfigAtomically(newConfig, cachedConfig):
+    current = readConfigFromDisk()          // utf-8, bundle.js:+3164324
+    if cachedConfig has auth AND current lacks auth:
         emitTelemetry("tengu_config_auth_loss_prevented")
-        refuse()   // abort write; log GH #3117 reference
-        return
-
-    if diskConfig is stale:
+        logWarning("saveConfigWithLock: re-read config is missing auth …")
+        return ERROR
+    if staleness detected:
         emitTelemetry("tengu_config_stale_write")
-
-    // Rotate backup files; keep at most 5 backups
-    backups = listFiles(configDir).filter(name startsWith ".backup.")
-    if backups.length > 5:
-        removeOldestBackup()
-
-    // Write with mode 384 (octal 0o600 — owner read/write only)
-    writeFileSync(configPath, serialized, { mode: 384, encoding: "utf-8" })
-
-    releaseLock()
+    tempPath = buildTempPath(Date.now())
+    writeFileSync(tempPath, serialize(newConfig))
+    fchmodSync(tempPath, 0o600)             // mode 384 decimal, bundle.js:+3163509
+    fsyncSync(tempPath)
+    renameSync(tempPath, configPath)        // atomic replace
+    backupOldConfig(configPath)             // keeps up to 5 backups, bundle.js:+3163227
 ```
 
-Limits and constants:
-- Lock-wait timeout: **60 000 ms** (bundle.js:+3162978)
-- Maximum backup files retained: **5** (bundle.js:+3163227)
-- Config file write mode: **384** (0o600, owner read/write) (bundle.js:+3163509)
-- Encoding: **`"utf-8"`** (bundle.js:+3163496)
-- Lock-contention threshold log level: **`"error"`** (bundle.js:+3162165)
-- Lock-contention poll count before warning: **100** attempts (bundle.js:+3162202)
-- Backup filename prefix: **`".backup."`** (bundle.js:+3163094)
-
-Analysis basis: CC v2.1.143 bundle.js:+3162082, +3162165, +3162202, +3162208, +3162297, +3162433, +3162555, +3162624, +3162776, +3162978, +3163094, +3163227, +3163509
+Analysis basis: CC v2.1.143 bundle.js:+3162624 (auth-loss warning literal), +3162776 (`tengu_config_auth_loss_prevented`), +3162433 (`tengu_config_stale_write`), +3163509 (mode 384), +3163227 (backup count 5), +3164324 (utf-8 literal)
 
 ---
 
-### 6. Global Config Fallback (`saveGlobalConfigFallback`)
+### 5. Background Spare Session Pool
 
-A secondary fallback path mirrors the auth-loss guard for the global config file.
+When no existing background session is available, the session manager may spawn a fresh worker and optionally maintain a "spare" warm session for low-latency future `/btw` calls. Memory pressure triggers a protective teardown path.
 
 ```
-function saveGlobalConfigFallback(configDelta):
-    diskConfig = readGlobalConfig()
-
-    if diskConfig is missing auth AND cachedConfig has auth:
-        // Refuse write — see GH #3117
-        log("saveGlobalConfig fallback: re-read config is missing auth that cache has; refusing to write. See GH #3117.")
-        return
-
-    writeGlobalConfig(configDelta)
+function resolveOrSpawnBackgroundSession():
+    existing = sessionPool.get(key)
+    if existing is alive:
+        return existing
+    if memoryFree < threshold:                   // threshold uses os.freemem()
+        emitTelemetry("tengu_bg_dispatch_low_mem")
+        return ERROR
+    spare = sessionPool.findSpare("spare")       // literal "spare", bundle.js:+14503931
+    if spare exists:
+        emitTelemetry("tengu_bg_spare_claim")
+        spare.promote()
+        return spare
+    worker = spawnWorker()
+    emitTelemetry("tengu_bg_spare_enable")
+    sessionPool.set(key, worker)
+    return worker
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+3159506
+Analysis basis: CC v2.1.143 bundle.js:+14503796 (`tengu_bg_dispatch_low_mem`), +14503931 ("spare" literal), +14504411 (`tengu_bg_spare_enable`), +14504532 (`tengu_bg_spare_claim`), +14504795 (`tengu_bg_spare_claim_fail`), +14504854 (`fU.spawn`)
 
 ---
 
-### 7. Config Access Guard
+### 6. Jitter Utility
 
-Reading the config before the session is fully initialized raises a hard error.
+A small random-jitter helper (`H`) is called from the command entry point. It generates a floating-point random value using `Math.random`, scales it between 1 and 2, and schedules a deferred callback with `setTimeout`. This is consistent with retry back-off or anti-thundering-herd logic when multiple `/btw` calls occur simultaneously.
 
 ```
-function readConfig():
-    if sessionNotYetAllowed:
-        throw Error("Config accessed before allowed.")
+function jitteredDelay(callback):
+    factor = 1 + Math.random() * (2 - 1)    // range [1, 2), literals bundle.js:+12638154, +12638170
+    delay  = baseDelay * factor
+    setTimeout(callback, delay)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+3164235, +3164241
+Analysis basis: CC v2.1.143 bundle.js:+10059182 (`JO7`→`H`), +12638156 (`Math.random`), +12638193 (`setTimeout`), +12638154 (literal 2), +12638170 (literal 1)
+
+---
+
+### 7. SIGKILL Escalation for Stuck Background Workers
+
+If a background session worker does not respond within the grace period, the session manager escalates from a soft termination signal to SIGKILL. Grace periods are 30 seconds for soft kill and 15 seconds for the escalation window.
+
+```
+function terminateWorkerForcibly(worker):
+    worker.kill(softSignal)
+    wait(30 seconds)                           // bundle.js:+14503172
+    if worker still alive:
+        setTimeout(() => worker.kill("SIGKILL"), 15_000)   // bundle.js:+14503183, +14503265
+        emitTelemetry("tengu_bg_dispatch_sigkill_escalate")
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+14503217 (`tengu_bg_dispatch_sigkill_escalate`), +14503172 (literal 30), +14503183 (literal 15), +14503265 ("SIGKILL" literal)
 
 ---
 
@@ -207,15 +205,21 @@ Analysis basis: CC v2.1.143 bundle.js:+3164235, +3164241
 
 | Item | Detail |
 |---|---|
-| Telemetry — `tengu_config_lock_contention` | Emitted when the config-file lock cannot be acquired within the expected window (bundle.js:+3162297) |
-| Telemetry — `tengu_config_stale_write` | Emitted when a write is attempted against a config that appears stale relative to the in-memory cache (bundle.js:+3162433) |
-| Telemetry — `tengu_config_auth_loss_prevented` | Emitted when a write is refused because it would erase authentication credentials present in the cache (bundle.js:+3162776) |
-| Telemetry — `tengu_config_parse_error` | Emitted when the on-disk config file cannot be parsed (bundle.js:+3164878) |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry — `tengu_config_lock_contention` | Emitted when config file lock takes longer than expected; suggests another Claude instance is running. bundle.js:+3162297 |
+| Telemetry — `tengu_config_stale_write` | Emitted when a config write is detected as potentially stale. bundle.js:+3162433 |
+| Telemetry — `tengu_config_parse_error` | Emitted when the config file cannot be parsed. bundle.js:+3164878 |
+| Telemetry — `tengu_bg_dispatch_sigkill_escalate` | Emitted when a background worker is force-killed with SIGKILL. bundle.js:+14503217 |
+| Telemetry — `tengu_bg_dispatch_low_mem` | Emitted when free memory is below threshold, preventing new worker spawn. bundle.js:+14503796 |
+| Telemetry — `tengu_bg_spare_enable` | Emitted when a spare warm session is created for future reuse. bundle.js:+14504411 |
+| Telemetry — `tengu_bg_spare_claim` | Emitted when an existing spare session is successfully claimed. bundle.js:+14504532 |
+| Telemetry — `tengu_bg_spare_claim_fail` | Emitted when spare session claim fails (e.g., memory pressure). bundle.js:+14504795 |
+| Telemetry — `tengu_config_auth_loss_prevented` | Emitted when a config write is blocked because it would erase auth credentials. bundle.js:+3162776 |
+| Hook registration | `immediate: true` — CLI invokes the render function synchronously; no queuing behind pending assistant turns. bundle.js:+10059586 |
+| thinClientDispatch | Routes the question as `"control-request"` to the background session layer, bypassing the main conversation channel. bundle.js:+10059586 |
+| appState changes | The main conversation `appState` is **not** modified directly; side-question state is managed within the background session pool. |
+| Config file mutations | Atomic rename-based writes to `~/.claude.json`; up to 5 rotating backups kept in a `backups/` subdirectory. bundle.js:+3163227, +3163809 |
+| Worker lifecycle | Spawns background worker via `fU.spawn`; manages spare pool; escalates to SIGKILL after 30 s + 15 s grace. bundle.js:+14504854, +14503172, +14503183 |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Control-request dispatch | Sends the side question as a `"system"`-role message through the `control-request` thin-client channel immediately (bundle.js:+10059223, +10059246) |
-| Config file write | May write `~/.claude.json` at mode 0o600 as a side effect of session state persistence; up to 5 `.backup.*` rotations are maintained (bundle.js:+3163509, +3163227) |
 
 ---
 
@@ -223,17 +227,21 @@ Analysis basis: CC v2.1.143 bundle.js:+3164235, +3164241
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis |
+| v2.1.143 | Initial analysis — `local-jsx` registration confirmed; `thinClientDispatch: "control-request"` routing; spare session pool; atomic config writes with auth-loss guard. |
 
 ---
 
 ## Common Mistakes
 
-1. **Omitting the question argument** — Running `/btw` with no argument produces only the usage hint (`Usage: /btw <your question>`) and sends nothing to the model. Always include the question text directly after the command.
-2. **Expecting the side question to appear in the primary transcript** — `/btw` dispatches via `control-request` and renders inline; it does not inject a user-turn message into the main conversation history visible to subsequent prompts.
-3. **Assuming `/btw` tolerates concurrent Claude instances** — The shared config-persistence layer serializes writes with a file lock. A second Claude process running simultaneously can trigger `tengu_config_lock_contention` warnings and slow down or block the dispatch path.
-4. **Confusing `immediate: true` with non-blocking** — `immediate` means the command fires in the same event-loop tick without waiting for a queue slot; it does not mean the underlying HTTP/IPC call completes synchronously.
-5. **Tampering with `.backup.*` files** — The config subsystem reads directory listings to count and prune backup files. Manually placing extra `.backup.*`-prefixed files in the config directory may cause legitimate backups to be deleted prematurely (the system retains at most 5).
+1. **Omitting the question text** — Typing `/btw` with no argument produces only the usage hint `"Usage: /btw <your question>"` and dispatches nothing. Always supply the question inline: `/btw <your question>`. Analysis basis: CC v2.1.143 bundle.js:+10059184
+
+2. **Expecting a synchronous main-thread response** — Because the command routes through `thinClientDispatch: "control-request"`, the answer arrives asynchronously through the background session layer. The primary conversation is not paused, so the reply may appear slightly after the next main-thread turn.
+
+3. **Triggering lock contention with multiple simultaneous instances** — Running more than one Claude Code instance against the same working directory can cause `tengu_config_lock_contention` and delayed config writes. The warning literal `"Lock acquisition took longer than expected - another Claude instance may be running"` confirms this scenario. Analysis basis: CC v2.1.143 bundle.js:+3162208
+
+4. **Assuming the spare session pool is always available under memory pressure** — If free memory falls below the internal threshold, the background worker spawn is refused and `tengu_bg_dispatch_low_mem` is emitted. In this state, `/btw` will fail silently at the dispatch layer. Analysis basis: CC v2.1.143 bundle.js:+14503796
+
+5. **Misreading the `immediate` flag as "instant response"** — `immediate: true` means the CLI renders the command component without waiting for prior assistant turns to finish, not that the AI reply is instantaneous.
 
 ---
 
@@ -243,15 +251,43 @@ Analysis basis: CC v2.1.143 bundle.js:+3164235, +3164241
 
 | Identifier | Role |
 |---|---|
-| `JO7` | Top-level `/btw` command handler (entry point) |
-| `H` | Random jitter delay utility |
-| `a6` | Config save orchestrator (coordinates lock, read, write) |
-| `P9_` | Config-with-lock writer (primary config path, backup rotation) |
-| `emH` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| `OZ9` | Object-entries iterator helper (config delta enumeration) |
-| `HpH` | Timestamp / Date.now wrapper for config change tracking |
-| `v` | Config read / access helper with debug logging |
-| `H$H` | Global config file reader with parse-error guard |
-| `d76` | Config serializer / diff utility |
-| `d` | Low-level file-write helper |
-| `j9_` | Atomic temp-file writer (dirname + write + rename pattern) |
+| `JO7` | `/btw` command component — top-level render / entry-point function |
+| `H` | Jitter delay utility — computes random back-off and calls `setTimeout` |
+| `a6` | Background session dispatch coordinator — routes control-request messages |
+| `P9_` | Config lock and atomic save orchestrator |
+| `_` | Filesystem abstraction layer (low-level sync operations) |
+| `x6` | Path existence / accessibility checker |
+| `L` | Primary filesystem wrapper with lock tracking (`statSync`, `mkdirSync`, etc.) |
+| `q` | Secondary filesystem handle (used for `readFileSync`, `unlinkSync`, etc.) |
+| `f` | Promise/async resource finalizer (`.finally` cleanup handler) |
+| `heA` | Message object builder / envelope constructor |
+| `Tr8` | Serialization helper called by message builder |
+| `v` | HTTP / API request dispatcher |
+| `G5K` | HTTP connection manager |
+| `hH` | JSON serializer wrapper (`JSON.stringify`) |
+| `P7` | Request header builder and redactor |
+| `cSH` | Request signing / credential injection helper |
+| `Z5K` | Streaming response reader and byte-length tracker |
+| `d` | Logger / debug sink |
+| `L8` | Structured error constructor |
+| `H$H` | Config file reader with parse, backup, and access-guard logic |
+| `R6` | JSON parse wrapper (`JSON.parse`) |
+| `jR` | Config key prefix stripper (`startsWith` / `slice`) |
+| `zZ9` | Backup directory enumerator and rotator |
+| `NH` | Error reporter / `logError` dispatcher |
+| `X9_` | Backup file path builder (`lz.join` + timestamp) |
+| `w` | Background worker / child-process lifecycle manager |
+| `d76` | Diff / change-set utility |
+| `A` | Process registry map (worker PID → handle) |
+| `V` | Config field validator |
+| `X` | SDK client connection factory |
+| `iT8` | Transport type selector (`http` / `sse` / `dynamic`) |
+| `v_` | Error coercion utility (`Error` + `String`) |
+| `Z` | Sliding-window slice helper for backup rotation |
+| `yA6` | Atomic file writer (temp-write → fchmod → fsync → rename) |
+| `O` | Symbolic-link stat inspector |
+| `$8` | ENOENT / ELOOP guard wrapper |
+| `emH` | Session event emitter |
+| `OZ9` | Session options enumerator (`Object.entries`) |
+| `HpH` | Session heartbeat / timestamp tracker (`Date.now`) |
+| `j9_` | Config directory initializer (dirname + mkdirSync) |
