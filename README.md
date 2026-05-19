@@ -67,16 +67,16 @@ No configuration needed. The binary auto-detects your installed CC version and l
 
 ## Current spec coverage
 
-| CC Version | Commands | Verified |
-|---|---|---|
-| v2.1.132 | 56 | ✓ |
-| v2.1.133 | 84 | ✓ |
-| v2.1.139 | 86 | ✓ |
-| v2.1.141 | 85 | ✓ |
-| v2.1.142 | 85 | ✓ |
-| v2.1.143 | 87 | ✓ |
+| CC Version | Commands | Depth | Verified |
+|---|---|---|---|
+| v2.1.132 | 56 | 2 | ✓ |
+| v2.1.133 | 84 | 2 | ✓ |
+| v2.1.139 | 85 | 2 | ✓ |
+| v2.1.141 | 85 | 2 | ✓ |
+| v2.1.142 | 85 | 2 | ✓ |
+| v2.1.143 | 58 | **4** | ✓ |
 
-Each spec is verified against the actual release — not inferred from official documentation. The pipeline re-analyzes only commands whose behavioral fingerprint changed between versions (~40% per minor release), copying the rest forward.
+Each spec is verified against the actual release — not inferred from official documentation. The pipeline re-analyzes only commands whose behavioral fingerprint changed between versions (~40% per minor release), copying the rest forward. Starting from v2.1.143, all specs are extracted at call-graph depth 4, exposing daemon internals, IPC error codes, and timeout constants not reachable at depth 2.
 
 ---
 
