@@ -13,11 +13,23 @@ set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 로컬 시크릿 로드 (커밋되지 않음)
+[[ -f "$SCRIPT_DIR/../.env.local" ]] && source "$SCRIPT_DIR/../.env.local"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 AVX2_REPO="/Volumes/juryu_home/with_AI/projects/0x.tools/caludeCodeAVX2"
 ARTIFACTS_DIR="$AVX2_REPO/artifacts"
 GATEWAY_BIN="/Volumes/juryu_home/with_AI/projects/06.DenoV8POC/01.Tools/claude-gateway/target/release/claude-agent-rs"
 LOG_FILE="/tmp/cc-gnothi-sync.log"
+TG_TOKEN="${CC_GNOTHI_TG_TOKEN:-}"
+TG_CHAT_ID="${CC_GNOTHI_TG_CHAT_ID:-}"
+
+tg_notify() {
+  [[ -z "${TG_TOKEN}" ]] && return 0
+  curl -s "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+    -d chat_id="${TG_CHAT_ID}" \
+    -d text="$1" > /dev/null 2>&1 || true
+}
 LOCKFILE="/tmp/cc-gnothi-sync.lock"
 LOG_PREFIX="[cc-gnothi $(date '+%Y-%m-%d %H:%M')]"
 
@@ -142,6 +154,7 @@ EOF
     ANALYZED_VERSIONS="${ANALYZED_VERSIONS}
 ${ver}"
     echo "$LOG_PREFIX Pushed v${ver} (${SPEC_COUNT} specs)"
+    tg_notify "🆕 cc-gnothi v${ver} 분석 완료 (${SPEC_COUNT} specs, diff from v${PREV_VER})"
   else
     echo "$LOG_PREFIX WARN: no specs generated for v${ver}"
   fi
