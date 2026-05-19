@@ -122,7 +122,7 @@ for i in "${!ALL_SORTED[@]}"; do
   fi
 
   echo "$LOG_PREFIX Analyzing v${ver} (diff from v${PREV_VER})..."
-  bash "$SCRIPT_DIR/analyze-all.sh" --version "$ver" --from-version "$PREV_VER"
+  bash "$SCRIPT_DIR/analyze-all.sh" --version "$ver" --from-version "$PREV_VER" --depth 4
 
   echo "$LOG_PREFIX Analyzing system context for v${ver}..."
   bash "$SCRIPT_DIR/analyze-system-context.sh" --version "$ver" \
