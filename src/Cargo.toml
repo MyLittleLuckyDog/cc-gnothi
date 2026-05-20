@@ -5,6 +5,7 @@ edition = "2024"
 license = "AGPL-3.0-only"
 description = "MCP server for cc-gnothi: Claude Code self-knowledge system"
 repository = "https://github.com/MyLittleLuckyDog/cc-gnothi"
+build = "build.rs"
 
 [dependencies]
 rmcp = { version = "1.7.0", features = ["server", "transport-io", "macros"] }
@@ -19,3 +20,8 @@ rust-embed = { version = "8", features = ["compression", "include-exclude"] }
 reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# self-update
+flate2 = "1"
+tar = "0.4"
+fs2 = "0.4"
+dirs = "5"

@@ -10,6 +10,7 @@
 mod embedded;
 mod fetcher;
 mod loader;
+mod self_update;
 mod server;
 mod store;
 
@@ -30,6 +31,28 @@ async fn main() -> Result<()> {
         .with_env_filter(EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
         .init();
+
+    // Self-update runs in the background so MCP startup is never blocked.
+    // Any failure is logged and the current binary keeps serving as-is.
+    // The downloaded binary becomes effective on the NEXT launch — atomic
+    // rename keeps the current process's mmap'd inode alive.
+    tokio::spawn(async {
+        match self_update::try_update().await {
+            self_update::Outcome::Installed { from, to } => {
+                tracing::info!(
+                    "self-updated cc-gnothi-mcp {} -> {} (effective on next launch)",
+                    from,
+                    to
+                );
+            }
+            self_update::Outcome::Skipped(reason) => {
+                tracing::debug!("self-update skipped: {}", reason);
+            }
+            self_update::Outcome::Disabled => {
+                tracing::debug!("self-update disabled via CC_GNOTHI_NO_AUTO_UPDATE");
+            }
+        }
+    });
 
     let args = parse_args();
     let (chunks, cc_version) = resolve_chunks(&args).await?;
