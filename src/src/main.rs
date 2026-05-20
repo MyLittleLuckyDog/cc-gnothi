@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
     // Any failure is logged and the current binary keeps serving as-is.
     // The downloaded binary becomes effective on the NEXT launch — atomic
     // rename keeps the current process's mmap'd inode alive.
-    tokio::spawn(async {
+    let update_handle = tokio::spawn(async {
         match self_update::try_update().await {
             self_update::Outcome::Installed { from, to } => {
                 tracing::info!(
@@ -63,9 +63,16 @@ async fn main() -> Result<()> {
     let server = server::GnothiServer::new(store, cc_version);
 
     let transport = rmcp::transport::stdio();
-    server
-        .serve(transport)
-        .await
+    let server_result = server.serve(transport).await;
+
+    // If the server exits very quickly (e.g. stdio closed before initialize,
+    // or a smoke test), give the in-flight self-update task a short window
+    // to finish before the tokio runtime drops it. Real MCP sessions run for
+    // minutes-to-hours and this timeout is a no-op there.
+    let _ =
+        tokio::time::timeout(std::time::Duration::from_secs(30), update_handle).await;
+
+    server_result
         .context("MCP server error")?
         .waiting()
         .await
