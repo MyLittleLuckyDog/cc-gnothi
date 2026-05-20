@@ -10,7 +10,7 @@
 # Idempotent: versions with committed specs are skipped.
 set -euo pipefail
 
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/sbin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -57,10 +57,14 @@ fi
 # ── Pull latest bundles ───────────────────────────────────────────────────────
 
 echo "$LOG_PREFIX Pulling caludeCodeAVX2..."
-git -C "$AVX2_REPO" pull --ff-only origin main 2>&1 | head -3
+# capture then print: avoids SIGPIPE aborting the script under `set -o pipefail`
+# when fast-forward output exceeds `head -N` lines
+pull_out=$(git -C "$AVX2_REPO" pull --ff-only origin main 2>&1)
+echo "$pull_out" | head -3
 
 echo "$LOG_PREFIX Pulling cc-gnothi..."
-git -C "$REPO_ROOT" pull --ff-only origin main 2>&1 | head -3
+pull_out=$(git -C "$REPO_ROOT" pull --ff-only origin main 2>&1)
+echo "$pull_out" | head -3
 
 # ── Detect analyzed vs new versions ──────────────────────────────────────────
 
