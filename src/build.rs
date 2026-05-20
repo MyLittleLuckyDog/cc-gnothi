@@ -6,4 +6,7 @@ fn main() {
     let target = std::env::var("TARGET").expect("TARGET set by cargo");
     println!("cargo:rustc-env=TARGET_TRIPLE={target}");
     println!("cargo:rerun-if-changed=build.rs");
+    // rust-embed bakes versions/ at compile time; force a rebuild when any
+    // spec under that tree changes so the binary picks up new specs.
+    println!("cargo:rerun-if-changed=../versions");
 }
