@@ -90,11 +90,11 @@ function buildIndex(src, version) {
     },
   });
 
-  // Pass 2: w6(MODULE_OBJ, { PROP: () => FN_ID }) — module exports
+  // Pass 2: w6/P6(MODULE_OBJ, { PROP: () => FN_ID }) — module exports (P6 since v2.1.150)
   walk(ast, {
     CallExpression(node) {
       const callee = node.callee;
-      if (callee.type !== 'Identifier' || callee.name !== 'w6') return;
+      if (callee.type !== 'Identifier' || !['w6', 'P6'].includes(callee.name)) return;
       const [target, exportsObj] = node.arguments;
       if (!target || target.type !== 'Identifier') return;
       if (!exportsObj || exportsObj.type !== 'ObjectExpression') return;
