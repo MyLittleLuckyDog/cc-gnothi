@@ -286,13 +286,36 @@ function buildIndex(src, version) {
     },
   });
 
-  // Pass 2: w6/P6(MODULE_OBJ, { PROP: () => FN_ID }) — module exports (P6 since v2.1.150)
+  // Pass 2a — collect candidate module-wrapper callees by finding the
+  // `var MODID = {};` pattern. The wrapper convention is:
+  //
+  //     var oF_ = {};
+  //     X6(oF_, { call:()=>LE6, ... });
+  //
+  // Earlier minifier builds used w6 / P6 as the wrapper name; v2.1.158
+  // ships X6 (and ~432 other instances of the same shape). Hard-coding
+  // the wrapper name has been the silent-누락 source up to PR #1. We
+  // now auto-detect: any function called with (MODID, {...}) where
+  // MODID was previously assigned `{}` counts as a module-export call.
+  const emptyObjModIds = new Set();
+  walk(ast, {
+    VariableDeclarator(node) {
+      if (node.id?.type !== 'Identifier') return;
+      if (node.init?.type !== 'ObjectExpression') return;
+      if ((node.init.properties || []).length !== 0) return;
+      emptyObjModIds.add(node.id.name);
+    },
+  });
+
+  // Pass 2b — MODULE_WRAPPER(MODULE_OBJ, { PROP: () => HANDLER_IDENT })
+  // for any wrapper that targets one of the empty-object module ids.
   walk(ast, {
     CallExpression(node) {
       const callee = node.callee;
-      if (callee.type !== 'Identifier' || !['w6', 'P6'].includes(callee.name)) return;
+      if (callee.type !== 'Identifier') return;
       const [target, exportsObj] = node.arguments;
       if (!target || target.type !== 'Identifier') return;
+      if (!emptyObjModIds.has(target.name)) return;
       if (!exportsObj || exportsObj.type !== 'ObjectExpression') return;
       const modId = target.name;
       if (!moduleExports[modId]) moduleExports[modId] = {};
@@ -300,7 +323,7 @@ function buildIndex(src, version) {
         if (prop.type !== 'ObjectProperty') continue;
         const propName = prop.key.name || prop.key.value;
         if (!propName) continue;
-        // () => IDENT  →  record IDENT
+        // () => IDENT  →  record IDENT  (the common shape)
         const val = prop.value;
         if (
           val.type === 'ArrowFunctionExpression' &&

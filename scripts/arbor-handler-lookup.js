@@ -156,17 +156,56 @@ function main() {
   );
 
   const cmds = index.commands;
+  const moduleExports = index.moduleExports || {};
+  // Name → first symbol with that name (Arbor's index can have many
+  // same-name entries; we want the *declared* one, typically a
+  // top-level Function / Method / AsyncFunction / Struct).
+  const byName = new Map();
+  for (const s of graph.symbols) {
+    if (!s.name) continue;
+    if (!byName.has(s.name)) byName.set(s.name, s);
+  }
+  // Property name → ranking for picking the "real" handler when a
+  // module exports several. Lower = preferred.
+  const HANDLER_PROP_RANK = {
+    default: 0, call: 1, handler: 2, run: 3, default_1: 4,
+  };
+
   const totals = {
-    total:                 0,
-    with_byte_range:       0,
-    arbor_returned_hits:   0,
-    handler_resolved:      0,
+    total:                  0,
+    with_byte_range:        0,
+    direct_hit:             0,        // path 1 — symbol-in-range
+    via_module_id:          0,        // path 2 — module_id → arbor name lookup
+    handler_resolved:       0,        // either path
+    no_resolution:          0,
     multi_hit_disambiguated: 0,
-    single_hit:            0,
-    no_hits:               0,
+    single_hit:             0,
   };
   const perCmd = [];
   const unresolved = [];
+
+  function lookupViaModuleId(reg) {
+    const mid = reg.module_id;
+    if (!mid) return null;
+    const exports = moduleExports[mid];
+    if (!exports || Object.keys(exports).length === 0) return null;
+    // Rank exports: prefer known handler property names; otherwise
+    // take the lowest-ranked (= first declared) property whose ident
+    // resolves in Arbor's symbol set.
+    const entries = Object.entries(exports);
+    entries.sort((a, b) => {
+      const ra = HANDLER_PROP_RANK[a[0]] ?? 100 + a[0].length;
+      const rb = HANDLER_PROP_RANK[b[0]] ?? 100 + b[0].length;
+      return ra - rb;
+    });
+    for (const [propName, identName] of entries) {
+      const sym = byName.get(identName);
+      if (sym) {
+        return { sym, via: { module_id: mid, prop: propName, ident: identName } };
+      }
+    }
+    return null;
+  }
 
   for (const [name, reg] of Object.entries(cmds)) {
     totals.total++;
@@ -180,18 +219,36 @@ function main() {
     const qEnd   = byteToLineCol(lineStarts, reg.loc_byte_end);
 
     const hits = symbols.filter((s) => overlaps(s, qStart, qEnd));
-    if (hits.length === 0) {
-      totals.no_hits++;
-      unresolved.push({ name, reason: 'no symbols in range' });
-      continue;
-    }
-    totals.arbor_returned_hits++;
+    let handler = null;
+    let resolutionPath = null;
 
-    const handler = pickHandler(hits, reg.handler_method);
+    if (hits.length > 0) {
+      handler = pickHandler(hits, reg.handler_method);
+      if (handler) {
+        resolutionPath = 'direct';
+        totals.direct_hit++;
+        if (hits.length === 1) totals.single_hit++;
+        else if (handler.name === reg.handler_method) totals.multi_hit_disambiguated++;
+      }
+    }
+
+    // Path 2 — anonymous arrow only (e.g. usage-credits): no named
+    // symbol inside the byte range. Follow module_id into the
+    // moduleExports map and resolve the export identifier in Arbor's
+    // global symbol table.
+    let viaModuleId = null;
+    if (!handler) {
+      const r = lookupViaModuleId(reg);
+      if (r) {
+        handler = r.sym;
+        viaModuleId = r.via;
+        resolutionPath = 'module_id';
+        totals.via_module_id++;
+      }
+    }
+
     if (handler) {
       totals.handler_resolved++;
-      if (hits.length === 1) totals.single_hit++;
-      else if (handler.name === reg.handler_method) totals.multi_hit_disambiguated++;
       perCmd.push({
         cmd:        name,
         type:       reg.type,
@@ -203,8 +260,19 @@ function main() {
           kind: handler.kind,
           loc:  handler.location,
         },
-        n_hits: hits.length,
-        hint:   reg.handler_method || null,
+        n_hits:           hits.length,
+        hint:             reg.handler_method || null,
+        resolution_path:  resolutionPath,
+        via_module_id:    viaModuleId,
+      });
+    } else {
+      totals.no_resolution++;
+      unresolved.push({
+        name,
+        reason: hits.length === 0 ? 'no symbols in range, no module_id resolution'
+                                   : 'pickHandler returned null',
+        module_id: reg.module_id || null,
+        module_exports_known: !!(reg.module_id && moduleExports[reg.module_id]),
       });
     }
   }
@@ -223,11 +291,12 @@ function main() {
   process.stderr.write('\n=== Phase B-2 PoC summary (v' + opts.version + ') ===\n');
   process.stderr.write('  total cmds:                ' + totals.total + '\n');
   process.stderr.write('  with byte range:           ' + totals.with_byte_range + '\n');
-  process.stderr.write('  arbor returned >=1 hit:    ' + totals.arbor_returned_hits + '\n');
   process.stderr.write('  handler resolved:          ' + totals.handler_resolved + '\n');
-  process.stderr.write('    via single hit:          ' + totals.single_hit + '\n');
-  process.stderr.write('    via name disambiguation: ' + totals.multi_hit_disambiguated + '\n');
-  process.stderr.write('  no hits:                   ' + totals.no_hits + '\n');
+  process.stderr.write('    via direct byte range:   ' + totals.direct_hit + '\n');
+  process.stderr.write('      (single hit:           ' + totals.single_hit + ')\n');
+  process.stderr.write('      (name disambiguation:  ' + totals.multi_hit_disambiguated + ')\n');
+  process.stderr.write('    via module_id follow:    ' + totals.via_module_id + '\n');
+  process.stderr.write('  unresolved:                ' + totals.no_resolution + '\n');
   process.stderr.write('  elapsed:                   ' + elapsed + 's\n');
 }
 
