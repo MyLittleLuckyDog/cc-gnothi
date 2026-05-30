@@ -9,4 +9,10 @@ fn main() {
     // rust-embed bakes versions/ at compile time; force a rebuild when any
     // spec under that tree changes so the binary picks up new specs.
     println!("cargo:rerun-if-changed=../versions");
+    // The `full` build feature also embeds prompt-body dumps mirrored
+    // into the private repo. Cargo exposes the active feature as
+    // CARGO_FEATURE_FULL=1 during the build script.
+    if std::env::var("CARGO_FEATURE_FULL").is_ok() {
+        println!("cargo:rerun-if-changed=../../caludeCodeAVX2/prompts");
+    }
 }

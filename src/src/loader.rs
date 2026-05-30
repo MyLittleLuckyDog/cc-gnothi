@@ -119,6 +119,35 @@ fn load_embedded_version(version: &str) -> Vec<Chunk> {
     chunks
 }
 
+/// Fetch the raw prompt body for a `(version, command)` pair embedded by
+/// the `full` build feature. Returns `None` when the file is not present
+/// (binary built without `full`, or the prompt was not extractable for
+/// that command).
+#[cfg(feature = "full")]
+pub fn load_embedded_prompt(version: &str, command: &str) -> Option<String> {
+    use crate::embedded::VersionedPrompts;
+    let key = format!("v{}/{}.txt", version, command);
+    let file = VersionedPrompts::get(&key)?;
+    std::str::from_utf8(file.data.as_ref()).ok().map(|s| s.to_string())
+}
+
+/// List `(version, command)` pairs available in the embedded prompt set.
+#[cfg(feature = "full")]
+pub fn list_embedded_prompts() -> Vec<(String, String)> {
+    use crate::embedded::VersionedPrompts;
+    VersionedPrompts::iter()
+        .filter_map(|p| {
+            let s = p.to_string();
+            let rest = s.strip_prefix('v')?;
+            let mut it = rest.splitn(2, '/');
+            let ver = it.next()?.to_string();
+            let file = it.next()?;
+            let cmd = file.strip_suffix(".txt")?.to_string();
+            Some((ver, cmd))
+        })
+        .collect()
+}
+
 fn latest_embedded_version() -> Option<String> {
     let mut versions: Vec<String> = VersionedSpecs::iter()
         .filter_map(|p| {

@@ -7,6 +7,15 @@ description = "MCP server for cc-gnothi: Claude Code self-knowledge system"
 repository = "https://github.com/MyLittleLuckyDog/cc-gnothi"
 build = "build.rs"
 
+[features]
+# Default build: only spec .md files. Public release artifact.
+default = []
+# Full build: also embed prompt-body dumps from
+# ../../caludeCodeAVX2/prompts/v*/{cmd}.txt (private repo). Use this
+# build locally or for private distribution — do not ship as a public
+# release asset, the carried text is © Anthropic PBC.
+full = []
+
 [dependencies]
 rmcp = { version = "1.7.0", features = ["server", "transport-io", "macros"] }
 tokio = { version = "1", features = ["full"] }

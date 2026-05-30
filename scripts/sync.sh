@@ -150,6 +150,23 @@ for i in "${!ALL_SORTED[@]}"; do
     --bundle "$ARTIFACTS_DIR/claude-${ver}.js" --version "$ver" \
     || echo "$LOG_PREFIX WARN: prompt body dump failed for v${ver}, continuing..."
 
+  # Mirror _raw into caludeCodeAVX2/prompts/v${ver}/ — private repo where
+  # the bundle source already lives, so prompt bodies stay alongside the
+  # source they were extracted from. cc-gnothi (public) keeps _raw in
+  # .gitignore. The "full" cc-gnothi-mcp build embeds these prompts.
+  RAW_DIR="$REPO_ROOT/versions/v${ver}/_raw"
+  PROMPTS_DST="$AVX2_REPO/prompts/v${ver}"
+  if [[ -d "$RAW_DIR" ]]; then
+    mkdir -p "$PROMPTS_DST"
+    cp "$RAW_DIR"/*.txt "$PROMPTS_DST/" 2>/dev/null || true
+    if git -C "$AVX2_REPO" status --short prompts/ 2>/dev/null | grep -q .; then
+      git -C "$AVX2_REPO" add prompts/ \
+        && git -C "$AVX2_REPO" commit -m "feat(prompts): mirror v${ver} prompt bodies from cc-gnothi" --quiet \
+        && git -C "$AVX2_REPO" push origin main --quiet \
+        || echo "$LOG_PREFIX WARN: caludeCodeAVX2 prompts mirror failed for v${ver}, continuing..."
+    fi
+  fi
+
   echo "$LOG_PREFIX Analyzing v${ver} (diff from v${PREV_VER})..."
   bash "$SCRIPT_DIR/analyze-all.sh" --version "$ver" --from-version "$PREV_VER" --depth 4
 
