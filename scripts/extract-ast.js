@@ -377,6 +377,13 @@ function buildIndex(src, version) {
         name: nameVal,
         description: get('description')?.value ?? null,
         loc_byte: node.start,
+        // loc_byte_end records the registration object's closing brace
+        // offset (inclusive). Downstream consumers can pass the
+        // (loc_byte, loc_byte_end) span to `arbor symbol-in-range` to
+        // pull out exactly the handler methods that live inside this
+        // object — disambiguating same-name methods like
+        // `getPromptForCommand` that appear in many command registrations.
+        loc_byte_end: node.end,
         loc_line: node.loc?.start?.line ?? null,
       };
 
