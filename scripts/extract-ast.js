@@ -62,11 +62,25 @@ function walk(node, visitor) {
 // ── Index build ───────────────────────────────────────────────────────────────
 
 function buildIndex(src, version) {
-  const ast = parser.parse(src, {
-    sourceType: 'script',
-    errorRecovery: true,
-    strictMode: false,
-  });
+  let ast;
+  try {
+    ast = parser.parse(src, {
+      sourceType: 'script',
+      errorRecovery: true,
+      strictMode: false,
+    });
+  } catch (err) {
+    // @babel/parser failed (observed starting around CC v2.1.153) — fall back
+    // to Arbor's tree-sitter front end, which has stronger error recovery
+    // on this minifier profile at this bundle size. See
+    // scripts/arbor-fallback.js for the strategy.
+    process.stderr.write(
+      `@babel/parser failed at bundle parse stage: ${err.message}\n` +
+      `Falling back to Arbor (tree-sitter)...\n`
+    );
+    const { arborFallback } = require('./arbor-fallback');
+    return arborFallback(src, version);
+  }
 
   const commands = {};
   const moduleExports = {};
@@ -144,7 +158,24 @@ function buildIndex(src, version) {
 
       const typeVal = typeNode.value;
       const nameVal = nameNode.value;
-      if (typeVal !== 'local' && typeVal !== 'local-jsx') return;
+      // CC keeps adding new registration types as the agent surface grows.
+      // Pre-fix: only `local` and `local-jsx` were accepted, which silently
+      // dropped `prompt` (init, review, insights, team-onboarding,
+      // init-verifiers, mcp__), `tool` (web_search, explain_command),
+      // `callback`, and `function` registrations from v2.1.158. We now
+      // accept the known type set and skip with a stderr warning on any
+      // unfamiliar type so a future regression surfaces visibly instead of
+      // accumulating as silent "분석 누락" downstream.
+      const KNOWN_TYPES = new Set([
+        'local', 'local-jsx',         // original cmd / JSX cmd
+        'prompt',                     // prompt-style commands (init, review, etc.)
+        'tool',                       // tool-style commands (web_search, etc.)
+        'callback', 'function',       // newer registration shapes
+      ]);
+      if (!KNOWN_TYPES.has(typeVal)) {
+        process.stderr.write(`[unknown type] ${typeVal}:${nameVal}\n`);
+        return;
+      }
       if (typeof nameVal !== 'string') return;
 
       const reg = {
