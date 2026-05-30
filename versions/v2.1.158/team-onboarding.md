@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/team-onboarding` command reads a power user's recent Claude Code session transcripts, classifies the work into task-type categories, and co-authors a structured `ONBOARDING.md` guide that a new teammate can paste directly into Claude for an interactive onboarding walkthrough. The command is a `prompt`-type slash command: it injects a fully rendered prompt body into the agent context along with templated usage data, then drives a two-turn collaborative authoring loop — first generating a concrete draft, then refining it based on three targeted follow-up questions.
+`/team-onboarding` is a `prompt`-type slash command that transforms a power user's local Claude Code usage history into a shareable `ONBOARDING.md` guide for teammates who are new to Claude Code. It operates in a two-turn collaborative loop: the first turn generates a concrete draft guide (written to `ONBOARDING.md`) immediately from scanned transcript data, then the second turn incorporates the guide creator's answers to three targeted review questions before finalizing the file.
 
 ---
 
@@ -31,9 +31,11 @@ The `/team-onboarding` command reads a power user's recent Claude Code session t
 |---|---|
 | type | `prompt` |
 | name | `team-onboarding` |
-| description | Help teammates ramp on Claude Code with a guide from your usage |
+| description | `Help teammates ramp on Claude Code with a guide from your usage` |
 | isHidden | `false` |
-| prompt_body length | 12801 characters |
+| handler_method | `getPromptForCommand` |
+| prompt_body length | 4539 characters |
+| loc_line | 8940 |
 
 Analysis basis: CC v2.1.158 bundle.js:+12708735
 
@@ -41,26 +43,30 @@ Analysis basis: CC v2.1.158 bundle.js:+12708735
 
 ## Input Branching
 
-The prompt body contains several logically distinct segments that the agent must navigate. The primary authoring flow is the dominant branch; the other segments (loop control, missed-task recovery, PR monitoring, and session-analysis JSON) are embedded fragments from shared prompt infrastructure that are present in the raw prompt body but are not active paths during a normal `/team-onboarding` invocation.
+The prompt body references two runtime template variables (`{{WINDOW_DAYS}}` and `{{USAGE_DATA}}`) and one guide template variable (`{{GUIDE_TEMPLATE}}`). The branching logic within the prompt instruction set is described below.
 
 ```mermaid
 flowchart TD
-    A[User runs /team-onboarding] --> B[Agent receives rendered prompt\nwith USAGE_DATA and WINDOW_DAYS\nsubstituted]
-    B --> C{Does USAGE_DATA contain\nsessionDescriptors?}
-    C -- "~0 sessions" --> D[Leave work-type breakdown\nas TODO placeholder]
-    C -- "1+ sessions" --> E[Classify each session into\none of 7 task-type categories]
-    E --> F[Pick top 3-5 categories\nwith rough percentages]
-    F --> G[Gather repos and MCP server\nentries from workspace]
-    G --> H[Write ONBOARDING.md\nfrom guide template]
-    D --> H
-    H --> I[Render guide in code block\nin agent response]
-    I --> J[Append horizontal rule\nand Review heading]
-    J --> K[Ask 3 numbered follow-up\nquestions to guide creator]
-    K --> L{Guide creator responds}
-    L -- "Provides team name / tips /\nstarter task" --> M[Update ONBOARDING.md\nwith answers]
-    M --> N[Close with exact\nclosing line]
-    L -- "Requests further edits" --> O[Apply edits to ONBOARDING.md\nand confirm]
-    O --> L
+    A["/team-onboarding invoked"] --> B["Inject WINDOW_DAYS + USAGE_DATA + GUIDE_TEMPLATE into prompt"]
+    B --> C["Agent outputs acknowledgment line immediately"]
+    C --> D{"sessionDescriptors count?"}
+    D -- "~0 sessions" --> E["Leave work-type breakdown as TODO"]
+    D -- ">0 sessions" --> F["Classify each session into task type"]
+    F --> G["Select top 3–5 categories with rough percentages"]
+    G --> H["Gather repos: currentRepo + workspace siblings"]
+    H --> I["Gather MCP server info from name / urlOrigin"]
+    I --> J["Write ONBOARDING.md from template\n(Team Tips + Get Started as TODO placeholders)"]
+    E --> J
+    J --> K["Render guide in code block"]
+    K --> L["Add --- + Review heading with 3 questions"]
+    L --> M["Guide creator answers review questions"]
+    M --> N{"generatedBy present?"}
+    N -- "Yes" --> O["Include name in guide header"]
+    N -- "No" --> P["Omit name from guide header"]
+    O --> Q["Update ONBOARDING.md with team name, tips, starter task"]
+    P --> Q
+    Q --> R["Output closing line verbatim"]
+    R --> S["Apply any further edits on request"]
 ```
 
 Analysis basis: CC v2.1.158 bundle.js:+12708735
@@ -69,219 +75,202 @@ Analysis basis: CC v2.1.158 bundle.js:+12708735
 
 ## Behavioral Spec
 
-### 1. Immediate Acknowledgment Line
+### Phase 1 — Immediate Acknowledgment
 
-Before any classification, tool calls, or extended reasoning, the agent must emit exactly one acknowledgment line. This is an explicit ordering constraint in the prompt body: classification is designated step 2, not step 1.
+The agent's very first visible output must be a single acknowledgment line referencing `WINDOW_DAYS`. No classification, no tool calls, and no extended thinking may precede it. This guards against the guide creator seeing a blank screen during any model reasoning delay.
 
 ```
-function emitAcknowledgment(windowDays):
-    print("> Looking at how you've used Claude over the last "
-          + windowDays
-          + " days to put together an onboarding guide for teammates new to Claude Code.")
-    // No tool calls, no thinking blocks, no classification before this line.
-    return
+function outputAcknowledgmentLine(windowDays):
+    emit "> Looking at how you've used Claude over the last {windowDays} days " +
+         "to put together an onboarding guide for teammates new to Claude Code."
+    # Nothing else before this line — no internal reasoning output, no tool calls
 ```
 
 Analysis basis: CC v2.1.158 bundle.js:+12708735
 
 ---
 
-### 2. Session Classification
+### Phase 2 — Work-Type Classification
 
-The agent reads the `sessionDescriptors` array from the injected `USAGE_DATA` JSON. Each descriptor includes a session title, an optional list of linked pull request numbers (`prNumbers`), and the first user message from that session.
-
-The seven recognized task-type categories are:
-
-| Internal identifier | Display label | Canonical scope |
-|---|---|---|
-| `build_feature` | Build Feature | New functionality, scripts, tools, config, CI, env setup |
-| `debug_fix` | Debug Fix | Investigating and fixing bugs |
-| `improve_quality` | Improve Quality | Refactoring, tests, cleanup, code review |
-| `analyze_data` | Analyze Data | Queries, metrics, number crunching |
-| `plan_design` | Plan Design | Architecture, approach, strategy, unfamiliar-code orientation, design review |
-| `prototype` | Prototype | Spikes, POCs, throwaway exploration |
-| `write_docs` | Write Docs | PRDs, RFCs, READMEs, design docs, copy or doc review |
-
-Classification rules (in priority order):
+The agent reads the `sessionDescriptors` array from `USAGE_DATA`. Each entry carries a session title, optional `prNumbers` (linked code-review pull requests), and the first user message of that session.
 
 ```
+TASK_TYPES = [
+    "build_feature",    # new functionality, scripts, tools, config/CI/env setup
+    "debug_fix",        # investigating and fixing bugs
+    "improve_quality",  # refactoring, tests, cleanup, code review
+    "analyze_data",     # queries, metrics, number crunching
+    "plan_design",      # architecture, strategy, design review, understanding unfamiliar code
+    "prototype",        # spikes, POCs, throwaway exploration
+    "write_docs"        # PRDs, RFCs, READMEs, design docs, copy/doc review
+]
+
+REVIEW_ROUTING = {
+    "code review"   -> "improve_quality",
+    "doc review"    -> "write_docs",
+    "design review" -> "plan_design"
+}
+
 function classifySessions(sessionDescriptors):
-    counts = empty map keyed by category
+    if len(sessionDescriptors) == 0:
+        return TODO_PLACEHOLDER
 
-    for each session in sessionDescriptors:
-        signal = session.firstUserMessage
-        if signal is uninformative:
-            signal = weak_hint(session.toolCounts, session.mcpCounts)
+    counts = empty map keyed by task type
 
-        // Review sessions are assigned to the reviewed artifact's type:
-        //   code review  -> improve_quality
-        //   doc review   -> write_docs
-        //   design review -> plan_design
+    for session in sessionDescriptors:
+        primarySignal  = session.firstUserMessage
+        enrichment     = [session.title, session.prNumbers]
+        weakHint       = [session.toolCount, session.mcpCount]  # used only if primarySignal uninformative
 
-        category = matchToCategory(signal, session.prNumbers, session.title)
-        if no category matches and category is genuinely novel:
-            category = new label  // rare; use sparingly
+        category = matchToTaskType(primarySignal, enrichment, weakHint, TASK_TYPES, REVIEW_ROUTING)
+        # Invent new category only if genuinely different type of task
         counts[category] += 1
 
-    topCategories = top 3 to 5 entries from counts by frequency
-    return topCategories with rough percentage of total sessions each
+    total = sum(counts.values())
+    topCategories = top(3..5, counts, key=count)
 
-function formatCategoryLabel(internalId):
-    // Convert snake_case to Title Case with spaces
-    // e.g. "build_feature" -> "Build Feature"
-    return internalId.replace("_", " ").toTitleCase()
+    return [(cat, round(count/total * 100)) for cat, count in topCategories]
+
+function formatCategoryName(snakeCaseKey):
+    # "build_feature" -> "Build Feature"
+    return titleCase(replace(snakeCaseKey, "_", " "))
 ```
-
-If `sessionDescriptors` is empty or near-zero in length, the work-type breakdown section is left as a `TODO` placeholder rather than fabricated.
 
 Analysis basis: CC v2.1.158 bundle.js:+12708735
 
 ---
 
-### 3. Workspace and MCP Data Gathering
+### Phase 3 — Repo and MCP Server Discovery
 
 ```
-function gatherWorkspaceContext(usageData, workspace):
+function gatherContext(usageData, workspace):
     repos = [usageData.currentRepo]
-    siblingDirs = listSiblingRepoDirs(workspace)
-    repos += siblingDirs  // deduplicated
+    for dir in workspace.siblingDirectories:
+        if isRepoDirectory(dir):
+            repos.append(dir)
 
     mcpServers = []
-    for each entry in usageData.mcpEntries:
-        description = inferPurpose(entry.name, entry.urlOrigin)
-        accessInstructions = inferAccess(entry.name, entry.urlOrigin)
-        mcpServers.append({name, description, accessInstructions})
+    for entry in usageData.mcpEntries:
+        description = inferServerPurpose(entry.name, entry.urlOrigin)
+        accessInstructions = deriveAccessMethod(entry.name, entry.urlOrigin)
+        mcpServers.append({name: entry.name, description, accessInstructions})
 
-    return repos, mcpServers
+    return {repos, mcpServers}
 ```
 
 Analysis basis: CC v2.1.158 bundle.js:+12708735
 
 ---
 
-### 4. ASCII Bar Chart Rendering
+### Phase 4 — Guide Generation and File Write
 
-Usage statistics are rendered as 20-character-wide ASCII bar charts. Filled segments use `█`; empty segments use `░`.
-
-```
-function renderBar(percentage, totalWidth = 20):
-    filledCount  = round(percentage / 100 * totalWidth)
-    emptyCount   = totalWidth - filledCount
-    return "█" * filledCount + "░" * emptyCount
-```
-
-Real numeric values from `USAGE_DATA` are substituted directly; placeholder text such as `[N]` must not appear in the rendered guide. The author name is taken from `usageData.generatedBy`; if that field is absent, the name attribution is omitted entirely.
-
-Analysis basis: CC v2.1.158 bundle.js:+12708735
-
----
-
-### 5. Guide Template Structure
-
-The guide written to `ONBOARDING.md` follows a fixed section order:
+The agent fills in the `{{GUIDE_TEMPLATE}}` template with real numbers from `USAGE_DATA`. Specific rules for template population:
 
 ```
-document ONBOARDING.md:
-    heading: "Welcome to [Team Name]"
+function populateGuideTemplate(template, usageData, categoryBreakdown, context):
+    guide = template
 
-    section "How We Use Claude":
-        attribution line using generatedBy and windowDays
-        work-type breakdown table with ASCII bars and percentages
-        top skills and commands table with ASCII bars and monthly frequency
-        top MCP servers table with ASCII bars and call counts
-
-    section "Your Setup Checklist":
-        subsection "Codebases":
-            markdown checkbox list of repos with URLs
-        subsection "MCP Servers to Activate":
-            markdown checkbox list with purpose and access instructions
-        subsection "Skills to Know About":
-            list of slash commands with descriptions and team usage context
-
-    section "Team Tips":
-        placeholder: "_TODO_"   // filled after Review turn
-
-    section "Get Started":
-        placeholder: "_TODO_"   // filled after Review turn
-
-    html_comment: verbatim onboarding-buddy instruction block
-        // This block instructs Claude how to behave when a new teammate
-        // pastes the guide. It must be preserved exactly as specified
-        // in the prompt body and must not be paraphrased or omitted.
-```
-
-Analysis basis: CC v2.1.158 bundle.js:+12708735
-
----
-
-### 6. First-Turn Closing and Review Questions
-
-After the guide code block the agent appends a horizontal rule (`---`) followed by a `**Review**` heading. Under that heading three numbered questions are posed:
-
-```
-function emitReviewQuestions(inferredTeamName):
-    if inferredTeamName is known:
-        q1 = "I went with '" + inferredTeamName + "' for the team name — let me know if that sounds right."
+    # Author attribution
+    if usageData.generatedBy is present:
+        guide = insertField(guide, "generatedBy", usageData.generatedBy)
     else:
-        q1 = "What's the team name? I'll add it in."
+        guide = omitNameField(guide)
 
-    q2 = "Is there a starter task for someone new to Claude Code? (ticket or doc link — optional)"
-    q3 = "Any team tips you'd tell a new teammate that aren't already in CLAUDE.md?"
+    # ASCII bar charts: 20-character wide, filled with █, remainder with ░
+    for metric in usageData.numericMetrics:
+        barFilled  = round(metric.ratio * 20) characters of "█"
+        barEmpty   = (20 - len(barFilled)) characters of "░"
+        guide = insertBarChart(guide, metric.key, barFilled + barEmpty)
 
-    print numbered list [q1, q2, q3]
+    # Work-type breakdown with title-case display names
+    for (category, percent) in categoryBreakdown:
+        guide = appendBreakdownRow(guide, formatCategoryName(category), percent)
+
+    # Leave Team Tips and Get Started as explicit TODO placeholders
+    guide = setSection(guide, "Team Tips",   "<!-- TODO -->")
+    guide = setSection(guide, "Get Started", "<!-- TODO -->")
+
+    # Preserve the HTML comment instruction at the bottom verbatim
+    guide = preserveHtmlComment(guide)
+
+    writeFile("ONBOARDING.md", guide)
+    return guide
 ```
 
 Analysis basis: CC v2.1.158 bundle.js:+12708735
 
 ---
 
-### 7. Second-Turn Update and Closing Line
+### Phase 5 — First-Turn Close and Review Questions
 
-When the guide creator responds to the Review questions, the agent updates `ONBOARDING.md` with the provided team name, tips, and starter task, then emits an exact, invariant closing line:
+After writing the file the agent renders the guide inside a fenced code block, then appends a visual separator (`---`) followed by a `**Review**` heading. Under that heading it posts exactly three numbered questions:
 
 ```
-function closeFinalTurn():
-    updateFile("ONBOARDING.md", teamName, tips, starterTask)
-    print("Saved to `ONBOARDING.md`. Drop it in your team docs and channels"
-          + " — when a new teammate pastes it into Claude Code, they get a"
-          + " guided onboarding tour from there.")
-    // This line must not be numbered, paraphrased, or reformatted.
-```
+function closeFirstTurn(guide, inferredTeamName):
+    emit fencedCodeBlock(guide)
+    emit "---"
+    emit "**Review**"
 
-Subsequent edit requests from the guide creator result in further file updates followed by confirmation; the loop continues until the guide creator stops sending edits.
+    # Question 1: team name confirmation or request
+    if inferredTeamName is not None:
+        emit "1. \"I went with '{inferredTeamName}' for the team name — " +
+             "let me know if that sounds right.\""
+    else:
+        emit "1. \"What's the team name? I'll add it in.\""
+
+    emit "2. Is there a starter task for someone new to Claude Code? " +
+         "(ticket or doc link — optional)"
+    emit "3. Any team tips you'd tell a new teammate that aren't already in CLAUDE.md?"
+```
 
 Analysis basis: CC v2.1.158 bundle.js:+12708735
 
 ---
 
-### 8. Embedded Prompt Fragments (Non-Active Paths)
+### Phase 6 — Second-Turn Update and Finalization
 
-The raw prompt body at the registered location contains several additional text segments that are not part of the normal `/team-onboarding` authoring flow. These are artifacts of shared prompt infrastructure embedded in the bundle and are present as inert text during a standard invocation:
+```
+function processReviewAnswers(answers, existingGuide):
+    updatedGuide = existingGuide
 
-- A self-pacing loop control block describing `delaySeconds`, `reason`, and `prompt` parameters for a scheduling tool.
-- A missed-scheduled-task recovery block that gates execution behind an `AskUserQuestion` confirmation.
-- A PR monitoring block that checks CI state and merge status via `gh` CLI commands.
-- A session-analysis JSON schema block requesting a structured outcome object.
-- A PostgreSQL type keyword list (unrelated to command function).
-- PowerShell exit-code capture and path-reporting snippets.
+    if answers.teamName is provided:
+        updatedGuide = setField(updatedGuide, "teamName", answers.teamName)
 
-These fragments do not alter the authoring behavior described in sections 1 through 7. They are documented here for completeness of the prompt-body analysis.
+    if answers.starterTask is provided:
+        updatedGuide = setSection(updatedGuide, "Get Started", answers.starterTask)
+
+    if answers.teamTips is provided:
+        updatedGuide = setSection(updatedGuide, "Team Tips", answers.teamTips)
+
+    writeFile("ONBOARDING.md", updatedGuide)
+
+    # Closing line must be output verbatim — not numbered, not paraphrased
+    emit "Saved to `ONBOARDING.md`. Drop it in your team docs and channels — " +
+         "when a new teammate pastes it into Claude Code, they get a guided " +
+         "onboarding tour from there."
+
+function applySubsequentEdits(editRequest, currentGuide):
+    updatedGuide = applyEdits(currentGuide, editRequest)
+    writeFile("ONBOARDING.md", updatedGuide)
+```
 
 Analysis basis: CC v2.1.158 bundle.js:+12708735
 
 ---
 
-## State and Side Effects
+## State & Side Effects
 
 | Item | Detail |
 |---|---|
 | Telemetry | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| File write | Writes and overwrites `ONBOARDING.md` in the working directory (first-turn draft + second-turn update) |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| File written | `ONBOARDING.md` in the current working directory (created or overwritten on first turn; updated on second turn) |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Call graph depth | AST traversal returned an empty call graph; no callee functions were resolved at depth 2 |
-| Template variables | `{{USAGE_DATA}}` and `{{WINDOW_DAYS}}` are substituted into the prompt body before the agent receives it; `{{GUIDE_TEMPLATE}}` is replaced with the full guide skeleton |
+| Template variable injection | `{{WINDOW_DAYS}}`, `{{USAGE_DATA}}`, `{{GUIDE_TEMPLATE}}` resolved by `getPromptForCommand` before the prompt is sent |
+| Conversation turns | Minimum two turns: draft generation turn + review-answer incorporation turn; additional turns for subsequent edits |
+
+Analysis basis: CC v2.1.158 bundle.js:+12708735
 
 ---
 
@@ -289,25 +278,25 @@ Analysis basis: CC v2.1.158 bundle.js:+12708735
 
 | Version | Change |
 |---|---|
-| v2.1.158 | Initial analysis; command registered as non-hidden `prompt` type at bundle byte offset 12708735 |
+| v2.1.158 | Initial analysis — command registered at bundle byte offset 12708735, line 8940 |
 
 ---
 
 ## Common Mistakes
 
-1. **Invoking the command with no usage data available.** If the local Claude Code transcript store is empty or inaccessible, `USAGE_DATA` will contain no `sessionDescriptors`. The agent will leave the work-type breakdown as `TODO` rather than fabricating percentages — this is correct behavior, not a bug.
+1. **Waiting for answers before generating a draft.** The prompt explicitly instructs the agent to generate the guide immediately, then ask for revisions. Prompting the user with questions before producing a draft is an instruction violation. Generate first, review second.
 
-2. **Expecting the guide to be printed inline without a file write.** The command writes `ONBOARDING.md` to disk. The in-response code block is a rendered preview; the authoritative artifact is the file.
+2. **Prefixing the acknowledgment line with reasoning or tool calls.** The acknowledgment line (`> Looking at how you've used Claude…`) must be the very first visible output. Any model reasoning, tool invocations, or classification work that surfaces before this line violates the command's ordering contract.
 
-3. **Paraphrasing or omitting the HTML comment block at the bottom of the guide.** The comment contains instructions for Claude when a new teammate pastes the guide. Editing or removing it breaks the interactive onboarding behavior.
+3. **Inventing unnecessary task categories.** The seven built-in task types (`build_feature`, `debug_fix`, `improve_quality`, `analyze_data`, `plan_design`, `prototype`, `write_docs`) cover the vast majority of sessions. A new category should only be introduced if the session genuinely represents a task type that cannot be mapped to any of the seven. Over-categorization produces a noisy breakdown.
 
-4. **Treating the Review questions as optional.** The three questions in the Review section are structural: answers feed directly into the `Team Tips` and `Get Started` sections, which are intentionally left as `_TODO_` placeholders in the first turn.
+4. **Using placeholder text instead of real numbers.** The guide template is populated with actual figures from `USAGE_DATA`, not template strings like `{{SESSIONS}}`. ASCII bar charts must be rendered with `█`/`░` characters at 20-character width.
 
-5. **Expecting the closing line to vary.** The final closing sentence is specified as an exact invariant string. Any rephrasing or numbering applied to it is incorrect.
+5. **Paraphrasing or numbering the closing line.** The final line of the second turn — *"Saved to `ONBOARDING.md`. Drop it in your team docs and channels…"* — must be output verbatim and must not be wrapped in a numbered list or modified in any way.
 
-6. **Confusing the seven task-type category labels.** Categories describe task type, not project domain. Review sessions are always classified by the artifact being reviewed, not by the act of reviewing itself (for example, a code-review session is `improve_quality`, not a new category).
+6. **Omitting the `---` separator and `**Review**` heading.** These structural markers visually separate the guide code block from the review questions and are required by the command spec, not optional styling.
 
-7. **Treating embedded prompt fragments as active behavior.** The loop control, missed-task recovery, PR monitoring, and session-analysis JSON schema blocks visible in the raw prompt body are inert infrastructure fragments during a normal invocation and do not trigger any scheduling, monitoring, or JSON-output behavior.
+7. **Misrouting review sessions.** Code review maps to `improve_quality`, doc review maps to `write_docs`, and design review maps to `plan_design`. Routing all review sessions to a single generic "review" bucket is incorrect.
 
 ---
 
@@ -317,9 +306,6 @@ Analysis basis: CC v2.1.158 bundle.js:+12708735
 
 | Identifier | Role |
 |---|---|
-| `zw5` | Local variable in prompt-body assembly function (exact role undetermined at depth 2) |
-| `Ow5` | Local variable in prompt-body assembly function (exact role undetermined at depth 2) |
+| (none extracted) | No obfuscated identifiers were found in the depth-2 AST traversal for this command. The `identifiers` array is empty in the source data. |
 
-> Note: The AST extraction reported 11 method-body chunks with local variables `_`, `zw5`, `A`, `Ow5`, `q`, `O`, `K`, `L`, `f`, `M`, `$`. Single-letter names (`_`, `A`, `q`, `O`, `K`, `L`, `f`, `M`, `$`) are standard minifier output for loop counters and intermediate values and carry no semantic identity worth mapping. `zw5` and `Ow5` are the only non-trivially-obfuscated identifiers present. The `identifiers` array in the source JSON was empty, so no further mapping is possible at depth 2.
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+Note: The `callGraph`, `literals`, `telemetry`, and `identifiers` arrays are all empty in the extracted data; the `note` field records "no entry functions found for module 'undefined'", indicating that dynamic dispatch or lazy loading may prevent static resolution of the handler beyond the prompt body itself. All behavioral claims above are grounded in the prompt body extracted at bundle.js:+12708735.
