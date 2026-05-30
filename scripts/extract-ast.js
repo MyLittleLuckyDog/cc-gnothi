@@ -32,10 +32,12 @@ function parseArgs() {
       case '--build-index':         opts.mode = 'index'; break;
       case '--hash-commands':       opts.mode = 'hash';  break;
       case '--dump-system-context': opts.mode = 'system-context'; break;
+      case '--dump-prompts':        opts.mode = 'dump-prompts'; break;
       case '--cmd':                 opts.mode = 'cmd'; opts.cmd = args[++i]; break;
       case '--bundle':      opts.bundle = args[++i]; break;
       case '--version':     opts.version = args[++i]; break;
       case '--index':       opts.indexPath = args[++i]; break;
+      case '--out-dir':     opts.outDir = args[++i]; break;
       case '--depth':       opts.depth = parseInt(args[++i], 10); break;
       case '--min-len':     opts.minStringLen = parseInt(args[++i], 10); break;
     }
@@ -57,6 +59,176 @@ function walk(node, visitor) {
       walk(val, visitor);
     }
   }
+}
+
+// ── Helpers shared across passes ──────────────────────────────────────────────
+
+// Concatenate static parts of a TemplateLiteral; mark interpolations as " ... ".
+function cooked(templateLiteralNode) {
+  const parts = templateLiteralNode.quasis.map((q) => q.value.cooked ?? q.value.raw);
+  if (templateLiteralNode.expressions.length === 0) return parts.join('');
+  return parts.join(' ... ');
+}
+
+// Extract a getter's static return value, if simple.
+// Handles: return "X" / return `X` / return cond ? "A" : "B".
+// Returns null when the getter is dynamic enough that there's no single value.
+function staticGetterValue(methodNode) {
+  if (!methodNode || methodNode.type !== 'ObjectMethod' || methodNode.kind !== 'get') return null;
+  const body = methodNode.body;
+  if (!body || body.type !== 'BlockStatement') return null;
+  for (const stmt of body.body) {
+    if (stmt.type !== 'ReturnStatement' || !stmt.argument) continue;
+    const arg = stmt.argument;
+    if (arg.type === 'StringLiteral') return arg.value;
+    if (arg.type === 'TemplateLiteral') return cooked(arg);
+    if (arg.type === 'ConditionalExpression') {
+      const a = arg.consequent && arg.consequent.type === 'StringLiteral' ? arg.consequent.value : null;
+      const b = arg.alternate  && arg.alternate.type  === 'StringLiteral' ? arg.alternate.value  : null;
+      if (a && b) return `${a} | ${b}`;
+      return a || b;
+    }
+  }
+  return null;
+}
+
+// Scan one function slice for substantial string/template literals.
+// Used to chase `getPromptForCommand` → external function references (1 hop).
+function extractTextLiteralsFromFn(src, fnLoc, minLen = 80) {
+  const slice = src.slice(fnLoc.start, fnLoc.end);
+  let ast;
+  try {
+    ast = parser.parse(slice, { sourceType: 'script', errorRecovery: true, strictMode: false });
+  } catch { return []; }
+  const out = [];
+  walk(ast, {
+    StringLiteral(node) {
+      if (node.value && node.value.length >= minLen) out.push(node.value);
+    },
+    TemplateLiteral(node) {
+      const t = cooked(node);
+      if (t.length >= minLen) out.push(t);
+    },
+  });
+  return out;
+}
+
+// Extract a prompt body from a registration object's `getPromptForCommand` method.
+// Handles four return shapes that show up in actual CC bundles (v2.1.158):
+//
+//   1. `return [{text:"..." | `...`}]`                — inline literal
+//   2. `return [{text: FN}]` or `[{text: FN(...)}]`   — 1-hop into FN's body
+//   3. `return [{text: COND ? A : B}]`                — both branches
+//   4. `return EXPR, [{text: $}]` with $ a local var  — fallback: scan method body
+//
+// `functions` is the buildIndex Pass-1 result; 1-hop lookups land there.
+// Returns `null` when no text could be recovered (e.g., the method dispatches
+// fully dynamically and the body has no substantial inline strings).
+function extractPromptBody(propsArr, functions, variables, src) {
+  if (!Array.isArray(propsArr)) return null;
+  const method = propsArr.find(p =>
+    p.type === 'ObjectMethod'
+    && (p.key.name === 'getPromptForCommand' || p.key.value === 'getPromptForCommand')
+  );
+  if (!method || !method.body || method.body.type !== 'BlockStatement') return null;
+
+  const parts = [];
+  const traces = [];
+
+  // Resolve a value node sitting in the `text:` slot. ConditionalExpression
+  // recurses on both branches — CC bundles use that to flag-gate prompts
+  // (e.g., init's `HH5()?AH5:_H5`).
+  const resolveText = (v) => {
+    if (!v) return;
+    if (v.type === 'StringLiteral') {
+      parts.push(v.value);
+      traces.push('inline string');
+    } else if (v.type === 'TemplateLiteral') {
+      parts.push(cooked(v));
+      traces.push('inline template');
+    } else if (v.type === 'ConditionalExpression') {
+      traces.push('conditional');
+      resolveText(v.consequent);
+      resolveText(v.alternate);
+    } else if (v.type === 'Identifier') {
+      const fnLoc = functions[v.name];
+      const variable = variables && variables[v.name];
+      if (fnLoc) {
+        const lits = extractTextLiteralsFromFn(src, fnLoc);
+        if (lits.length) parts.push(...lits);
+        traces.push(`identifier→${v.name} (fn, ${lits.length} literals)`);
+      } else if (variable) {
+        parts.push(variable.value);
+        traces.push(`identifier→${v.name} (var ${variable.kind}, ${variable.value.length} chars)`);
+      } else {
+        traces.push(`identifier→${v.name} (unresolved)`);
+      }
+    } else if (v.type === 'CallExpression' && v.callee && v.callee.type === 'Identifier') {
+      const loc = functions[v.callee.name];
+      if (loc) {
+        const lits = extractTextLiteralsFromFn(src, loc);
+        if (lits.length) parts.push(...lits);
+        traces.push(`call→${v.callee.name}(...) (${lits.length} literals)`);
+      } else {
+        traces.push(`call→${v.callee.name}(...) (unresolved)`);
+      }
+    } else {
+      traces.push(`unhandled ${v.type}`);
+    }
+  };
+
+  // Walk every `return` in the method; handle `return EXPR, ARR` SequenceExpression
+  // by taking the trailing expression as the array.
+  for (const stmt of method.body.body) {
+    if (stmt.type !== 'ReturnStatement' || !stmt.argument) continue;
+    let arr = stmt.argument;
+    if (arr.type === 'SequenceExpression') {
+      arr = arr.expressions[arr.expressions.length - 1];
+    }
+    if (!arr || arr.type !== 'ArrayExpression') continue;
+    for (const elem of arr.elements) {
+      if (!elem || elem.type !== 'ObjectExpression') continue;
+      const textProp = elem.properties.find(p =>
+        p.type === 'ObjectProperty' && (p.key.name === 'text' || p.key.value === 'text')
+      );
+      if (!textProp) continue;
+      resolveText(textProp.value);
+    }
+  }
+
+  // Fallback: nothing extractable through `text:` chains alone — scan the
+  // method body itself for substantial literals + variable references.
+  // Catches the shape where the body is assembled into a local variable and
+  // returned as `[{text:$}]` (team-onboarding etc.), by pulling values from
+  // any top-level string/template variables referenced inside the method.
+  if (parts.length === 0) {
+    const bodyText = src.slice(method.start, method.end);
+    let bodyAst;
+    try {
+      bodyAst = parser.parse(bodyText, { sourceType: 'script', errorRecovery: true, strictMode: false });
+    } catch { bodyAst = null; }
+    if (bodyAst) {
+      const seen = new Set();
+      walk(bodyAst, {
+        StringLiteral(n) { if (n.value && n.value.length >= 200) parts.push(n.value); },
+        TemplateLiteral(n) { const t = cooked(n); if (t.length >= 200) parts.push(t); },
+        Identifier(n) {
+          if (!variables) return;
+          const v = variables[n.name];
+          if (v && !seen.has(n.name)) {
+            seen.add(n.name);
+            parts.push(v.value);
+          }
+        },
+      });
+      if (parts.length) {
+        traces.push(`method-body scan (${parts.length} chunks, vars: ${[...seen].join(',') || 'none'})`);
+      }
+    }
+  }
+
+  if (parts.length === 0) return null;
+  return { text: parts.join('\n\n---\n\n'), trace: traces.join('; ') };
 }
 
 // ── Index build ───────────────────────────────────────────────────────────────
@@ -85,8 +257,12 @@ function buildIndex(src, version) {
   const commands = {};
   const moduleExports = {};
   const functions = {};
+  // Top-level string/template constants — needed for prompt-body resolution
+  // (e.g., init's `text: AH5` where AH5 is `var AH5 = "Initialize ..."`).
+  // Threshold 200 chars filters minifier noise (short labels, classnames).
+  const variables = {};
 
-  // Pass 1: function locations
+  // Pass 1: function locations + substantial string/template variables
   walk(ast, {
     FunctionDeclaration(node) {
       if (node.id) functions[node.id.name] = { start: node.start, end: node.end };
@@ -95,11 +271,17 @@ function buildIndex(src, version) {
       if (!node.id || node.id.type !== 'Identifier') return;
       const init = node.init;
       if (!init) return;
+      const name = node.id.name;
       if (
         init.type === 'FunctionExpression' ||
         init.type === 'ArrowFunctionExpression'
       ) {
-        functions[node.id.name] = { start: init.start, end: init.end };
+        functions[name] = { start: init.start, end: init.end };
+      } else if (init.type === 'StringLiteral' && init.value.length >= 200) {
+        variables[name] = { kind: 'string', value: init.value };
+      } else if (init.type === 'TemplateLiteral') {
+        const t = cooked(init);
+        if (t.length >= 200) variables[name] = { kind: 'template', value: t };
       }
     },
   });
@@ -137,13 +319,25 @@ function buildIndex(src, version) {
       const props = node.properties;
       if (!Array.isArray(props)) return;
 
+      // Note: registration objects mix ObjectProperty (description:"...") and
+      // ObjectMethod (`get description(){...}` / `async getPromptForCommand(){...}`).
+      // `get()` flattens both into a {value} shape where possible; methods that
+      // can't be reduced to a single value return {_method:true, _node} so the
+      // caller can inspect the AST node itself (see `extractPromptBody`).
       const get = (key) => {
         const p = props.find(
           (p) =>
-            p.type === 'ObjectProperty' &&
+            (p.type === 'ObjectProperty' || p.type === 'ObjectMethod') &&
             (p.key.name === key || p.key.value === key)
         );
         if (!p) return null;
+        if (p.type === 'ObjectMethod') {
+          if (p.kind === 'get') {
+            const sv = staticGetterValue(p);
+            if (sv != null) return { value: sv };
+          }
+          return { _method: true, _kind: p.kind, _node: p };
+        }
         const v = p.value;
         // !0 → true, !1 → false (minifier pattern)
         if (v.type === 'UnaryExpression' && v.operator === '!' && v.argument.type === 'NumericLiteral') {
@@ -267,13 +461,28 @@ function buildIndex(src, version) {
         }
       }
 
+      // For `prompt` type, capture the body text from `getPromptForCommand`.
+      // The body often lives in an external function (e.g., `text: R45(H)`);
+      // we chase one hop into `functions`. Storing the full text here keeps
+      // `--dump-prompts` a pure index→file projection (no re-parse needed).
+      if (typeVal === 'prompt') {
+        const body = extractPromptBody(props, functions, variables, src);
+        if (body) {
+          reg.prompt_body = {
+            length: body.text.length,
+            trace: body.trace,
+            text:  body.text,
+          };
+        }
+      }
+
       if (!commands[nameVal]) {
         commands[nameVal] = reg;
       }
     },
   });
 
-  return { version, built: new Date().toISOString().slice(0, 10), commands, moduleExports, functions };
+  return { version, built: new Date().toISOString().slice(0, 10), commands, moduleExports, functions, variables };
 }
 
 // Extract module identifier from Bun load pattern:
@@ -771,6 +980,36 @@ function extractSystemContext(src, index, minStringLen, version) {
   };
 }
 
+// ── Prompt body dump ──────────────────────────────────────────────────────────
+
+// Project `index.commands[name].prompt_body.text` into one file per command
+// under `outDir`. Outputs are header-prefixed (one comment block at the top
+// describing source/version/trace) and the rest is the raw extracted body —
+// suitable for inclusion verbatim in an analyze prompt.
+function dumpPrompts(index, outDir) {
+  fs.mkdirSync(outDir, { recursive: true });
+  let written = 0;
+  let skipped = 0;
+  for (const [name, reg] of Object.entries(index.commands || {})) {
+    if (!reg.prompt_body || !reg.prompt_body.text) { skipped++; continue; }
+    const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const outPath = path.join(outDir, `${safeName}.txt`);
+    const header = [
+      `# command: ${name}`,
+      `# type: ${reg.type}`,
+      `# bundle_version: ${index.version}`,
+      `# loc_byte: ${reg.loc_byte}`,
+      `# extraction: ${reg.prompt_body.trace}`,
+      `# length: ${reg.prompt_body.length}`,
+      '',
+      '',
+    ].join('\n');
+    fs.writeFileSync(outPath, header + reg.prompt_body.text);
+    written++;
+  }
+  return { written, skipped };
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 function main() {
@@ -875,6 +1114,38 @@ function main() {
     fs.writeFileSync(outPath, JSON.stringify(result, null, 2));
     process.stderr.write(
       `System context written: ${outPath} (${result.systemContextFunctions.length} candidates)\n`
+    );
+    return;
+  }
+
+  if (opts.mode === 'dump-prompts') {
+    if (!opts.version) {
+      console.error('--dump-prompts requires --version');
+      process.exit(1);
+    }
+    const cacheDir = path.join(os.homedir(), '.cc-gnothi', 'cache');
+    const indexPath = opts.indexPath ?? path.join(cacheDir, `index-${opts.version}.json`);
+
+    if (!fs.existsSync(indexPath)) {
+      if (!opts.bundle) {
+        console.error(`Index not found: ${indexPath}. Pass --bundle to build, or run --build-index first.`);
+        process.exit(1);
+      }
+      process.stderr.write(`Building index for v${opts.version} first...\n`);
+      const src0 = fs.readFileSync(opts.bundle, 'utf8');
+      const index0 = buildIndex(src0, opts.version);
+      fs.mkdirSync(cacheDir, { recursive: true });
+      fs.writeFileSync(indexPath, JSON.stringify(index0, null, 2));
+    }
+
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    const repoRoot = path.resolve(__dirname, '..');
+    const outDir = opts.outDir
+      ?? path.join(repoRoot, 'versions', `v${opts.version}`, '_raw');
+
+    const r = dumpPrompts(index, outDir);
+    process.stderr.write(
+      `Dumped ${r.written} prompt bodies to ${outDir} (${r.skipped} commands without extractable body)\n`
     );
     return;
   }

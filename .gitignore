@@ -2,3 +2,9 @@
 .claude/settings.local.json
 src/target/
 .env.local
+
+# Per-version raw prompt body dumps from extract-ast.js --dump-prompts.
+# Local-only artifacts; the analyzed .md specs in versions/v*/ are the
+# tracked product, raw bodies are inputs we pull from the bundle and
+# inject into the analyze prompt — no need to track them in git.
+versions/*/_raw/
