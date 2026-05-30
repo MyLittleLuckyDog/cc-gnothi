@@ -617,6 +617,28 @@ function buildIndex(src, version) {
           if (firstCall && firstCall.callee?.type === 'Identifier') {
             reg.load_ident = firstCall.callee.name;
           }
+
+          // Additional pattern: `load: () => Promise.resolve({call: IDENT})`
+          // appears on 3 commands in v2.1.158 (bridge-kick, version, recap)
+          // and uses no module_id — the call ident is inlined into the
+          // Promise.resolve argument instead of going through a
+          // moduleExports wrapper. Pull it out so path 2 / Arbor name
+          // lookup can resolve the handler.
+          if (firstCall &&
+              firstCall.callee?.type === 'MemberExpression' &&
+              firstCall.callee.object?.type === 'Identifier' &&
+              firstCall.callee.object.name === 'Promise' &&
+              firstCall.callee.property?.name === 'resolve' &&
+              firstCall.arguments?.[0]?.type === 'ObjectExpression') {
+            for (const p of firstCall.arguments[0].properties) {
+              if (p.type === 'ObjectProperty' &&
+                  (p.key?.name === 'call' || p.key?.value === 'call') &&
+                  p.value?.type === 'Identifier') {
+                reg.load_ident = p.value.name;
+                break;
+              }
+            }
+          }
         }
       }
 

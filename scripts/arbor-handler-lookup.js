@@ -108,7 +108,25 @@ function spanSize(sym) {
   return Math.max(0, sym.location.end_col - sym.location.start_col);
 }
 
+// Method names that are real handlers, in priority order. When multiple
+// hits live inside a registration object, pick the highest-ranked of
+// these before falling back to inner-first ordering.
+const HANDLER_METHOD_PRIORITY = [
+  'load', 'getPromptForCommand', 'call', 'handler', 'run',
+];
+
+// Method names that are *metadata accessors* on the registration object,
+// not handlers. If pickHandler would otherwise return one of these, we
+// return null instead and let the caller try the module_id / load_ident
+// paths — they're more likely to point at the real handler.
+const METADATA_ACCESSORS = new Set([
+  'isHidden', 'isEnabled', 'requires',
+  'description', 'userFacingName', 'argumentHint',
+  'immediate', 'supportsNonInteractive', 'thinClientDispatch',
+]);
+
 function pickHandler(hits, preferredName) {
+  // 1. honour the explicit hint (e.g. prompt-type's handler_method).
   if (preferredName) {
     const named = hits.filter((h) => h.name === preferredName);
     if (named.length > 0) {
@@ -116,8 +134,26 @@ function pickHandler(hits, preferredName) {
       return named[0];
     }
   }
+  // 2. prefer one of the known handler method names.
+  for (const name of HANDLER_METHOD_PRIORITY) {
+    const named = hits.filter((h) => h.name === name);
+    if (named.length > 0) {
+      named.sort((a, b) => spanSize(a) - spanSize(b));
+      return named[0];
+    }
+  }
+  // 3. fall back to inner-first, but reject pure-metadata hits so the
+  //    caller's path 2 / path 3 gets a chance at the real handler.
   const sorted = [...hits].sort((a, b) => spanSize(a) - spanSize(b));
-  return sorted[0] || null;
+  const first = sorted[0];
+  if (!first) return null;
+  if (METADATA_ACCESSORS.has(first.name)) {
+    // Check whether *any* hit is non-metadata; if so use it.
+    const nonMeta = sorted.find((h) => !METADATA_ACCESSORS.has(h.name));
+    if (nonMeta) return nonMeta;
+    return null;
+  }
+  return first;
 }
 
 function main() {
@@ -176,13 +212,22 @@ function main() {
     with_byte_range:        0,
     direct_hit:             0,        // path 1 — symbol-in-range
     via_module_id:          0,        // path 2 — module_id → arbor name lookup
-    handler_resolved:       0,        // either path
+    via_load_ident:         0,        // path 3 — load_ident → arbor name lookup
+    handler_resolved:       0,
     no_resolution:          0,
     multi_hit_disambiguated: 0,
     single_hit:             0,
   };
   const perCmd = [];
   const unresolved = [];
+
+  function lookupViaLoadIdent(reg) {
+    const id = reg.load_ident;
+    if (!id) return null;
+    const sym = byName.get(id);
+    if (!sym) return null;
+    return { sym, via: { load_ident: id } };
+  }
 
   function lookupViaModuleId(reg) {
     const mid = reg.module_id;
@@ -247,6 +292,21 @@ function main() {
       }
     }
 
+    // Path 3 — `load:()=>Promise.resolve({call: IDENT})` shape: no
+    // module_id, no anchor inside the byte range, but Pass-3 left
+    // load_ident on the registration. Resolve directly through
+    // Arbor's name index.
+    let viaLoadIdent = null;
+    if (!handler) {
+      const r = lookupViaLoadIdent(reg);
+      if (r) {
+        handler = r.sym;
+        viaLoadIdent = r.via;
+        resolutionPath = 'load_ident';
+        totals.via_load_ident++;
+      }
+    }
+
     if (handler) {
       totals.handler_resolved++;
       perCmd.push({
@@ -264,6 +324,7 @@ function main() {
         hint:             reg.handler_method || null,
         resolution_path:  resolutionPath,
         via_module_id:    viaModuleId,
+        via_load_ident:   viaLoadIdent,
       });
     } else {
       totals.no_resolution++;
@@ -296,6 +357,7 @@ function main() {
   process.stderr.write('      (single hit:           ' + totals.single_hit + ')\n');
   process.stderr.write('      (name disambiguation:  ' + totals.multi_hit_disambiguated + ')\n');
   process.stderr.write('    via module_id follow:    ' + totals.via_module_id + '\n');
+  process.stderr.write('    via load_ident lookup:   ' + totals.via_load_ident + '\n');
   process.stderr.write('  unresolved:                ' + totals.no_resolution + '\n');
   process.stderr.write('  elapsed:                   ' + elapsed + 's\n');
 }
