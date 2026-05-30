@@ -24,6 +24,28 @@ It contains:
   tree-sitter fallback (Babel tripped on this bundle). Add a one-line footnote
   near the bottom of the spec: "Note: index built via Arbor fallback; some
   signals (telemetry, literals) may be missing — see arbor-fallback.js."
+- `registration.loc_byte_end` — the registration object's closing brace
+  offset (inclusive of `}`). Use the `(loc_byte, loc_byte_end)` span when
+  you need to cite the full registration block.
+- `registration.prompt_body` (optional, `prompt`-type only) — the actual
+  text the command sends to the agent at invocation. `length` and `trace`
+  document provenance; `text` is the body when extraction succeeded.
+  Ground the Behavioral Spec in what is really instructed. **Do not quote
+  verbatim** beyond short citation fragments (≤30 chars) — the body is
+  © Anthropic PBC.
+- `registration.handler_method` (optional) — when set (currently
+  `"getPromptForCommand"`), the handler lives inline as an ObjectMethod on
+  the registration object rather than behind a module export. callGraph
+  for this command then starts at the synthetic entry
+  `__handler_<command>`; treat it as the command's main handler.
+- `registration.load_ident` (optional) — when set, the handler ident was
+  inlined into a `load:()=>Promise.resolve({call: IDENT})` shape (no
+  `module_id`). callGraph entry will say `via:"load_ident"`. Reference
+  this ident as the handler in the Behavioral Spec.
+- `registration.dynamic_name: true` (optional) — the registration `name`
+  is built at runtime (currently the `mcp__` prefix class). The spec
+  should describe the command as a **prefix-class** (one entry covering
+  many instantiations), not as a single fixed name.
 
 Use these facts as your primary source. Do not guess. If something is not in the data, write
 `<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->`.

@@ -581,7 +581,15 @@ function buildIndex(src, version) {
                  (p.key.name === 'getPromptForCommand' ||
                   p.key.value === 'getPromptForCommand')
         );
-        if (methodNode) reg.handler_method = 'getPromptForCommand';
+        if (methodNode) {
+          reg.handler_method = 'getPromptForCommand';
+          // Byte range of the inline handler method itself. extractCommand's
+          // path-3 fallback (when there's no module_id) uses this to BFS the
+          // handler body so callGraph / telemetry / literals are not empty
+          // for prompt-type commands.
+          reg.handler_method_start = methodNode.start;
+          reg.handler_method_end   = methodNode.end;
+        }
       }
 
       // load: () => Promise.resolve().then(() => (INIT_FN(), MODULE_OBJ))
@@ -759,17 +767,50 @@ function extractCommand(src, index, cmdName, maxDepth) {
     identifiers: new Set(),
   };
 
-  // Entry points: functions reachable from module exports
+  // Entry points: try three paths in order.
+  //
+  //   Path 1 — module_id → moduleExports → entry functions
+  //   Path 2 — load_ident (inline `load:()=>Promise.resolve({call: IDENT})`,
+  //            no module_id; PR #4)
+  //   Path 3 — handler_method byte range (prompt-type commands carry an
+  //            inline `async getPromptForCommand(){…}` and have no
+  //            module_id at all). The method's own byte span is registered
+  //            as a synthetic function and BFS'd from there.
+  //
+  // Without path 2/3 the prompt-type commands' callGraph / telemetry /
+  // literals all came back empty, even though the handler is right there
+  // in the registration object — the analyze step then had no behavioural
+  // signals beyond the prompt body itself.
   const modId = reg.module_id;
   const entryFns = [];
   if (modId && index.moduleExports[modId]) {
     for (const [prop, fnId] of Object.entries(index.moduleExports[modId])) {
-      if (index.functions[fnId]) entryFns.push({ fn: fnId, via: prop });
+      if (index.functions[fnId]) entryFns.push({ fn: fnId, via: `module:${prop}` });
     }
+  }
+  if (entryFns.length === 0 && reg.load_ident && index.functions[reg.load_ident]) {
+    entryFns.push({ fn: reg.load_ident, via: 'load_ident' });
+  }
+  if (
+    entryFns.length === 0 &&
+    Number.isInteger(reg.handler_method_start) &&
+    Number.isInteger(reg.handler_method_end)
+  ) {
+    const synth = `__handler_${cmdName}`;
+    // Add a temporary entry in `index.functions` so the existing bfs() can
+    // pick it up by name. Idempotent — repeated --cmd calls reuse the slot.
+    index.functions[synth] = {
+      start: reg.handler_method_start,
+      end:   reg.handler_method_end,
+    };
+    entryFns.push({ fn: synth, via: `handler_method:${reg.handler_method ?? 'inline'}` });
   }
 
   if (entryFns.length === 0) {
-    result.note = `no entry functions found for module '${modId}'`;
+    const reason = modId
+      ? `module '${modId}' has no exports`
+      : `no module_id / load_ident / handler_method on registration`;
+    result.note = `no entry functions found (${reason})`;
     return serialize(result);
   }
 
