@@ -46,6 +46,26 @@ It contains:
   is built at runtime (currently the `mcp__` prefix class). The spec
   should describe the command as a **prefix-class** (one entry covering
   many instantiations), not as a single fixed name.
+- `registration.arbor_handler` (optional, present when Arbor was
+  available at index time) — the unambiguous handler this command owns,
+  resolved against the Arbor symbol graph. Shape:
+  `{name, fqn, kind, resolution_path, n_hits}` where:
+    - `name` is the minified handler ident (e.g. `lX5`, `R45`) — use
+      it in the Behavioral Spec pseudocode + Appendix mapping table.
+    - `fqn` is Arbor's fully-qualified path; useful for citation
+      precision when two minified handlers share a name.
+    - `resolution_path` says how Arbor reached this handler:
+      `direct` (symbol fell inside the registration byte range),
+      `module_id` (followed module_id → moduleExports → name lookup),
+      `load_ident` (followed the `load:()=>Promise.resolve({call:I})`
+      inline ident). Mention the path only if a reader could otherwise
+      misread which function the spec is documenting.
+    - When `arbor_handler` disagrees with what `callGraph[0].from`
+      suggests (e.g. Arbor says the real handler is `RZ4` but
+      callGraph starts at the registration's inline method
+      `__handler_<cmd>`), **prefer `arbor_handler`** — it is the
+      unambiguous entry point. The synthetic `__handler_*` id is
+      bookkeeping for the BFS, not a real function name in the bundle.
 
 Use these facts as your primary source. Do not guess. If something is not in the data, write
 `<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->`.

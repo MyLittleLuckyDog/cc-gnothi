@@ -694,7 +694,72 @@ function buildIndex(src, version) {
     },
   });
 
-  return { version, built: new Date().toISOString().slice(0, 10), commands, dynamicCommands, moduleExports, functions, variables };
+  const result = {
+    version,
+    built: new Date().toISOString().slice(0, 10),
+    commands,
+    dynamicCommands,
+    moduleExports,
+    functions,
+    variables,
+  };
+  // Optional: enrich each command with Arbor's handler resolution
+  // (`arbor_handler` field on the registration). Skipped silently when
+  // ARBOR_BIN is not on this host. The marker is what analyze-command.md
+  // teaches the LLM to read.
+  enrichWithArborHandlers(result, src, version);
+  return result;
+}
+
+/**
+ * Run the Arbor handler-lookup PoC in-process and merge its per-command
+ * result into `index.commands[name].arbor_handler`. Tolerant of every
+ * failure mode — Arbor not installed, graph build fails, no bundle path
+ * — so a host without Arbor still produces a usable index.
+ */
+function enrichWithArborHandlers(index, src, version) {
+  // Bundle path: the caller (main) didn't pass it down; we recover it
+  // from the same env extract-ast uses. Skip silently if unset.
+  const bundlePath = process.env.CC_GNOTHI_BUNDLE_PATH;
+  if (!bundlePath) return;
+  let arbor;
+  try { arbor = require('./arbor-handler-lookup'); }
+  catch { return; }
+  // Per-version graph cache under ~/.cc-gnothi/cache/. Avoids putting
+  // `.arbor/` next to the bundles (where the 19 versions would share one
+  // file) and keeps subsequent --build-index runs warm.
+  const graphPath = path.join(
+    os.homedir(), '.cc-gnothi', 'cache', `arbor-graph-${version}.json`
+  );
+  if (!arbor.ensureArborGraph(bundlePath, graphPath)) {
+    process.stderr.write('arbor handler lookup skipped: arbor not available\n');
+    return;
+  }
+  let payload;
+  try {
+    payload = arbor.resolveHandlers({
+      bundle: bundlePath, version, graph: graphPath, index, src,
+    });
+  } catch (e) {
+    process.stderr.write('arbor handler lookup failed: ' + e.message + '\n');
+    return;
+  }
+  for (const r of payload.per_command) {
+    const reg = index.commands[r.cmd];
+    if (!reg) continue;
+    reg.arbor_handler = {
+      name:            r.handler.name,
+      fqn:             r.handler.fqn,
+      kind:            r.handler.kind,
+      resolution_path: r.resolution_path,
+      n_hits:          r.n_hits,
+    };
+  }
+  process.stderr.write(
+    `arbor handlers: ${payload.totals.handler_resolved}/${payload.totals.total} ` +
+    `(direct ${payload.totals.direct_hit}, module_id ${payload.totals.via_module_id}, ` +
+    `load_ident ${payload.totals.via_load_ident}) in ${payload.elapsed_s}s\n`
+  );
 }
 
 // Extract module identifier from Bun load pattern:
@@ -805,11 +870,23 @@ function extractCommand(src, index, cmdName, maxDepth) {
     };
     entryFns.push({ fn: synth, via: `handler_method:${reg.handler_method ?? 'inline'}` });
   }
+  // Path 4 — Arbor-resolved handler. Covers tool / callback / function
+  // shapes that have neither module_id nor load_ident nor inline method,
+  // but Arbor's symbol-in-range did find their entry function. The
+  // bundle-level function lookup still anchors the BFS in extract-ast's
+  // Babel-parsed `functions` map; arbor_handler.name only tells us which
+  // top-level function to start from.
+  if (entryFns.length === 0 && reg.arbor_handler && index.functions[reg.arbor_handler.name]) {
+    entryFns.push({
+      fn: reg.arbor_handler.name,
+      via: `arbor_handler:${reg.arbor_handler.resolution_path}`,
+    });
+  }
 
   if (entryFns.length === 0) {
     const reason = modId
       ? `module '${modId}' has no exports`
-      : `no module_id / load_ident / handler_method on registration`;
+      : `no module_id / load_ident / handler_method / arbor_handler on registration`;
     result.note = `no entry functions found (${reason})`;
     return serialize(result);
   }
@@ -1273,6 +1350,10 @@ function main() {
 
     process.stderr.write(`Parsing bundle: ${opts.bundle}\n`);
     const src = fs.readFileSync(opts.bundle, 'utf8');
+    // enrichWithArborHandlers picks the bundle path up from the env so we
+    // don't have to thread it through buildIndex's signature (which is also
+    // called by arbor-fallback.js with a different code path).
+    process.env.CC_GNOTHI_BUNDLE_PATH = opts.bundle;
     const t = Date.now();
     const index = buildIndex(src, opts.version);
     const elapsed = Date.now() - t;
