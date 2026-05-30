@@ -1342,6 +1342,13 @@ function main() {
     process.exit(1);
   }
 
+  // Make the bundle path available to enrichWithArborHandlers no matter which
+  // mode actually triggers a buildIndex call (index, dump-prompts, hash-commands
+  // and system-context all do, directly or via the "build first if missing"
+  // branches below). This is what lets sync.sh's automated cycle pick up
+  // Arbor enrichment without exporting an env var of its own.
+  if (opts.bundle) process.env.CC_GNOTHI_BUNDLE_PATH = opts.bundle;
+
   if (opts.mode === 'index') {
     if (!opts.bundle || !opts.version) {
       console.error('--build-index requires --bundle and --version');
