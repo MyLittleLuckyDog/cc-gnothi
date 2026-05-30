@@ -20,6 +20,10 @@ It contains:
 - `telemetry` — all `tengu_*` event strings found in the implementation
 - `literals` — string/number constants found in the implementation
 - `identifiers` — obfuscated function identifiers reached during traversal
+- `_arbor_fallback` (optional) — when `true`, the index was built via the Arbor
+  tree-sitter fallback (Babel tripped on this bundle). Add a one-line footnote
+  near the bottom of the spec: "Note: index built via Arbor fallback; some
+  signals (telemetry, literals) may be missing — see arbor-fallback.js."
 
 Use these facts as your primary source. Do not guess. If something is not in the data, write
 `<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->`.

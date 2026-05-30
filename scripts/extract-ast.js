@@ -113,6 +113,76 @@ function extractTextLiteralsFromFn(src, fnLoc, minLen = 80) {
   return out;
 }
 
+// Resolve the leftmost StringLiteral of a `+`-chained BinaryExpression — the
+// static prefix used by dynamic command names. Returns null if the leftmost
+// leaf is not a StringLiteral. Used to surface `mcp__`-prefixed MCP-prompt
+// registrations: `{type:"prompt", name:"mcp__"+FK(srv)+"__"+q.name, …}`.
+function getDynamicNamePrefix(nameNode) {
+  let n = nameNode;
+  while (n && n.type === 'BinaryExpression' && n.operator === '+') {
+    n = n.left;
+  }
+  return n && n.type === 'StringLiteral' ? n.value : null;
+}
+
+// Trace a local identifier inside a method body to the external string/template
+// variable(s) it is assigned from. Handles three common shapes:
+//
+//   let X = EXT_VAR                                  → pull EXT_VAR
+//   let X = cond ? A : EXT_VAR                       → pull both A and EXT_VAR
+//   let X = EXT_VAR.replaceAll(…).replaceAll(…)      → walk MemberExpression
+//                                                       to leftmost Identifier
+//
+// Stops at one local hop (e.g., `$ = _.replaceAll(...)` then `_ = ... : EXT`)
+// to keep the search bounded; deeper chains have not shown up in CC bundles.
+function traceLocalVar(methodBody, localName, variables, depth) {
+  if (depth >= 2) return [];
+  const out = [];
+  const seen = new Set();
+  const pullIdent = (id) => {
+    if (seen.has(id.name)) return;
+    seen.add(id.name);
+    // Same local-scope-first rule as the outer resolveText: minifier
+    // recycles `_`, `$`, … across many bodies, so a top-level
+    // `variables[name]` is almost always a different command's definition.
+    const local = traceLocalVar(methodBody, id.name, variables, depth + 1);
+    if (local.length) { out.push(...local); return; }
+    const v = variables && variables[id.name];
+    if (v) out.push(v.value);
+  };
+  // Recursively visit an expression tree, calling pullIdent on every Identifier
+  // we can reach through string-building operators. Covers:
+  //   X            → Identifier
+  //   X + Y        → BinaryExpression('+')
+  //   X && Y, A || B → LogicalExpression (logical fallback string ?: pattern)
+  //   cond ? A : B → ConditionalExpression
+  //   X.replaceAll(...).replaceAll(...)  → CallExpression with Member chain
+  //   `…${X}…`     → TemplateLiteral with embedded expressions
+  const traceExpr = (e) => {
+    if (!e) return;
+    if (e.type === 'Identifier') {
+      pullIdent(e);
+    } else if (e.type === 'BinaryExpression' || e.type === 'LogicalExpression') {
+      traceExpr(e.left);
+      traceExpr(e.right);
+    } else if (e.type === 'ConditionalExpression') {
+      traceExpr(e.consequent);
+      traceExpr(e.alternate);
+    } else if (e.type === 'CallExpression') {
+      if (e.callee.type === 'MemberExpression') traceExpr(e.callee.object);
+    } else if (e.type === 'TemplateLiteral') {
+      for (const expr of e.expressions) traceExpr(expr);
+    }
+  };
+  walk(methodBody, {
+    VariableDeclarator(node) {
+      if (!node.id || node.id.type !== 'Identifier' || node.id.name !== localName) return;
+      traceExpr(node.init);
+    },
+  });
+  return out;
+}
+
 // Extract a prompt body from a registration object's `getPromptForCommand` method.
 // Handles four return shapes that show up in actual CC bundles (v2.1.158):
 //
@@ -151,17 +221,29 @@ function extractPromptBody(propsArr, functions, variables, src) {
       resolveText(v.consequent);
       resolveText(v.alternate);
     } else if (v.type === 'Identifier') {
-      const fnLoc = functions[v.name];
-      const variable = variables && variables[v.name];
-      if (fnLoc) {
-        const lits = extractTextLiteralsFromFn(src, fnLoc);
-        if (lits.length) parts.push(...lits);
-        traces.push(`identifier→${v.name} (fn, ${lits.length} literals)`);
-      } else if (variable) {
-        parts.push(variable.value);
-        traces.push(`identifier→${v.name} (var ${variable.kind}, ${variable.value.length} chars)`);
+      // Local-scope resolution first: minifier reuses short names like `_`
+      // and `$` across many sites, and the top-level functions/variables
+      // maps record only one definition per name (last-write-wins). A
+      // `let $ = ...` *inside this method* is always the right answer when
+      // present, regardless of whatever else `$` happens to be at module
+      // scope.
+      const traced = traceLocalVar(method.body, v.name, variables, 0);
+      if (traced.length) {
+        parts.push(...traced);
+        traces.push(`identifier→${v.name} (local→${traced.length} ext vars)`);
       } else {
-        traces.push(`identifier→${v.name} (unresolved)`);
+        const fnLoc = functions[v.name];
+        const variable = variables && variables[v.name];
+        if (fnLoc) {
+          const lits = extractTextLiteralsFromFn(src, fnLoc);
+          if (lits.length) parts.push(...lits);
+          traces.push(`identifier→${v.name} (fn, ${lits.length} literals)`);
+        } else if (variable) {
+          parts.push(variable.value);
+          traces.push(`identifier→${v.name} (var ${variable.kind}, ${variable.value.length} chars)`);
+        } else {
+          traces.push(`identifier→${v.name} (unresolved)`);
+        }
       }
     } else if (v.type === 'CallExpression' && v.callee && v.callee.type === 'Identifier') {
       const loc = functions[v.callee.name];
@@ -196,11 +278,14 @@ function extractPromptBody(propsArr, functions, variables, src) {
     }
   }
 
-  // Fallback: nothing extractable through `text:` chains alone — scan the
-  // method body itself for substantial literals + variable references.
-  // Catches the shape where the body is assembled into a local variable and
-  // returned as `[{text:$}]` (team-onboarding etc.), by pulling values from
-  // any top-level string/template variables referenced inside the method.
+  // Fallback: nothing extractable through `text:` chains — scan the method
+  // body itself for substantial inline literals. Earlier versions also
+  // scanned every Identifier and pulled from `variables` if it matched, but
+  // that lit up on minified single-letter names that overlap across many
+  // unrelated commands (so `mcp__` came back with a PowerShell snippet,
+  // `team-onboarding` came back with `/loop` body). Locals are now resolved
+  // only through the `text:` slot's traceLocalVar path above; this fallback
+  // catches genuinely inline `\`...\`` / "..." in the method itself.
   if (parts.length === 0) {
     const bodyText = src.slice(method.start, method.end);
     let bodyAst;
@@ -208,22 +293,11 @@ function extractPromptBody(propsArr, functions, variables, src) {
       bodyAst = parser.parse(bodyText, { sourceType: 'script', errorRecovery: true, strictMode: false });
     } catch { bodyAst = null; }
     if (bodyAst) {
-      const seen = new Set();
       walk(bodyAst, {
         StringLiteral(n) { if (n.value && n.value.length >= 200) parts.push(n.value); },
         TemplateLiteral(n) { const t = cooked(n); if (t.length >= 200) parts.push(t); },
-        Identifier(n) {
-          if (!variables) return;
-          const v = variables[n.name];
-          if (v && !seen.has(n.name)) {
-            seen.add(n.name);
-            parts.push(v.value);
-          }
-        },
       });
-      if (parts.length) {
-        traces.push(`method-body scan (${parts.length} chunks, vars: ${[...seen].join(',') || 'none'})`);
-      }
+      if (parts.length) traces.push(`method-body inline literals (${parts.length})`);
     }
   }
 
@@ -255,6 +329,11 @@ function buildIndex(src, version) {
   }
 
   const commands = {};
+  // Registrations whose `name` is a runtime-built BinaryExpression carrying a
+  // static StringLiteral prefix (currently: `mcp__`-prefixed MCP-prompt
+  // commands). Kept out of `commands` to avoid generating per-name spec
+  // files for what is really one prefix-class.
+  const dynamicCommands = {};
   const moduleExports = {};
   const functions = {};
   // Top-level string/template constants — needed for prompt-body resolution
@@ -352,25 +431,75 @@ function buildIndex(src, version) {
 
       const typeVal = typeNode.value;
       const nameVal = nameNode.value;
-      // CC keeps adding new registration types as the agent surface grows.
-      // Pre-fix: only `local` and `local-jsx` were accepted, which silently
-      // dropped `prompt` (init, review, insights, team-onboarding,
-      // init-verifiers, mcp__), `tool` (web_search, explain_command),
-      // `callback`, and `function` registrations from v2.1.158. We now
-      // accept the known type set and skip with a stderr warning on any
-      // unfamiliar type so a future regression surfaces visibly instead of
-      // accumulating as silent "분석 누락" downstream.
+      // CC keeps adding new registration types as the agent surface grows,
+      // and the same `{type, name, ...}` envelope is reused outside command
+      // registrations too — for MCP transport descriptors, plugin lifecycle
+      // objects, installation status emissions, message-stream payloads, etc.
+      // To avoid silently dropping real commands or noisily warning on every
+      // non-command object, we keep three sets:
+      //
+      //   KNOWN_TYPES         — explicit command-registration types
+      //   KNOWN_TYPE_PATTERNS — versioned schema names (e.g., `advisor_<yyyymmdd>`)
+      //   IGNORE_TYPES        — same envelope, not a command — skip silently
+      //
+      // Any value not in one of the three still falls through to a stderr
+      // warning so the next regression (a genuinely new command-style type)
+      // surfaces visibly instead of accumulating as silent "분석 누락".
       const KNOWN_TYPES = new Set([
         'local', 'local-jsx',         // original cmd / JSX cmd
         'prompt',                     // prompt-style commands (init, review, etc.)
         'tool',                       // tool-style commands (web_search, etc.)
         'callback', 'function',       // newer registration shapes
       ]);
-      if (!KNOWN_TYPES.has(typeVal)) {
-        process.stderr.write(`[unknown type] ${typeVal}:${nameVal}\n`);
+      const KNOWN_TYPE_PATTERNS = [
+        // Versioned schema names (advisor_20260301, web_search_20250305, …) —
+        // CC stamps date suffixes on schema-bound command registrations so an
+        // older client can refuse a newer envelope shape.
+        /^[a-z][a-z0-9_]*_\d{8}$/,
+      ];
+      const IGNORE_TYPES = new Set([
+        // MCP transport / server / resource — not command registrations
+        'mcp', 'mcp_resource', 'mcp_resource_template', 'stdio',
+        // Plugin lifecycle objects (registration listing UI, not commands)
+        'plugin', 'failed-plugin', 'flagged-plugin',
+        // SDK / state-flag wrappers around messages
+        'sdk', 'disabled', 'pending',
+        // Installation status objects
+        'installing', 'installed', 'failed',
+        // Message-stream payloads sharing the {type, name} envelope
+        'tool_use', 'system',
+        // AWS SDK endpoint param + similar config envelope (not a command)
+        'builtInParams',
+        // Branch descriptor in flow control objects (dynamic name, not cmd)
+        'branch',
+        // Agent / task envelope types — task type tags, not commands
+        'local_workflow', 'remote_agent', 'in_process_teammate', 'dream',
+        'local_agent', 'local_bash',
+        // CommonJS module wrappers (e.g., `sharp` image lib)
+        'commonjs',
+      ]);
+      // Dynamic-valued type — registration computed at runtime; skip silently.
+      if (typeof typeVal !== 'string') return;
+      // Resolve a static prefix if the name is a `+`-chained dynamic string
+      // (currently the `mcp__`-prefixed MCP-prompt registrations). When found,
+      // we keep going so the entry lands in `dynamicCommands` below.
+      let dynamicNamePrefix = null;
+      if (typeof nameVal !== 'string') {
+        dynamicNamePrefix = getDynamicNamePrefix(nameNode);
+        if (!dynamicNamePrefix) return; // truly dynamic, skip
+      }
+      // Namespaced types like `Certificate.TBSCertificate.extensions` or
+      // `rsapss.hashAlgorithm` come from ASN.1/X.509 schema descriptors
+      // bundled inside vendored dependencies — never a CC command.
+      if (typeVal.includes('.')) return;
+      if (IGNORE_TYPES.has(typeVal)) return;
+      const isKnown =
+        KNOWN_TYPES.has(typeVal) ||
+        KNOWN_TYPE_PATTERNS.some((re) => re.test(typeVal));
+      if (!isKnown) {
+        process.stderr.write(`[unknown type] ${typeVal}:${nameVal ?? dynamicNamePrefix}\n`);
         return;
       }
-      if (typeof nameVal !== 'string') return;
 
       const reg = {
         type: typeVal,
@@ -476,13 +605,21 @@ function buildIndex(src, version) {
         }
       }
 
-      if (!commands[nameVal]) {
+      if (dynamicNamePrefix) {
+        // Index by the static prefix string itself ("mcp__"). First wins so
+        // multiple registration sites for the same prefix don't multiply.
+        reg.name = dynamicNamePrefix;
+        reg.dynamic_name = true;
+        if (!dynamicCommands[dynamicNamePrefix]) {
+          dynamicCommands[dynamicNamePrefix] = reg;
+        }
+      } else if (!commands[nameVal]) {
         commands[nameVal] = reg;
       }
     },
   });
 
-  return { version, built: new Date().toISOString().slice(0, 10), commands, moduleExports, functions, variables };
+  return { version, built: new Date().toISOString().slice(0, 10), commands, dynamicCommands, moduleExports, functions, variables };
 }
 
 // Extract module identifier from Bun load pattern:
@@ -1167,6 +1304,10 @@ function main() {
     const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
     const src = fs.readFileSync(opts.bundle, 'utf8');
     const out = extractCommand(src, index, opts.cmd, opts.depth);
+    // PR #1 follow-up: when the index was built via Arbor (because Babel
+    // tripped on the bundle), propagate the marker so analyze-all.sh /
+    // call-api.js can flag the resulting spec for reduced confidence.
+    if (index._arbor_fallback) out._arbor_fallback = true;
     process.stdout.write(JSON.stringify(out, null, 2));
     return;
   }
