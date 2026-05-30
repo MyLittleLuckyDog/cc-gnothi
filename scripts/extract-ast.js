@@ -203,11 +203,68 @@ function buildIndex(src, version) {
           .map((e) => e.value);
       }
 
+      // Some registration shapes don't use `load:` at all. `prompt`-type
+      // commands carry `async getPromptForCommand(...) { ... }` instead;
+      // surface the method's presence so downstream knows the handler is
+      // inline at the registration object itself.
+      if (typeVal === 'prompt') {
+        const methodNode = props.find(
+          (p) => p.type === 'ObjectMethod' &&
+                 (p.key.name === 'getPromptForCommand' ||
+                  p.key.value === 'getPromptForCommand')
+        );
+        if (methodNode) reg.handler_method = 'getPromptForCommand';
+      }
+
       // load: () => Promise.resolve().then(() => (INIT_FN(), MODULE_OBJ))
       const loadNode = get('load');
-      if (loadNode) {
-        const modId = extractLoadModuleId(loadNode);
+      // get() returns ObjectProperty values only. For ObjectMethod (method
+      // shorthand) declarations like `async load() { ... }` we need a
+      // separate lookup.
+      const loadMethodNode = loadNode ? null : props.find(
+        (p) => p.type === 'ObjectMethod' &&
+               (p.key.name === 'load' || p.key.value === 'load')
+      );
+      const effectiveLoadNode = loadNode || loadMethodNode;
+      if (effectiveLoadNode) {
+        // Existing: module_id extraction (for the dynamic-import shape)
+        const modId = extractLoadModuleId(effectiveLoadNode);
         if (modId) reg.module_id = modId;
+
+        // Phase B (cc-gnothi PR #2) — also extract the load handler
+        // identifier so downstream stages can ask Arbor's
+        // `arbor_dependencies` for the handler's call graph. Patterns:
+        //   load: IDENT                          → reg.load_ident
+        //   load: async () => handler(...)       → reg.load_ident + load_inline
+        //   async load() { return handler() }    → reg.load_ident + load_inline
+        // (effectiveLoadNode is either an ObjectProperty value or an
+        // ObjectMethod with a BlockStatement body.)
+        if (effectiveLoadNode.type === 'Identifier') {
+          reg.load_ident = effectiveLoadNode.name;
+        } else {
+          reg.load_inline = true;
+          const body = effectiveLoadNode.body;
+          let firstCall = null;
+          if (body && body.type === 'CallExpression') {
+            firstCall = body;
+          } else if (body && body.type === 'BlockStatement') {
+            for (const stmt of body.body) {
+              if (stmt.type === 'ReturnStatement' && stmt.argument) {
+                const arg = stmt.argument.type === 'AwaitExpression'
+                  ? stmt.argument.argument
+                  : stmt.argument;
+                if (arg?.type === 'CallExpression') { firstCall = arg; break; }
+              }
+              if (stmt.type === 'ExpressionStatement' &&
+                  stmt.expression.type === 'CallExpression') {
+                firstCall = stmt.expression; break;
+              }
+            }
+          }
+          if (firstCall && firstCall.callee?.type === 'Identifier') {
+            reg.load_ident = firstCall.callee.name;
+          }
+        }
       }
 
       if (!commands[nameVal]) {
@@ -222,8 +279,11 @@ function buildIndex(src, version) {
 // Extract module identifier from Bun load pattern:
 //   () => Promise.resolve().then(() => (INIT_FN(), MODULE_OBJ))
 function extractLoadModuleId(node) {
-  // Outer: ArrowFunctionExpression
-  if (node.type !== 'ArrowFunctionExpression') return null;
+  // Outer: ArrowFunctionExpression OR FunctionExpression (method shorthand
+  // form: `async load(){...}` — used by autofix-pr and similar local-jsx
+  // commands declared with method shorthand instead of arrow assignment)
+  if (node.type !== 'ArrowFunctionExpression' &&
+      node.type !== 'FunctionExpression') return null;
   const body = node.body;
 
   // body: CallExpression = Promise.resolve().then(...)
@@ -244,6 +304,23 @@ function extractLoadModuleId(node) {
   }
   // innerBody could also just be the identifier directly
   if (innerBody.type === 'Identifier') return innerBody.name;
+  // Method-shorthand body (`async load(){ return await Promise.resolve()
+  // .then(()=>(M(),X)) }`) wraps the inner expression in BlockStatement +
+  // ReturnStatement + AwaitExpression. Unwrap and re-check.
+  if (innerBody.type === 'BlockStatement') {
+    for (const stmt of innerBody.body) {
+      if (stmt.type === 'ReturnStatement' && stmt.argument) {
+        const v = stmt.argument.type === 'AwaitExpression'
+          ? stmt.argument.argument
+          : stmt.argument;
+        if (v?.type === 'Identifier') return v.name;
+        if (v?.type === 'SequenceExpression') {
+          const last = v.expressions[v.expressions.length - 1];
+          if (last?.type === 'Identifier') return last.name;
+        }
+      }
+    }
+  }
 
   return null;
 }
