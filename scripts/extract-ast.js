@@ -205,10 +205,25 @@ function extractPromptBody(propsArr, functions, variables, src) {
   const parts = [];
   const traces = [];
 
+  // Strip wrappers that just thread a value through — AwaitExpression and
+  // parenthesization carry no extraction information, only the inner node
+  // matters. Without this, v2.1.132~v2.1.150's `commit`/`commit-push-pr`
+  // hit `text: await lt(_, {...}, "/commit")` and the resolver gave up on
+  // an `AwaitExpression` it didn't recognise.
+  const unwrap = (n) => {
+    while (n) {
+      if (n.type === 'AwaitExpression')           n = n.argument;
+      else if (n.type === 'ParenthesizedExpression') n = n.expression;
+      else break;
+    }
+    return n;
+  };
+
   // Resolve a value node sitting in the `text:` slot. ConditionalExpression
   // recurses on both branches — CC bundles use that to flag-gate prompts
   // (e.g., init's `HH5()?AH5:_H5`).
   const resolveText = (v) => {
+    v = unwrap(v);
     if (!v) return;
     if (v.type === 'StringLiteral') {
       parts.push(v.value);
