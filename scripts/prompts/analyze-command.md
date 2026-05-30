@@ -139,3 +139,5 @@ Analysis basis: CC v{VERSION} bundle.js:+{loc_byte}
 ```json
 {AST_JSON}
 ```
+
+{PROMPT_BODY}

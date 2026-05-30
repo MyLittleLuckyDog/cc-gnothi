@@ -147,15 +147,45 @@ analyze_command() {
     return 0
   fi
 
-  # Build prompt: template variables + embed JSON data
+  # Build optional prompt-body block — injected only when a _raw/${cmd}.txt
+  # dump exists for this command (currently prompt-type registrations:
+  # init, init-verifiers, review, insights, team-onboarding, statusline...).
+  # Carries the actual text the command sends to the agent at invocation, so
+  # the Behavioral Spec can be grounded in what is really instructed.
+  #
+  # Built with printf (not heredoc) to avoid backtick-triggered command
+  # substitution inside markdown code spans.
+  local prompt_body_block=""
+  if [[ -f "$VERSIONS_DIR/_raw/${cmd}.txt" ]]; then
+    local _raw_content
+    _raw_content="$(cat "$VERSIONS_DIR/_raw/${cmd}.txt")"
+    prompt_body_block="$(printf '%s\n' \
+      '' \
+      '---' \
+      '' \
+      '## Pre-Extracted Prompt Body' \
+      '' \
+      "The block below is the actual prompt that the /${cmd} command sends to" \
+      "the agent at invocation, extracted from the v${VERSION} bundle's" \
+      'getPromptForCommand method (with 1-hop into referenced functions and' \
+      'top-level variables). Use it to ground the Behavioral Spec in what the' \
+      'command actually tells the agent. Do NOT quote it verbatim beyond short' \
+      'fragments needed for citation (bundle is (c) Anthropic PBC).' \
+      '' \
+      "$_raw_content")"
+  fi
+
+  # Build prompt: template variables + embed JSON data + optional prompt body
   local prompt
   prompt="$(sed \
     -e "s|{COMMAND}|${cmd}|g" \
     -e "s|{VERSION}|${VERSION}|g" \
     -e "s|{TODAY}|${TODAY}|g" \
     "$PROMPT_TEMPLATE" \
-  | sed "s|{AST_JSON}|PLACEHOLDER_AST_JSON|")"
+  | sed "s|{AST_JSON}|PLACEHOLDER_AST_JSON|" \
+  | sed "s|{PROMPT_BODY}|PLACEHOLDER_PROMPT_BODY|")"
   prompt="${prompt/PLACEHOLDER_AST_JSON/$json_data}"
+  prompt="${prompt/PLACEHOLDER_PROMPT_BODY/$prompt_body_block}"
 
   # Write prompt to temp file (avoids shell arg length limits)
   local prompt_file tmp

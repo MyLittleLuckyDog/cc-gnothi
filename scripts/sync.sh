@@ -142,6 +142,14 @@ for i in "${!ALL_SORTED[@]}"; do
     continue
   fi
 
+  # Dump prompt-type command bodies into versions/v${ver}/_raw/ so
+  # analyze-all.sh can inject them into the analysis prompt. Failure is
+  # non-fatal — analyze-all.sh just falls back to AST-only analysis.
+  echo "$LOG_PREFIX Dumping prompt bodies for v${ver}..."
+  node "$SCRIPT_DIR/extract-ast.js" --dump-prompts \
+    --bundle "$ARTIFACTS_DIR/claude-${ver}.js" --version "$ver" \
+    || echo "$LOG_PREFIX WARN: prompt body dump failed for v${ver}, continuing..."
+
   echo "$LOG_PREFIX Analyzing v${ver} (diff from v${PREV_VER})..."
   bash "$SCRIPT_DIR/analyze-all.sh" --version "$ver" --from-version "$PREV_VER" --depth 4
 
