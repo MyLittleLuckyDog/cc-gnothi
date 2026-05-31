@@ -18,6 +18,7 @@ FROM_VERSION=""
 DRY_RUN=false
 SINGLE_CMD=""
 DEPTH=2
+PARALLEL=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -26,6 +27,7 @@ while [[ $# -gt 0 ]]; do
     --cmd)          SINGLE_CMD="$2";   shift 2 ;;
     --dry-run)      DRY_RUN=true;      shift ;;
     --depth)        DEPTH="$2";        shift 2 ;;
+    --parallel)     PARALLEL="$2";     shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -298,13 +300,25 @@ for cmd, new_hash in sorted(new_h.items()):
     exit 0
   fi
 
-  while IFS=' ' read -r action cmd; do
-    if [[ "$action" == "COPY" ]]; then
+  if [[ "$PARALLEL" -gt 1 ]]; then
+    # COPY: sequential (즉시 — 파일 cp 만)
+    echo "$CLASSIFICATION" | grep "^COPY " | while IFS=' ' read -r _ cmd; do
       copy_from_version "$cmd" "$FROM_VERSION"
-    else
-      analyze_command "$cmd" || true
-    fi
-  done <<< "$CLASSIFICATION"
+    done
+    # ANALYZE: parallel via xargs. Each spawned bash re-enters this script
+    # in `--cmd` mode, so analyze_command's own SKIP-if-verified gate
+    # avoids redoing already-finished commands when the run is resumed.
+    echo "$CLASSIFICATION" | grep "^ANALYZE " | awk '{print $2}' | \
+      xargs -I{} -P "$PARALLEL" bash "$0" --version "$VERSION" --cmd "{}" --depth "$DEPTH"
+  else
+    while IFS=' ' read -r action cmd; do
+      if [[ "$action" == "COPY" ]]; then
+        copy_from_version "$cmd" "$FROM_VERSION"
+      else
+        analyze_command "$cmd" || true
+      fi
+    done <<< "$CLASSIFICATION"
+  fi
 
   echo ""
   echo "── Done: v${VERSION} ──"
