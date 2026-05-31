@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  cc-gnothi nightly launchd template.
+
+  Wraps `scripts/sync-and-analyze.sh` (pull caludeCodeAVX2, run
+  analyze-new-version.js for any undocumented bundles, write
+  Handler Resolution stats via the G3-B arbor pipeline).
+
+  Edit the @REPO_ROOT@ / @USER_HOME@ placeholders before
+  loading. See `nightly/README.md` for install + uninstall steps.
+
+  Default cadence: every day at 03:00 local. Adjust
+  StartCalendarInterval to taste.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cc-gnothi.nightly</string>
+
+  <!-- The job: run sync-and-analyze.sh from a login-shell so PATH
+       extensions (homebrew, ~/.cargo/bin) match what the user
+       sees in Terminal. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-l</string>
+    <string>-c</string>
+    <string>@REPO_ROOT@/scripts/sync-and-analyze.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>@REPO_ROOT@</string>
+
+  <!-- 03:00 local time, every day. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <!-- launchd ships a minimal PATH; replicate Terminal's so node /
+       arbor / git / gh resolve. Adjust for your machine if needed
+       (e.g. x86_64 macs use /usr/local/bin instead of
+       /opt/homebrew/bin). -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:@USER_HOME@/.cargo/bin</string>
+    <key>HOME</key>
+    <string>@USER_HOME@</string>
+    <!-- Override the arbor binary location if you keep it
+         outside ~/.cargo/bin. -->
+    <!-- <key>ARBOR_BIN</key>                              -->
+    <!-- <string>@USER_HOME@/.cargo/bin/arbor</string>      -->
+  </dict>
+
+  <!-- All stdout/stderr is appended to these logs. Rotate
+       manually or via newsyslog if they grow. -->
+  <key>StandardOutPath</key>
+  <string>@USER_HOME@/Library/Logs/cc-gnothi-nightly.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>@USER_HOME@/Library/Logs/cc-gnothi-nightly.err.log</string>
+
+  <!-- Don't try to re-launch on failure: cron-style daily wake is
+       what we want, not a respawning daemon. -->
+  <key>KeepAlive</key>
+  <false/>
+
+  <!-- Respect macOS power management; if the machine is asleep at
+       03:00 the job fires when the system next wakes. (Without
+       this, sleeping macs never run scheduled jobs.) -->
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>
