@@ -33,21 +33,44 @@ cd ~/code
 git clone git@github.com:MyLittleLuckyDog/cc-gnothi.git
 git clone git@github.com:MyLittleLuckyDog/caludeCodeAVX2.git
 
-# 2. Install node deps for cc-gnothi.
-cd cc-gnothi && npm install --no-package-lock
+# 2. Run the installer (handles prereq check, npm install, plist
+#    render with this host's $HOME, launchctl load, and verify).
+cd cc-gnothi
+./nightly/install.sh
+```
 
-# 3. Render the launchd plist for this machine.
+The installer probes node ≥ 18, git, and `arbor` (the
+last is optional — handler resolution gracefully SKIPs when
+absent), renders the plist with the right `@REPO_ROOT@` /
+`@USER_HOME@` substitutions, loads it via `launchctl`, and
+prints the verification + log paths. It's idempotent: re-running
+on the same host unloads any previous job before installing
+fresh, so you can re-run it after pulling a new cc-gnothi
+release without manually unloading first.
+
+Override paths when the layout is non-default:
+
+```bash
+CC_GNOTHI_REPO=/path/to/cc-gnothi \
+CALUDE_AVX2_REPO=/path/to/caludeCodeAVX2 \
+./nightly/install.sh
+```
+
+Use `--dry-run` to preview without touching launchctl or
+filesystem state.
+
+### Manual install (without the script)
+
+If you'd rather render the plist by hand:
+
+```bash
 mkdir -p ~/Library/LaunchAgents
 sed \
     -e "s|@REPO_ROOT@|$HOME/code/cc-gnothi|g" \
     -e "s|@USER_HOME@|$HOME|g" \
     nightly/com.cc-gnothi.nightly.plist \
     > ~/Library/LaunchAgents/com.cc-gnothi.nightly.plist
-
-# 4. Load the job into launchd.
 launchctl load -w ~/Library/LaunchAgents/com.cc-gnothi.nightly.plist
-
-# 5. Verify it's registered.
 launchctl list | grep cc-gnothi
 ```
 
@@ -102,6 +125,12 @@ considerations before doing this:
   monitor the log.
 
 ## Uninstall
+
+```bash
+./nightly/uninstall.sh
+```
+
+Or, manually:
 
 ```bash
 launchctl unload -w ~/Library/LaunchAgents/com.cc-gnothi.nightly.plist
