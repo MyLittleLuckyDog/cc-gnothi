@@ -36,6 +36,12 @@ The `/privacy-settings` command presents the user with a view of their current p
 | description | `View and update your privacy settings` |
 | module\_id | `gWq` |
 | loc\_line | `7005` |
+| `loc_byte_end` | `12060145` |
+| `arbor_handler.name` | `YH5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::YH5` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11465154
 

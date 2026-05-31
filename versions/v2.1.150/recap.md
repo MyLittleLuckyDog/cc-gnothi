@@ -35,6 +35,13 @@ The `/recap` command triggers an immediate one-line summary of the current sessi
 | description | `Generate a one-line session recap now` |
 | supportsNonInteractive | `false` |
 | thinClientDispatch | `post-text` |
+| `loc_byte_end` | `12556846` |
+| `load_ident` | `WK5` |
+| `arbor_handler.name` | `WK5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `load_ident` |
+| `arbor_handler.fqn` | `claude-2.1.150::WK5` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.143 bundle.js:+11932233
 

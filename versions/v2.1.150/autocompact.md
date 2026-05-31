@@ -36,6 +36,12 @@ The `/autocompact` slash command allows users to configure the auto-compact wind
 | argumentHint | `[auto\|<tokens>]` |
 | isHidden | `false` |
 | module\_id | `L4q` |
+| `loc_byte_end` | `10704123` |
+| `arbor_handler.name` | `wmL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::wmL` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.144 bundle.js:+10162236
 

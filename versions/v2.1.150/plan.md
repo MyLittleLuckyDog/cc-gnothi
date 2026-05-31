@@ -35,6 +35,12 @@ The `/plan` command enables **plan mode** for the current Claude Code session, o
 | description | `Enable plan mode or view the current session plan` |
 | argumentHint | `[open\|<description>]` |
 | module\_id | `EWq` |
+| `loc_byte_end` | `12037186` |
+| `arbor_handler.name` | `aeL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::aeL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11442188
 

@@ -35,6 +35,12 @@ The `/setup-bedrock` slash command allows users to reconfigure their Amazon Bedr
 | description | `Reconfigure Amazon Bedrock authentication, region, or model pins` |
 | loc\_line | `6682` |
 | module\_id | `tjq` |
+| `loc_byte_end` | `11810643` |
+| `arbor_handler.name` | `LsL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::LsL` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11244413
 

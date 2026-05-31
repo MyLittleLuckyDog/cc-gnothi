@@ -34,6 +34,12 @@ license: "AGPL-3.0-only"
 | description | `Show options when rate limit is reached` |
 | isHidden | `true` |
 | module_id | `SEq` |
+| `loc_byte_end` | `12303223` |
+| `arbor_handler.name` | `HA5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::HA5` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.143 bundle.js:+11679926
 

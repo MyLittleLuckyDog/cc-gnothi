@@ -36,6 +36,12 @@ The `/fast` command is a local JSX slash command that toggles or explicitly sets
 | argumentHint | `[on|off]` |
 | thinClientDispatch | `control-request` |
 | module\_id | `yWq` |
+| `loc_byte_end` | `12043811` |
+| `arbor_handler.name` | `AH5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::AH5` |
+| `arbor_handler.n_hits` | `3` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11448740
 

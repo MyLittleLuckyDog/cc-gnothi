@@ -35,6 +35,12 @@ The `/fork` command spawns a background agent that inherits the full current con
 | description | `Spawn a background agent that inherits the full conversation` |
 | argumentHint | `<directive>` |
 | module_id | `Wyq` |
+| `loc_byte_end` | `12664375` |
+| `arbor_handler.name` | `N75` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::N75` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+12051216
 

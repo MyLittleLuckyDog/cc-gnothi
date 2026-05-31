@@ -35,6 +35,12 @@ The `/hooks` command displays the current hook configurations that have been reg
 | description | `View hook configurations for tool events` |
 | immediate | `true` |
 | module\_id | `J0q` |
+| `loc_byte_end` | `12090185` |
+| `arbor_handler.name` | `ZH5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::ZH5` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11495201
 

@@ -37,6 +37,12 @@ The `/remote-control` command (alias `/rc`) enables a user to link and control t
 | immediate | `true` |
 | aliases | `["rc"]` |
 | module\_id | `EVq` |
+| `loc_byte_end` | `12331161` |
+| `arbor_handler.name` | `q95` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::q95` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11729851
 

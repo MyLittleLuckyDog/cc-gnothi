@@ -34,6 +34,12 @@ license: "AGPL-3.0-only"
 | name | `brief` |
 | description | `Toggle brief-only mode` |
 | immediate | `true` |
+| `loc_byte_end` | `12318702` |
+| `arbor_handler.name` | `call` |
+| `arbor_handler.kind` | `Method` |
+| `arbor_handler.resolution_path` | `direct` |
+| `arbor_handler.fqn` | `claude-2.1.150::call` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.143 bundle.js:+11693941
 

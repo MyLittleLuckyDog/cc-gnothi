@@ -36,6 +36,12 @@ The `/reload-plugins` command activates any pending plugin changes within the cu
 | supportsNonInteractive | `false` |
 | thinClientDispatch | `control-request` |
 | module_id | `OTq` |
+| `loc_byte_end` | `12190370` |
+| `arbor_handler.name` | `d65` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::d65` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11595248
 

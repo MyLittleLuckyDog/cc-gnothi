@@ -35,6 +35,12 @@ The `/add-dir` command allows the user to register an additional working directo
 | description | `Add a new working directory` |
 | argumentHint | `<path>` |
 | module_id | `Bqq` |
+| `loc_byte_end` | `10592164` |
+| `arbor_handler.name` | `PxL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::PxL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+10052277
 

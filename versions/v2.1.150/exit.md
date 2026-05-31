@@ -36,6 +36,12 @@ The `/exit` command (also accessible as `/quit`) is a local slash command that i
 | immediate | `true` |
 | aliases | `["quit"]` |
 | module\_id | `cEq` |
+| `loc_byte_end` | `12262051` |
+| `arbor_handler.name` | `j_5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::j_5` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11666327
 

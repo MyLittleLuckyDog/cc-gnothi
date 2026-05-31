@@ -35,6 +35,12 @@ The `/keybindings` command opens the user's keybindings configuration file in th
 | description | `Open or create your keybindings configuration file` |
 | supportsNonInteractive | `false` |
 | module\_id | `sMq` |
+| `loc_byte_end` | `11250700` |
+| `arbor_handler.name` | `dQL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::dQL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+10693874
 

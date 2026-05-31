@@ -35,6 +35,12 @@ The `/setup-vertex` slash command provides an interactive re-configuration flow 
 | description | `Reconfigure Google Vertex AI authentication, project, region, or model pins` |
 | module\_id | `qXq` |
 | loc\_line | 6682 |
+| `loc_byte_end` | `11811671` |
+| `arbor_handler.name` | `fsL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::fsL` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11245432
 

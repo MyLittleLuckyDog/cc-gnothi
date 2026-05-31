@@ -36,6 +36,12 @@ The `/mcp` command provides in-session management of Model Context Protocol (MCP
 | argumentHint | `[enable\|disable [server-name]]` |
 | immediate | `true` |
 | module\_id | `rOq` |
+| `loc_byte_end` | `11555425` |
+| `arbor_handler.name` | `YlL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::YlL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+10991180
 

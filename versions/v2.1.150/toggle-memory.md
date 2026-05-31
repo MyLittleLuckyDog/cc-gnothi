@@ -37,6 +37,12 @@ The `/toggle-memory` command switches the automemory feature on or off for the c
 | thinClientDispatch | `post-text` |
 | isHidden | `false` |
 | module_id | `jMq` |
+| `loc_byte_end` | `11193220` |
+| `arbor_handler.name` | `XQL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::XQL` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.144 bundle.js:+10636229
 

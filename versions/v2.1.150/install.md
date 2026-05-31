@@ -34,6 +34,12 @@ The `/install` slash command triggers the installation of a Claude Code native b
 | name | `install` |
 | description | Install Claude Code native build |
 | argumentHint | `[options]` |
+| `loc_byte_end` | `13185330` |
+| `arbor_handler.name` | `call` |
+| `arbor_handler.kind` | `Method` |
+| `arbor_handler.resolution_path` | `direct` |
+| `arbor_handler.fqn` | `claude-2.1.150::call` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.143 bundle.js:+12535702
 

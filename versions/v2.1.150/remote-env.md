@@ -34,6 +34,12 @@ The `/remote-env` command configures the default remote environment used for Tel
 | name | `remote-env` |
 | description | `Configure the default remote environment for teleport sessions` |
 | module_id | `jEq` |
+| `loc_byte_end` | `12293110` |
+| `arbor_handler.name` | `n_5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::n_5` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.143 bundle.js:+11673381
 

@@ -35,6 +35,12 @@ The `/scroll-speed` command allows the user to adjust the mouse wheel scroll spe
 | description | `Adjust mouse wheel scroll speed` |
 | module_id | `iXq` |
 | loc_line | 6799 |
+| `loc_byte_end` | `11860684` |
+| `arbor_handler.name` | `LtL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::LtL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11295506
 

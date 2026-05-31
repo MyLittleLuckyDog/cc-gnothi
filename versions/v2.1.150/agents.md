@@ -35,6 +35,12 @@ The `/agents` slash command provides an interface for managing agent configurati
 | description | `Manage agent configurations` |
 | module\_id | `tGq` |
 | loc\_line | 7202 |
+| `loc_byte_end` | `12186187` |
+| `arbor_handler.name` | `x65` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::x65` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11591160
 

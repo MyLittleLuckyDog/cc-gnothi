@@ -36,6 +36,12 @@ The `/mobile` command renders a QR code within the Claude Code CLI interface, gi
 | aliases | `ios`, `android` |
 | module\_id | `qDq` |
 | aliases (count) | 2 |
+| `loc_byte_end` | `11618604` |
+| `arbor_handler.name` | `yiL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::yiL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11054309
 

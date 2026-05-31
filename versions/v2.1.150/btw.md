@@ -38,6 +38,12 @@ The `/btw` ("by the way") slash command allows a user to pose a quick, ancillary
 | immediate | `true` |
 | thinClientDispatch | `control-request` |
 | module\_id | `PKq` |
+| `loc_byte_end` | `10624264` |
+| `arbor_handler.name` | `nxL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::nxL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+10084233
 

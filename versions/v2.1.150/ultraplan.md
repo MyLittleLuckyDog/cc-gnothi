@@ -35,6 +35,13 @@ license: "AGPL-3.0-only"
 | description | `null` |
 | argumentHint | `<prompt>` |
 | loc_line | `6773` |
+| `loc_byte_end` | `11841762` |
+| `load_ident` | `ksL` |
+| `arbor_handler.name` | `ksL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `load_ident` |
+| `arbor_handler.fqn` | `claude-2.1.150::ksL` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11276683
 

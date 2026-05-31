@@ -38,6 +38,12 @@ Analysis basis: CC v2.1.144 bundle.js:+11287836
 | loc\_byte | `11287836` |
 | loc\_line | `6798` |
 | module\_id | `bXq` |
+| `loc_byte_end` | `11853025` |
+| `arbor_handler.name` | `QsL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::QsL` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11287836
 

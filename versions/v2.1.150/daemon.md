@@ -34,6 +34,12 @@ The `/daemon` command manages Claude Code's background service layer, providing 
 | description | `Manage background services: assistants, scheduled tasks, and remote control` |
 | immediate | `true` |
 | module_id | `qt_` |
+| `loc_byte_end` | `12543751` |
+| `arbor_handler.name` | `C15` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::C15` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.150 bundle.js:+12543547
 

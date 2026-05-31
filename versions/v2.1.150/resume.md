@@ -35,6 +35,12 @@ The `/resume` command (also aliased as `/continue`) allows a user to reattach to
 | argumentHint | `[conversation id or search term]` |
 | aliases | `["continue"]` |
 | module_id | `MC1` |
+| `loc_byte_end` | `11809614` |
+| `arbor_handler.name` | `qsL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::qsL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.150 bundle.js:+11809417
 

@@ -35,6 +35,12 @@ The `/pro-trial-expired` command is a hidden, local JSX command that renders a U
 | description | `Options shown when the Pro plan Claude Code trial has ended` |
 | isHidden | `true` |
 | module_id | `IEq` |
+| `loc_byte_end` | `12296019` |
+| `arbor_handler.name` | `r_5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::r_5` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.143 bundle.js:+11676353
 

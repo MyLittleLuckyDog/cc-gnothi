@@ -35,6 +35,12 @@ The `/diff` slash command surfaces two categories of diff information within the
 | description | `View uncommitted changes and per-turn diffs` |
 | module\_id | `h7q` |
 | loc\_line | `5779` |
+| `loc_byte_end` | `11127119` |
+| `arbor_handler.name` | `aFL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::aFL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.143 bundle.js:+10546701
 

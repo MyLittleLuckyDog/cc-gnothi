@@ -35,6 +35,12 @@ The `/permissions` command (also accessible as `/allowed-tools`) provides an int
 | description | `Manage allow & deny tool permission rules` |
 | aliases | `["allowed-tools"]` |
 | module_id | `XWq` |
+| `loc_byte_end` | `12035106` |
+| `arbor_handler.name` | `ieL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::ieL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11440137
 

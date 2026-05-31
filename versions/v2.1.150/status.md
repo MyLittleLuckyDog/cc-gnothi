@@ -35,6 +35,12 @@ The `/status` command is a local, immediately-rendered JSX slash command that di
 | description | `Show Claude Code status including version, model, account, API connectivity, and tool statuses` |
 | immediate | `true` |
 | module\_id | `DPq` |
+| `loc_byte_end` | `11870723` |
+| `arbor_handler.name` | `JtL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::JtL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11305588
 

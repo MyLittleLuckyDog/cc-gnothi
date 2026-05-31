@@ -36,6 +36,12 @@ The `/sandbox` command is a local JSX slash command that allows users to manage 
 | argumentHint | `exclude "command pattern"` |
 | immediate | `true` |
 | module_id | `eTq` |
+| `loc_byte_end` | `12228559` |
+| `arbor_handler.name` | `X85` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::X85` |
+| `arbor_handler.n_hits` | `2` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11632976
 

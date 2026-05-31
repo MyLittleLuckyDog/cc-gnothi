@@ -36,6 +36,12 @@ The `/wellbeing` command provides an interactive configuration interface for opt
 | immediate | `true` |
 | aliases | `breaks`, `break-reminder`, `downtime` |
 | module\_id | `kg1` |
+| `loc_byte_end` | `12315653` |
+| `arbor_handler.name` | `CA5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::CA5` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.149 bundle.js:+12315424
 

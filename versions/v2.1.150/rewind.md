@@ -37,6 +37,12 @@ The `/rewind` command allows the user to restore the session — code state, con
 | supportsNonInteractive | `false` |
 | aliases | `checkpoint`, `undo` |
 | module_id | `DTq` |
+| `loc_byte_end` | `12190754` |
+| `arbor_handler.name` | `l65` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::l65` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11595637
 

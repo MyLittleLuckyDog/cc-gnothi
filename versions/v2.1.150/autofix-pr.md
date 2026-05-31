@@ -34,6 +34,12 @@ license: "AGPL-3.0-only"
 | name | `autofix-pr` |
 | description | Monitor and autofix any issues with the current PR |
 | argumentHint | *(none)* |
+| `loc_byte_end` | `10607048` |
+| `arbor_handler.name` | `load` |
+| `arbor_handler.kind` | `Method` |
+| `arbor_handler.resolution_path` | `direct` |
+| `arbor_handler.fqn` | `claude-2.1.150::load` |
+| `arbor_handler.n_hits` | `3` |
 
 Analysis basis: CC v2.1.143 bundle.js:+10042315
 

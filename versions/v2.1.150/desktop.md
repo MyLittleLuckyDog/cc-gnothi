@@ -35,6 +35,12 @@ The `/desktop` command (also aliased as `/app`) provides a mechanism to continue
 | description | `Continue the current session in Claude Desktop` |
 | aliases | `["app"]` |
 | module_id | `QLq` |
+| `loc_byte_end` | `10688823` |
+| `arbor_handler.name` | `AmL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::AmL` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.144 bundle.js:+10147052
 

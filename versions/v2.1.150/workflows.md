@@ -35,6 +35,12 @@ The `/workflows` command opens a browsable view of workflow history within the C
 | description | `Browse workflow history (running and completed)` |
 | aliases | *(none)* |
 | module_id | `mb1` |
+| `loc_byte_end` | `12572918` |
+| `arbor_handler.name` | `BK5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::BK5` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.146 bundle.js:+12379665
 

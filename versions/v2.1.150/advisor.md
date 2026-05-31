@@ -34,6 +34,12 @@ The `/advisor` command configures the **Advisor Tool**, which causes Claude Code
 | description | `Configure the Advisor Tool to consult a stronger model for guidance at key moments during a task` |
 | argumentHint | *(null — no argument hint displayed)* |
 | module\_id | `lB1` |
+| `loc_byte_end` | `12248840` |
+| `arbor_handler.name` | `t85` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::t85` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.150 bundle.js:+12248553
 

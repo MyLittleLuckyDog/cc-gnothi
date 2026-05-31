@@ -34,6 +34,13 @@ license: "AGPL-3.0-only"
 | name | `bridge-kick` |
 | description | `Inject bridge failure states for manual recovery testing` |
 | supportsNonInteractive | `false` |
+| `loc_byte_end` | `12206510` |
+| `load_ident` | `_85` |
+| `arbor_handler.name` | `_85` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `load_ident` |
+| `arbor_handler.fqn` | `claude-2.1.150::_85` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.143 bundle.js:+11588855
 

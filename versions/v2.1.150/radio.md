@@ -36,6 +36,12 @@ The `/radio` command is a local slash command that, when invoked, plays Claude F
 | description | `Listen to Claude FM lo-fi radio` |
 | supportsNonInteractive | `false` |
 | module_id | `GEq` |
+| `loc_byte_end` | `12240336` |
+| `arbor_handler.name` | `U85` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::U85` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11645197
 

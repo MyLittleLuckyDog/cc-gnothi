@@ -34,6 +34,12 @@ The `/upgrade` slash command presents the user with a path to upgrade their Anth
 | name | `upgrade` |
 | description | `Upgrade to Max for higher rate limits and more Opus` |
 | module\_id | `RZq` |
+| `loc_byte_end` | `12294392` |
+| `arbor_handler.name` | `_v6` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::_v6` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11697400
 

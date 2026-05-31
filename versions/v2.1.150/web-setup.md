@@ -34,6 +34,12 @@ The `/web-setup` command initiates the process of connecting Claude Code to a we
 | name | `web-setup` |
 | description | `Setup Claude Code on the web (requires connecting your GitHub account)` |
 | module_id | `dvq` |
+| `loc_byte_end` | `12578708` |
+| `arbor_handler.name` | `lK5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::lK5` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.143 bundle.js:+11943586
 

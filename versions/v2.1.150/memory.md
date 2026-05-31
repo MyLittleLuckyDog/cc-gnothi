@@ -35,6 +35,12 @@ The `/memory` command provides a direct interface for viewing and editing Claude
 | description | `Edit Claude memory files` |
 | module_id | `i5q` |
 | loc_line | `5829` |
+| `loc_byte_end` | `11192435` |
+| `arbor_handler.name` | `jQL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::jQL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.143 bundle.js:+10611915
 

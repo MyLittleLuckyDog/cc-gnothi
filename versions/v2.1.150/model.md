@@ -36,6 +36,12 @@ The `/model` command allows users to set or switch the AI model used by Claude C
 | argumentHint | `<model>` |
 | supportsNonInteractive | `true` |
 | module_id | `DZq` |
+| `loc_byte_end` | `12287069` |
+| `arbor_handler.name` | `C_5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::C_5` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11690163
 

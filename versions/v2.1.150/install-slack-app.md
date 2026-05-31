@@ -35,6 +35,12 @@ The `/install-slack-app` slash command initiates the installation flow for the C
 | description | `Install the Claude Slack app` |
 | supportsNonInteractive | `false` |
 | module_id | `e$q` |
+| `loc_byte_end` | `11302789` |
+| `arbor_handler.name` | `qdL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::qdL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+10745971
 

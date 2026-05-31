@@ -34,6 +34,12 @@ The `/feedback` command provides users with a mechanism to submit feedback, repo
 | argumentHint | `[report]` |
 | aliases | `share`, `bug` |
 | module\_id | `dKq` |
+| `loc_byte_end` | `10649707` |
+| `arbor_handler.name` | `YuL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::YuL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+10107926
 

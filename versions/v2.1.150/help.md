@@ -35,6 +35,12 @@ The `/help` slash command displays a help panel listing all available slash comm
 | description | `Show help and available commands` |
 | module_id | `wfq` |
 | loc_line | `5831` |
+| `loc_byte_end` | `11204477` |
+| `arbor_handler.name` | `ZQL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::ZQL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.143 bundle.js:+10624034
 

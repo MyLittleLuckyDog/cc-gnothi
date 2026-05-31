@@ -36,6 +36,12 @@ The `/doctor` command diagnoses and verifies the user's Claude Code installation
 | description | `Diagnose and verify your Claude Code installation and settings` |
 | immediate | `true` |
 | module_id | `ofq` |
+| `loc_byte_end` | `11181063` |
+| `arbor_handler.name` | `QgL` |
+| `arbor_handler.kind` | `Function` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::QgL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+10624100
 

@@ -34,6 +34,12 @@ The `/loops` command is the primary management interface for Claude Code's recur
 | description | List, create, and delete recurring loops and stop-hooks |
 | immediate | `true` |
 | module_id | `Fm1` |
+| `loc_byte_end` | `12099733` |
+| `arbor_handler.name` | `yH5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::yH5` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.150 bundle.js:+12099551
 

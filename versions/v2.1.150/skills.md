@@ -34,6 +34,12 @@ The `/skills` slash command lists the skills available to the current Claude Cod
 | description | `List available skills` |
 | immediate | `true` |
 | module_id | `$Pq` |
+| `loc_byte_end` | `11870301` |
+| `arbor_handler.name` | `wtL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::wtL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11305239
 

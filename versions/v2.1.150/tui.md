@@ -35,6 +35,12 @@ The `/tui` command allows the user to switch the terminal UI renderer between av
 | description | `Set the terminal UI renderer (default \| fullscreen)` |
 | argumentHint | `[default\|fullscreen]` |
 | module\_id | `c2q` |
+| `loc_byte_end` | `12008303` |
+| `arbor_handler.name` | `IeL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::IeL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11413342
 

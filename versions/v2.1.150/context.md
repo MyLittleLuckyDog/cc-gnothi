@@ -35,6 +35,12 @@ The `/context` command visualizes the current context window usage as a colored 
 | argumentHint | `[all]` |
 | thinClientDispatch | `control-request` |
 | module_id | `XT1` |
+| `loc_byte_end` | `11097183` |
+| `arbor_handler.name` | `OFL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::OFL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.150 bundle.js:+11096957
 

@@ -34,6 +34,12 @@ The `/branch` command (also aliased as `/fork`) creates a new, independent conve
 | argumentHint | `[name]` |
 | aliases | `["fork"]` |
 | module_id | `Md_` |
+| `loc_byte_end` | `12099969` |
+| `arbor_handler.name` | `pxL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::pxL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.150 bundle.js:+12099775
 

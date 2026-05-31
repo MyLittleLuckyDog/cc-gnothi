@@ -34,6 +34,13 @@ The `/version` command prints the version of Claude Code that is currently runni
 | name | `version` |
 | description | `Print the version this session is running (not what autoupdate downloaded)` |
 | immediate | `true` |
+| `loc_byte_end` | `12211397` |
+| `load_ident` | `L85` |
+| `arbor_handler.name` | `L85` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `load_ident` |
+| `arbor_handler.fqn` | `claude-2.1.150::L85` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.143 bundle.js:+11593719
 

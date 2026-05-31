@@ -35,6 +35,12 @@ The `/terminal-setup` command is a local JSX slash command registered in module 
 | description | `null` |
 | loc\_line | 6990 |
 | module\_id | `Yp1` |
+| `loc_byte_end` | `11984727` |
+| `arbor_handler.name` | `pM7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::pM7` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11389646
 

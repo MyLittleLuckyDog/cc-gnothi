@@ -35,6 +35,12 @@ The `/theme` command allows the user to change the visual theme of the Claude Co
 | description | `Change the theme` |
 | module\_id | `EXq` |
 | loc\_line | `6978` |
+| `loc_byte_end` | `12001925` |
+| `arbor_handler.name` | `veL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::veL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.143 bundle.js:+11384642
 

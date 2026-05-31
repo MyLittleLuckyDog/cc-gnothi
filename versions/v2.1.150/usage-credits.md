@@ -35,6 +35,12 @@ The `/usage-credits` command opens a configuration interface that allows users t
 | description | `Configure usage credits to keep working when you hit a limit` |
 | module\_id | `NI_` |
 | loc\_line | 2762 |
+| `loc_byte_end` | `8981045` |
+| `arbor_handler.name` | `m06` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::m06` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+8492458
 

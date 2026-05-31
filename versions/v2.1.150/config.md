@@ -35,6 +35,12 @@ The `/config` command (also accessible as `/settings`) is a local JSX slash comm
 | description | `Open config panel` |
 | aliases | `["settings"]` |
 | module\_id | `j5q` |
+| `loc_byte_end` | `11078893` |
+| `arbor_handler.name` | `NBL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::NBL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+10534653
 

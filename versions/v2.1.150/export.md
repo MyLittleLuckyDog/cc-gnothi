@@ -35,6 +35,12 @@ The `/export` command serializes the current conversation session and writes it 
 | description | `Export the current conversation to a file or clipboard` |
 | argumentHint | `[filename]` |
 | module\_id | `$Zq` |
+| `loc_byte_end` | `12278631` |
+| `arbor_handler.name` | `S_5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::S_5` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11682290
 

@@ -36,6 +36,12 @@ The `/clear` command terminates the current conversation session and starts a fr
 | supportsNonInteractive | `true` |
 | thinClientDispatch | `post-text` |
 | module_id | `d21` |
+| `loc_byte_end` | `10665502` |
+| `arbor_handler.name` | `RuL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::RuL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.150 bundle.js:+10665211
 

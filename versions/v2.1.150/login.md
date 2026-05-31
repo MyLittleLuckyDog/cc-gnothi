@@ -35,6 +35,12 @@ The `/login` command is a local JSX slash command registered in CC v2.1.144 that
 | description | `null` |
 | loc\_line | 6331 |
 | module\_id | `gB9` |
+| `loc_byte_end` | `11250957` |
+| `arbor_handler.name` | `KV1` |
+| `arbor_handler.kind` | `Function` |
+| `arbor_handler.resolution_path` | `direct` |
+| `arbor_handler.fqn` | `claude-2.1.150::KV1` |
+| `arbor_handler.n_hits` | `2` |
 
 Analysis basis: CC v2.1.144 bundle.js:+10694092
 

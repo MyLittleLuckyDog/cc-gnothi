@@ -37,6 +37,12 @@ The `/compact` command reduces the active context window by generating a structu
 | supportsNonInteractive | `true` |
 | thinClientDispatch | `post-text` |
 | module\_id | `H4q` |
+| `loc_byte_end` | `10697317` |
+| `arbor_handler.name` | `MmL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::MmL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+10155483
 

@@ -39,6 +39,12 @@ UI rather than as plain text.
 | description | Resume a Claude Code session from claude.ai |
 | aliases | `tp` |
 | module_id | `z2q` |
+| `loc_byte_end` | `11971978` |
+| `arbor_handler.name` | `MeL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::MeL` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11377266
 

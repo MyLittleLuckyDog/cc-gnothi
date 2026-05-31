@@ -35,6 +35,12 @@ The `/session` command (also reachable via `/remote`) displays the current remot
 | description | `Show remote session URL and QR code` |
 | aliases | `["remote"]` |
 | module\_id | `UXq` |
+| `loc_byte_end` | `11855476` |
+| `arbor_handler.name` | `ssL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::ssL` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11290328
 

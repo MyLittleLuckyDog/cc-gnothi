@@ -36,6 +36,12 @@ The `/voice` command toggles voice input mode within Claude Code's CLI interface
 | argumentHint | `[hold\|tap\|off]` |
 | supportsNonInteractive | `false` |
 | module\_id | `uNq` |
+| `loc_byte_end` | `12556157` |
+| `arbor_handler.name` | `JK5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::JK5` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11954556
 

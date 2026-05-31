@@ -35,6 +35,12 @@ license: "AGPL-3.0-only"
 | description | `Discover Claude Code features through quick interactive lessons` |
 | module\_id | `VDq` |
 | loc\_line | 6618 |
+| `loc_byte_end` | `11638870` |
+| `arbor_handler.name` | `ciL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::ciL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11074597
 

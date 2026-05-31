@@ -35,6 +35,12 @@ The `/update` command upgrades the running Claude Code process to the latest ins
 | supportsNonInteractive | `false` |
 | isHidden | `true` |
 | module_id | `VF1` |
+| `loc_byte_end` | `12273229` |
+| `arbor_handler.name` | `E_5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::E_5` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.150 bundle.js:+12273027
 

@@ -36,6 +36,12 @@ The `/stop` command terminates the current background Claude Code session immedi
 | description | `Stop this background session; transcript and worktree are kept` |
 | immediate | `true` |
 | module_id | `Dyq` |
+| `loc_byte_end` | `12663511` |
+| `arbor_handler.name` | `T75` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::T75` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+12050365
 

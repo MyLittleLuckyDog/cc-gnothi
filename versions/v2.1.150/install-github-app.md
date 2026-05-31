@@ -35,6 +35,12 @@ The `/install-github-app` command initiates the setup flow for Claude GitHub Act
 | description | `Set up Claude GitHub Actions for a repository` |
 | module_id | `hMq` |
 | loc_line | 6465 |
+| `loc_byte_end` | `11302138` |
+| `arbor_handler.name` | `_dL` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::_dL` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.143 bundle.js:+10721587
 

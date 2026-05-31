@@ -36,6 +36,12 @@ The `/effort` command allows users to set the effort level that governs how much
 | argumentHint | `[low\|medium\|high\|xhigh\|max\|auto]` |
 | thinClientDispatch | `control-request` |
 | module_id | `aZq` |
+| `loc_byte_end` | `12314074` |
+| `arbor_handler.name` | `vA5` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::vA5` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11714131
 

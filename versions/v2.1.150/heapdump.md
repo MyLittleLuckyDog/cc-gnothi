@@ -35,6 +35,12 @@ The `/heapdump` command captures a V8/Bun heap snapshot of the running Claude Co
 | supportsNonInteractive | `true` |
 | isHidden | `true` |
 | module_id | `mU1` |
+| `loc_byte_end` | `12195928` |
+| `arbor_handler.name` | `o65` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.150::o65` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.150 bundle.js:+12195765
 
