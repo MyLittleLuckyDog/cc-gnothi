@@ -322,25 +322,38 @@ for cmd, new_hash in sorted(new_h.items()):
     exit 0
   fi
 
-  if [[ "$PARALLEL" -gt 1 ]]; then
-    # COPY: sequential (즉시 — 파일 cp 만)
-    echo "$CLASSIFICATION" | grep "^COPY " | while IFS=' ' read -r _ cmd; do
-      copy_from_version "$cmd" "$FROM_VERSION"
-    done
-    # ANALYZE: parallel via xargs. Each spawned bash re-enters this script
-    # in `--cmd` mode, so analyze_command's own SKIP-if-verified gate
-    # avoids redoing already-finished commands when the run is resumed.
-    echo "$CLASSIFICATION" | grep "^ANALYZE " | awk '{print $2}' | \
-      xargs -I{} -P "$PARALLEL" bash "$0" --version "$VERSION" --cmd "{}" --depth "$DEPTH"
-  else
-    while IFS=' ' read -r action cmd; do
-      if [[ "$action" == "COPY" ]]; then
-        copy_from_version "$cmd" "$FROM_VERSION"
-      else
-        analyze_command "$cmd" || true
-      fi
-    done <<< "$CLASSIFICATION"
+  # COPY 는 즉시 파일 cp — 여기서 sequential 처리.
+  echo "$CLASSIFICATION" | grep "^COPY " | while IFS=' ' read -r _ cmd; do
+    copy_from_version "$cmd" "$FROM_VERSION"
+  done
+
+  # ANALYZE 는 analyze-batch.js 한 번 호출. 같은 long-lived
+  # client + pinned X-Session-Id 라서 gateway 측 cache 가 연속
+  # 호출 사이에 살아있고, --from-version 의 changed-cmds 는 보통
+  # 작은 set (몇~수십 개) 이라 sequential 도 빠름. PARALLEL > 1
+  # 옵션이 들어왔으면 batch-cached.sh 패턴 (chunked parallel) 을
+  # 별도 wrapper 로 돌리는 게 더 정확 — 여기서는 warn 후 무시.
+  ANALYZE_CMDS="$(echo "$CLASSIFICATION" | grep "^ANALYZE " | awk '{print $2}' | tr '\n' ',' | sed 's/,$//')"
+
+  if [[ -z "$ANALYZE_CMDS" ]]; then
+    echo "Nothing to ANALYZE (all $COPY_COUNT commands unchanged + verified)."
+    echo ""
+    echo "── Done: v${VERSION} ──"
+    exit 0
   fi
+
+  if [[ "$PARALLEL" -gt 1 ]]; then
+    echo "Note: --parallel $PARALLEL is no longer split per-command at the bash level;" >&2
+    echo "      analyze-batch.js batches all ANALYZE cmds in one long-lived client" >&2
+    echo "      (cache-friendly). Use scripts/batch-cached.sh for chunked parallel." >&2
+  fi
+
+  node "$SCRIPT_DIR/analyze-batch.js" \
+    --bundle "$BUNDLE" \
+    --version "$VERSION" \
+    --out-dir "$VERSIONS_DIR" \
+    --depth "$DEPTH" \
+    --commands "$ANALYZE_CMDS"
 
   echo ""
   echo "── Done: v${VERSION} ──"
