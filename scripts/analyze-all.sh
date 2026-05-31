@@ -239,8 +239,23 @@ trap inject_missing_fields EXIT
 
 # ── Single command mode ───────────────────────────────────────────────────────
 
+# PR #10 migrated the standard-batch loop to analyze-batch.js;
+# this path is the trivial 1-command equivalent. SKIP /
+# validation / placeholder substitution / prompt_body block all
+# happen inside the driver, matching analyze_command's behavior
+# 1:1. Kept here as a small wrapper so callers can keep using
+# `analyze-all.sh --cmd foo`.
 if [[ -n "$SINGLE_CMD" ]]; then
-  analyze_command "$SINGLE_CMD"
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "DRY-RUN [$SINGLE_CMD]: would invoke analyze-batch.js with --commands '$SINGLE_CMD'"
+    exit 0
+  fi
+  node "$SCRIPT_DIR/analyze-batch.js" \
+    --bundle "$BUNDLE" \
+    --version "$VERSION" \
+    --out-dir "$VERSIONS_DIR" \
+    --depth "$DEPTH" \
+    --commands "$SINGLE_CMD"
   exit $?
 fi
 
