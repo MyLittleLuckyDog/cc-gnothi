@@ -5,7 +5,7 @@ git_sha: "f9c2aef1b03555fabbb4ec60302d6750f2ff689e"
 bundle_lines: 19279
 bundle_size: "13.52 MB"
 prev_version: "N/A"
-generated: "2026-05-17"
+generated: "2026-05-31"
 ---
 
 # CC v2.1.132
@@ -261,3 +261,16 @@ generated: "2026-05-17"
 - [ ] `/version` — Print the version this session is running (not what autoupdate downloaded). Review: absorb into existing chapter or create new feature-spec.
 - [ ] `/voice` — Toggle voice mode. Review: absorb into existing chapter or create new feature-spec.
 - [ ] `/web-setup` — Setup Claude Code on the web (requires connecting your GitHub account). Review: absorb into existing chapter or create new feature-spec.
+
+## Handler Resolution (G3-B integration)
+
+| Metric | Value |
+|---|---:|
+| Total commands | 96 |
+| Handler resolved | **96 / 96 (100%)** |
+| via direct byte-range (path 1) | 17 |
+| via module_id follow (path 2) | 75 |
+| via load_ident direct (path 3) | 4 |
+| Unresolved | 0 |
+
+Per-command detail: [`_handlers.json`](_handlers.json).

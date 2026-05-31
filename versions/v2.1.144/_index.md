@@ -5,7 +5,7 @@ git_sha: "32281b6b930f7e2ab4f0b5e2494e263b9c1ffb7e"
 bundle_lines: 19630
 bundle_size: "13.92 MB"
 prev_version: "2.1.143"
-generated: "2026-05-26"
+generated: "2026-05-31"
 ---
 
 # CC v2.1.144
@@ -98,3 +98,16 @@ generated: "2026-05-26"
 
 <!-- Populated by automation when new commands are detected. -->
 - [ ] `/usage-credits` — Configure usage credits to keep working when you hit a limit. Review: absorb into existing chapter or create new feature-spec.
+
+## Handler Resolution (G3-B integration)
+
+| Metric | Value |
+|---|---:|
+| Total commands | 98 |
+| Handler resolved | **98 / 98 (100%)** |
+| via direct byte-range (path 1) | 17 |
+| via module_id follow (path 2) | 77 |
+| via load_ident direct (path 3) | 4 |
+| Unresolved | 0 |
+
+Per-command detail: [`_handlers.json`](_handlers.json).

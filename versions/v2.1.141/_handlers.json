@@ -1,0 +1,3726 @@
+{
+  "bundle": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+  "version": "2.1.141",
+  "elapsed_s": 0.3,
+  "totals": {
+    "total": 97,
+    "with_byte_range": 97,
+    "direct_hit": 17,
+    "via_module_id": 76,
+    "via_load_ident": 4,
+    "handler_resolved": 97,
+    "no_resolution": 0,
+    "multi_hit_disambiguated": 4,
+    "single_hit": 11
+  },
+  "per_command": [
+    {
+      "cmd": "add-dir",
+      "type": "local-jsx",
+      "byte_range": [
+        4346077,
+        4346225
+      ],
+      "line_range": [
+        [
+          714,
+          14986
+        ],
+        [
+          714,
+          15134
+        ]
+      ],
+      "handler": {
+        "name": "nsL",
+        "fqn": "bundle::nsL",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 714,
+          "end_line": 714,
+          "start_col": 13653,
+          "end_col": 14843
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "pg9",
+        "prop": "call",
+        "ident": "nsL"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "extra-usage",
+      "type": "local-jsx",
+      "byte_range": [
+        8137748,
+        8137953
+      ],
+      "line_range": [
+        [
+          3046,
+          23684
+        ],
+        [
+          3046,
+          23889
+        ]
+      ],
+      "handler": {
+        "name": "iJ6",
+        "fqn": "bundle::iJ6",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 3046,
+          "end_line": 3046,
+          "start_col": 22606,
+          "end_col": 23077
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "XC1",
+        "prop": "call",
+        "ident": "iJ6"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "web_search",
+      "type": "web_search_20250305",
+      "byte_range": [
+        8838777,
+        8838902
+      ],
+      "line_range": [
+        [
+          3556,
+          2177
+        ],
+        [
+          3556,
+          2302
+        ]
+      ],
+      "handler": {
+        "name": "nt4",
+        "fqn": "bundle::nt4",
+        "kind": "Function",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 3556,
+          "end_line": 3556,
+          "start_col": 2155,
+          "end_col": 2303
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "autofix-pr",
+      "type": "local-jsx",
+      "byte_range": [
+        9917270,
+        9917553
+      ],
+      "line_range": [
+        [
+          5526,
+          1666
+        ],
+        [
+          5526,
+          1949
+        ]
+      ],
+      "handler": {
+        "name": "load",
+        "fqn": "bundle::load",
+        "kind": "Method",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5526,
+          "end_line": 5526,
+          "start_col": 1843,
+          "end_col": 1911
+        }
+      },
+      "n_hits": 3,
+      "hint": null,
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "btw",
+      "type": "local-jsx",
+      "byte_range": [
+        9936641,
+        9936880
+      ],
+      "line_range": [
+        [
+          5548,
+          7412
+        ],
+        [
+          5548,
+          7651
+        ]
+      ],
+      "handler": {
+        "name": "lM7",
+        "fqn": "bundle::lM7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5548,
+          "end_line": 5548,
+          "start_col": 6953,
+          "end_col": 7172
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "z9q",
+        "prop": "call",
+        "ident": "lM7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "feedback",
+      "type": "local-jsx",
+      "byte_range": [
+        9960248,
+        9960456
+      ],
+      "line_range": [
+        [
+          5566,
+          3258
+        ],
+        [
+          5566,
+          3466
+        ]
+      ],
+      "handler": {
+        "name": "K37",
+        "fqn": "bundle::K37",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5566,
+          "end_line": 5566,
+          "start_col": 3017,
+          "end_col": 3176
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "b9q",
+        "prop": "call",
+        "ident": "K37"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "clear",
+      "type": "local",
+      "byte_range": [
+        9975949,
+        9976240
+      ],
+      "line_range": [
+        [
+          5568,
+          8166
+        ],
+        [
+          5568,
+          8457
+        ]
+      ],
+      "handler": {
+        "name": "V37",
+        "fqn": "bundle::V37",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5568,
+          "end_line": 5568,
+          "start_col": 8001,
+          "end_col": 8111
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "r9q",
+        "prop": "call",
+        "ident": "V37"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "color",
+      "type": "local-jsx",
+      "byte_range": [
+        9977687,
+        9977904
+      ],
+      "line_range": [
+        [
+          5568,
+          9904
+        ],
+        [
+          5568,
+          10121
+        ]
+      ],
+      "handler": {
+        "name": "N37",
+        "fqn": "bundle::N37",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5568,
+          "end_line": 5568,
+          "start_col": 8784,
+          "end_col": 8859
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "t9q",
+        "prop": "call",
+        "ident": "N37"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "commit",
+      "type": "prompt",
+      "byte_range": [
+        9980387,
+        9980940
+      ],
+      "line_range": [
+        [
+          5611,
+          437
+        ],
+        [
+          5611,
+          990
+        ]
+      ],
+      "handler": {
+        "name": "getPromptForCommand",
+        "fqn": "bundle::getPromptForCommand",
+        "kind": "Method",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5611,
+          "end_line": 5611,
+          "start_col": 584,
+          "end_col": 989
+        }
+      },
+      "n_hits": 3,
+      "hint": "getPromptForCommand",
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "copy",
+      "type": "local-jsx",
+      "byte_range": [
+        9987117,
+        9987303
+      ],
+      "line_range": [
+        [
+          5619,
+          1006
+        ],
+        [
+          5619,
+          1192
+        ]
+      ],
+      "handler": {
+        "name": "B37",
+        "fqn": "bundle::B37",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5619,
+          "end_line": 5619,
+          "start_col": 166,
+          "end_col": 812
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "J1q",
+        "prop": "call",
+        "ident": "B37"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "desktop",
+      "type": "local-jsx",
+      "byte_range": [
+        9999072,
+        9999303
+      ],
+      "line_range": [
+        [
+          5620,
+          2525
+        ],
+        [
+          5620,
+          2756
+        ]
+      ],
+      "handler": {
+        "name": "o37",
+        "fqn": "bundle::o37",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5620,
+          "end_line": 5620,
+          "start_col": 2354,
+          "end_col": 2425
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "S1q",
+        "prop": "call",
+        "ident": "o37"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "commit-push-pr",
+      "type": "prompt",
+      "byte_range": [
+        10003158,
+        10003899
+      ],
+      "line_range": [
+        [
+          5691,
+          477
+        ],
+        [
+          5695,
+          377
+        ]
+      ],
+      "handler": {
+        "name": "getPromptForCommand",
+        "fqn": "bundle::getPromptForCommand",
+        "kind": "Method",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5691,
+          "end_line": 5695,
+          "start_col": 681,
+          "end_col": 376
+        }
+      },
+      "n_hits": 4,
+      "hint": "getPromptForCommand",
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "compact",
+      "type": "local",
+      "byte_range": [
+        10007195,
+        10007508
+      ],
+      "line_range": [
+        [
+          5697,
+          1445
+        ],
+        [
+          5697,
+          1758
+        ]
+      ],
+      "handler": {
+        "name": "e37",
+        "fqn": "bundle::e37",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5697,
+          "end_line": 5697,
+          "start_col": 503,
+          "end_col": 1296
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "g1q",
+        "prop": "call",
+        "ident": "e37"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "autocompact",
+      "type": "local-jsx",
+      "byte_range": [
+        10013910,
+        10014159
+      ],
+      "line_range": [
+        [
+          5698,
+          5554
+        ],
+        [
+          5698,
+          5803
+        ]
+      ],
+      "handler": {
+        "name": "f$7",
+        "fqn": "bundle::f$7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5698,
+          "end_line": 5698,
+          "start_col": 5188,
+          "end_col": 5370
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "n1q",
+        "prop": "call",
+        "ident": "f$7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "config",
+      "type": "local-jsx",
+      "byte_range": [
+        10385908,
+        10386044
+      ],
+      "line_range": [
+        [
+          5712,
+          5878
+        ],
+        [
+          5712,
+          6014
+        ]
+      ],
+      "handler": {
+        "name": "wY7",
+        "fqn": "bundle::wY7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5712,
+          "end_line": 5712,
+          "start_col": 5720,
+          "end_col": 5809
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "ALq",
+        "prop": "call",
+        "ident": "wY7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "context",
+      "type": "local-jsx",
+      "byte_range": [
+        10404121,
+        10404347
+      ],
+      "line_range": [
+        [
+          5749,
+          1504
+        ],
+        [
+          5749,
+          1730
+        ]
+      ],
+      "handler": {
+        "name": "sY7",
+        "fqn": "bundle::sY7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5749,
+          "end_line": 5749,
+          "start_col": 106,
+          "end_col": 846
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "jLq",
+        "prop": "call",
+        "ident": "sY7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "diff",
+      "type": "local-jsx",
+      "byte_range": [
+        10421530,
+        10421669
+      ],
+      "line_range": [
+        [
+          5750,
+          14392
+        ],
+        [
+          5750,
+          14531
+        ]
+      ],
+      "handler": {
+        "name": "zD7",
+        "fqn": "bundle::zD7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5750,
+          "end_line": 5750,
+          "start_col": 14191,
+          "end_col": 14333
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "uLq",
+        "prop": "call",
+        "ident": "zD7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "doctor",
+      "type": "local-jsx",
+      "byte_range": [
+        10475114,
+        10475359
+      ],
+      "line_range": [
+        [
+          5789,
+          846
+        ],
+        [
+          5789,
+          1091
+        ]
+      ],
+      "handler": {
+        "name": "Aw7",
+        "fqn": "bundle::Aw7",
+        "kind": "Function",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5789,
+          "end_line": 5789,
+          "start_col": 692,
+          "end_col": 772
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "m4q",
+        "prop": "call",
+        "ident": "Aw7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "memory",
+      "type": "local-jsx",
+      "byte_range": [
+        10486556,
+        10486678
+      ],
+      "line_range": [
+        [
+          5800,
+          770
+        ],
+        [
+          5800,
+          892
+        ]
+      ],
+      "handler": {
+        "name": "kw7",
+        "fqn": "bundle::kw7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5800,
+          "end_line": 5800,
+          "start_col": 552,
+          "end_col": 623
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "t4q",
+        "prop": "call",
+        "ident": "kw7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "toggle-memory",
+      "type": "local",
+      "byte_range": [
+        10487195,
+        10487463
+      ],
+      "line_range": [
+        [
+          5802,
+          203
+        ],
+        [
+          5802,
+          471
+        ]
+      ],
+      "handler": {
+        "name": "hw7",
+        "fqn": "bundle::hw7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5800,
+          "end_line": 5802,
+          "start_col": 941,
+          "end_col": 134
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "A7q",
+        "prop": "call",
+        "ident": "hw7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "help",
+      "type": "local-jsx",
+      "byte_range": [
+        10498668,
+        10498814
+      ],
+      "line_range": [
+        [
+          5802,
+          11676
+        ],
+        [
+          5802,
+          11822
+        ]
+      ],
+      "handler": {
+        "name": "uw7",
+        "fqn": "bundle::uw7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5802,
+          "end_line": 5802,
+          "start_col": 11516,
+          "end_col": 11607
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "W7q",
+        "prop": "call",
+        "ident": "uw7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "ide",
+      "type": "local-jsx",
+      "byte_range": [
+        10509870,
+        10510026
+      ],
+      "line_range": [
+        [
+          5804,
+          2737
+        ],
+        [
+          5804,
+          2893
+        ]
+      ],
+      "handler": {
+        "name": "rw7",
+        "fqn": "bundle::rw7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5803,
+          "end_line": 5804,
+          "start_col": 4099,
+          "end_col": 558
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "k7q",
+        "prop": "call",
+        "ident": "rw7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "init",
+      "type": "prompt",
+      "byte_range": [
+        10533139,
+        10533532
+      ],
+      "line_range": [
+        [
+          6046,
+          271
+        ],
+        [
+          6046,
+          664
+        ]
+      ],
+      "handler": {
+        "name": "getPromptForCommand",
+        "fqn": "bundle::getPromptForCommand",
+        "kind": "Method",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6046,
+          "end_line": 6046,
+          "start_col": 587,
+          "end_col": 663
+        }
+      },
+      "n_hits": 2,
+      "hint": "getPromptForCommand",
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "init-verifiers",
+      "type": "prompt",
+      "byte_range": [
+        10533574,
+        10543701
+      ],
+      "line_range": [
+        [
+          6046,
+          706
+        ],
+        [
+          6287,
+          5
+        ]
+      ],
+      "handler": {
+        "name": "getPromptForCommand",
+        "fqn": "bundle::getPromptForCommand",
+        "kind": "Method",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6046,
+          "end_line": 6287,
+          "start_col": 928,
+          "end_col": 4
+        }
+      },
+      "n_hits": 1,
+      "hint": "getPromptForCommand",
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "keybindings",
+      "type": "local",
+      "byte_range": [
+        10544831,
+        10545025
+      ],
+      "line_range": [
+        [
+          6288,
+          701
+        ],
+        [
+          6288,
+          895
+        ]
+      ],
+      "handler": {
+        "name": "KJ7",
+        "fqn": "bundle::KJ7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6288,
+          "end_line": 6288,
+          "start_col": 70,
+          "end_col": 568
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "U7q",
+        "prop": "call",
+        "ident": "KJ7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "login",
+      "type": "local-jsx",
+      "byte_range": [
+        10545049,
+        10545282
+      ],
+      "line_range": [
+        [
+          6288,
+          919
+        ],
+        [
+          6288,
+          1152
+        ]
+      ],
+      "handler": {
+        "name": "Q7q",
+        "fqn": "bundle::Q7q",
+        "kind": "Function",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6288,
+          "end_line": 6288,
+          "start_col": 910,
+          "end_col": 1153
+        }
+      },
+      "n_hits": 2,
+      "hint": null,
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "logout",
+      "type": "local-jsx",
+      "byte_range": [
+        10545343,
+        10545531
+      ],
+      "line_range": [
+        [
+          6288,
+          1213
+        ],
+        [
+          6288,
+          1401
+        ]
+      ],
+      "handler": {
+        "name": "Jb4",
+        "fqn": "bundle::Jb4",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 2648,
+          "end_line": 2648,
+          "start_col": 2986,
+          "end_col": 3425
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "CE1",
+        "prop": "call",
+        "ident": "Jb4"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "install-github-app",
+      "type": "local-jsx",
+      "byte_range": [
+        10596210,
+        10596468
+      ],
+      "line_range": [
+        [
+          6436,
+          2780
+        ],
+        [
+          6436,
+          3038
+        ]
+      ],
+      "handler": {
+        "name": "PJ7",
+        "fqn": "bundle::PJ7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6436,
+          "end_line": 6436,
+          "start_col": 2151,
+          "end_col": 2221
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "u5q",
+        "prop": "call",
+        "ident": "PJ7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "install-slack-app",
+      "type": "local",
+      "byte_range": [
+        10596933,
+        10597119
+      ],
+      "line_range": [
+        [
+          6436,
+          3503
+        ],
+        [
+          6436,
+          3689
+        ]
+      ],
+      "handler": {
+        "name": "WJ7",
+        "fqn": "bundle::WJ7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6436,
+          "end_line": 6436,
+          "start_col": 3083,
+          "end_col": 3381
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "F5q",
+        "prop": "call",
+        "ident": "WJ7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "mcp",
+      "type": "local-jsx",
+      "byte_range": [
+        10840236,
+        10840408
+      ],
+      "line_range": [
+        [
+          6509,
+          19110
+        ],
+        [
+          6509,
+          19282
+        ]
+      ],
+      "handler": {
+        "name": "EP7",
+        "fqn": "bundle::EP7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6509,
+          "end_line": 6509,
+          "start_col": 18543,
+          "end_col": 18993
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "UMq",
+        "prop": "call",
+        "ident": "EP7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "mobile",
+      "type": "local-jsx",
+      "byte_range": [
+        10903365,
+        10903553
+      ],
+      "line_range": [
+        [
+          6523,
+          803
+        ],
+        [
+          6523,
+          991
+        ]
+      ],
+      "handler": {
+        "name": "U27",
+        "fqn": "bundle::U27",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6523,
+          "end_line": 6523,
+          "start_col": 418,
+          "end_col": 480
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "i$q",
+        "prop": "call",
+        "ident": "U27"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "powerup",
+      "type": "local-jsx",
+      "byte_range": [
+        10923652,
+        10923832
+      ],
+      "line_range": [
+        [
+          6577,
+          4807
+        ],
+        [
+          6577,
+          4987
+        ]
+      ],
+      "handler": {
+        "name": "HW7",
+        "fqn": "bundle::HW7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6577,
+          "end_line": 6577,
+          "start_col": 4659,
+          "end_col": 4742
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "wOq",
+        "prop": "call",
+        "ident": "HW7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "release-notes",
+      "type": "local-jsx",
+      "byte_range": [
+        10929086,
+        10929227
+      ],
+      "line_range": [
+        [
+          6582,
+          1798
+        ],
+        [
+          6582,
+          1939
+        ]
+      ],
+      "handler": {
+        "name": "KW7",
+        "fqn": "bundle::KW7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6582,
+          "end_line": 6582,
+          "start_col": 3,
+          "end_col": 343
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "NOq",
+        "prop": "call",
+        "ident": "KW7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "rename",
+      "type": "local-jsx",
+      "byte_range": [
+        10933422,
+        10933621
+      ],
+      "line_range": [
+        [
+          6595,
+          2142
+        ],
+        [
+          6595,
+          2341
+        ]
+      ],
+      "handler": {
+        "name": "OW7",
+        "fqn": "bundle::OW7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6595,
+          "end_line": 6595,
+          "start_col": 1762,
+          "end_col": 1913
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "bOq",
+        "prop": "call",
+        "ident": "OW7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "resume",
+      "type": "local-jsx",
+      "byte_range": [
+        11094802,
+        11094999
+      ],
+      "line_range": [
+        [
+          6634,
+          1976
+        ],
+        [
+          6634,
+          2173
+        ]
+      ],
+      "handler": {
+        "name": "GT7",
+        "fqn": "bundle::GT7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6634,
+          "end_line": 6634,
+          "start_col": 701,
+          "end_col": 1788
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "FDq",
+        "prop": "call",
+        "ident": "GT7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "setup-bedrock",
+      "type": "local-jsx",
+      "byte_range": [
+        11095796,
+        11096028
+      ],
+      "line_range": [
+        [
+          6634,
+          2970
+        ],
+        [
+          6634,
+          3202
+        ]
+      ],
+      "handler": {
+        "name": "ET7",
+        "fqn": "bundle::ET7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6634,
+          "end_line": 6634,
+          "start_col": 2218,
+          "end_col": 2316
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "lDq",
+        "prop": "call",
+        "ident": "ET7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "setup-vertex",
+      "type": "local-jsx",
+      "byte_range": [
+        11096815,
+        11097056
+      ],
+      "line_range": [
+        [
+          6634,
+          3989
+        ],
+        [
+          6634,
+          4230
+        ]
+      ],
+      "handler": {
+        "name": "VT7",
+        "fqn": "bundle::VT7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6634,
+          "end_line": 6634,
+          "start_col": 3239,
+          "end_col": 3336
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "aDq",
+        "prop": "call",
+        "ident": "VT7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "ultraplan",
+      "type": "local-jsx",
+      "byte_range": [
+        11128295,
+        11128539
+      ],
+      "line_range": [
+        [
+          6725,
+          3578
+        ],
+        [
+          6725,
+          3822
+        ]
+      ],
+      "handler": {
+        "name": "dT7",
+        "fqn": "bundle::dT7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6725,
+          "end_line": 6725,
+          "start_col": 1707,
+          "end_col": 2406
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "load_ident",
+      "via_module_id": null,
+      "via_load_ident": {
+        "load_ident": "dT7"
+      }
+    },
+    {
+      "cmd": "review",
+      "type": "prompt",
+      "byte_range": [
+        11139238,
+        11139441
+      ],
+      "line_range": [
+        [
+          6750,
+          43
+        ],
+        [
+          6750,
+          246
+        ]
+      ],
+      "handler": {
+        "name": "getPromptForCommand",
+        "fqn": "bundle::getPromptForCommand",
+        "kind": "Method",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6750,
+          "end_line": 6750,
+          "start_col": 182,
+          "end_col": 245
+        }
+      },
+      "n_hits": 1,
+      "hint": "getPromptForCommand",
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "ultrareview",
+      "type": "local-jsx",
+      "byte_range": [
+        11139446,
+        11139705
+      ],
+      "line_range": [
+        [
+          6750,
+          251
+        ],
+        [
+          6750,
+          510
+        ]
+      ],
+      "handler": {
+        "name": "KE7",
+        "fqn": "bundle::KE7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6726,
+          "end_line": 6728,
+          "start_col": 453,
+          "end_col": 530
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "Nwq",
+        "prop": "call",
+        "ident": "KE7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "session",
+      "type": "local-jsx",
+      "byte_range": [
+        11141938,
+        11142156
+      ],
+      "line_range": [
+        [
+          6751,
+          1193
+        ],
+        [
+          6751,
+          1411
+        ]
+      ],
+      "handler": {
+        "name": "wE7",
+        "fqn": "bundle::wE7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6751,
+          "end_line": 6751,
+          "start_col": 993,
+          "end_col": 1048
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "Rwq",
+        "prop": "call",
+        "ident": "wE7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "scroll-speed",
+      "type": "local-jsx",
+      "byte_range": [
+        11147116,
+        11147364
+      ],
+      "line_range": [
+        [
+          6751,
+          6371
+        ],
+        [
+          6751,
+          6619
+        ]
+      ],
+      "handler": {
+        "name": "EE7",
+        "fqn": "bundle::EE7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6751,
+          "end_line": 6751,
+          "start_col": 6081,
+          "end_col": 6275
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "Fwq",
+        "prop": "call",
+        "ident": "EE7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "skills",
+      "type": "local-jsx",
+      "byte_range": [
+        11156917,
+        11157049
+      ],
+      "line_range": [
+        [
+          6751,
+          16172
+        ],
+        [
+          6751,
+          16304
+        ]
+      ],
+      "handler": {
+        "name": "hE7",
+        "fqn": "bundle::hE7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6751,
+          "end_line": 6751,
+          "start_col": 15956,
+          "end_col": 16091
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "qJq",
+        "prop": "call",
+        "ident": "hE7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "status",
+      "type": "local-jsx",
+      "byte_range": [
+        11157266,
+        11157471
+      ],
+      "line_range": [
+        [
+          6751,
+          16521
+        ],
+        [
+          6751,
+          16726
+        ]
+      ],
+      "handler": {
+        "name": "RE7",
+        "fqn": "bundle::RE7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6751,
+          "end_line": 6751,
+          "start_col": 16349,
+          "end_col": 16445
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "MJq",
+        "prop": "call",
+        "ident": "RE7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "tasks",
+      "type": "local-jsx",
+      "byte_range": [
+        11219728,
+        11219889
+      ],
+      "line_range": [
+        [
+          6752,
+          14191
+        ],
+        [
+          6752,
+          14352
+        ]
+      ],
+      "handler": {
+        "name": "_Z7",
+        "fqn": "bundle::_Z7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6752,
+          "end_line": 6752,
+          "start_col": 14033,
+          "end_col": 14115
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "cJq",
+        "prop": "call",
+        "ident": "_Z7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "teleport",
+      "type": "local-jsx",
+      "byte_range": [
+        11228742,
+        11229006
+      ],
+      "line_range": [
+        [
+          6752,
+          23205
+        ],
+        [
+          6752,
+          23469
+        ]
+      ],
+      "handler": {
+        "name": "fZ7",
+        "fqn": "bundle::fZ7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6752,
+          "end_line": 6752,
+          "start_col": 23031,
+          "end_col": 23107
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "Kjq",
+        "prop": "call",
+        "ident": "fZ7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "terminal-setup",
+      "type": "local-jsx",
+      "byte_range": [
+        11241249,
+        11241881
+      ],
+      "line_range": [
+        [
+          6942,
+          1010
+        ],
+        [
+          6942,
+          1642
+        ]
+      ],
+      "handler": {
+        "name": "EcL",
+        "fqn": "bundle::EcL",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 574,
+          "end_line": 591,
+          "start_col": 24633,
+          "end_col": 195
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "$u9",
+        "prop": "call",
+        "ident": "EcL"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "usage",
+      "type": "local-jsx",
+      "byte_range": [
+        11242627,
+        11242866
+      ],
+      "line_range": [
+        [
+          6944,
+          157
+        ],
+        [
+          6944,
+          396
+        ]
+      ],
+      "handler": {
+        "name": "DZ7",
+        "fqn": "bundle::DZ7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6942,
+          "end_line": 6942,
+          "start_col": 1695,
+          "end_col": 1807
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "jjq",
+        "prop": "call",
+        "ident": "DZ7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "theme",
+      "type": "local-jsx",
+      "byte_range": [
+        11258665,
+        11258796
+      ],
+      "line_range": [
+        [
+          6944,
+          16195
+        ],
+        [
+          6944,
+          16326
+        ]
+      ],
+      "handler": {
+        "name": "IZ7",
+        "fqn": "bundle::IZ7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6944,
+          "end_line": 6944,
+          "start_col": 16018,
+          "end_col": 16076
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "Njq",
+        "prop": "call",
+        "ident": "IZ7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "tui",
+      "type": "local",
+      "byte_range": [
+        11262816,
+        11263020
+      ],
+      "line_range": [
+        [
+          6945,
+          2262
+        ],
+        [
+          6945,
+          2466
+        ]
+      ],
+      "handler": {
+        "name": "NZ7",
+        "fqn": "bundle::NZ7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6945,
+          "end_line": 6945,
+          "start_col": 517,
+          "end_col": 2152
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "mjq",
+        "prop": "call",
+        "ident": "NZ7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "permissions",
+      "type": "local-jsx",
+      "byte_range": [
+        11289633,
+        11289803
+      ],
+      "line_range": [
+        [
+          6947,
+          6410
+        ],
+        [
+          6947,
+          6580
+        ]
+      ],
+      "handler": {
+        "name": "nZ7",
+        "fqn": "bundle::nZ7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6947,
+          "end_line": 6947,
+          "start_col": 6204,
+          "end_col": 6336
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "$Pq",
+        "prop": "call",
+        "ident": "nZ7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "plan",
+      "type": "local-jsx",
+      "byte_range": [
+        11291684,
+        11291883
+      ],
+      "line_range": [
+        [
+          6947,
+          8461
+        ],
+        [
+          6947,
+          8660
+        ]
+      ],
+      "handler": {
+        "name": "oZ7",
+        "fqn": "bundle::oZ7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6947,
+          "end_line": 6947,
+          "start_col": 7272,
+          "end_col": 8318
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "wPq",
+        "prop": "call",
+        "ident": "oZ7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "fast",
+      "type": "local-jsx",
+      "byte_range": [
+        11298192,
+        11298469
+      ],
+      "line_range": [
+        [
+          6947,
+          14969
+        ],
+        [
+          6947,
+          15246
+        ]
+      ],
+      "handler": {
+        "name": "_V7",
+        "fqn": "bundle::_V7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6947,
+          "end_line": 6947,
+          "start_col": 13985,
+          "end_col": 14350
+        }
+      },
+      "n_hits": 3,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "TPq",
+        "prop": "call",
+        "ident": "_V7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "passes",
+      "type": "local-jsx",
+      "byte_range": [
+        11303231,
+        11303551
+      ],
+      "line_range": [
+        [
+          6947,
+          20008
+        ],
+        [
+          6947,
+          20328
+        ]
+      ],
+      "handler": {
+        "name": "LV7",
+        "fqn": "bundle::LV7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6947,
+          "end_line": 6947,
+          "start_col": 19662,
+          "end_col": 19914
+        }
+      },
+      "n_hits": 2,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "yPq",
+        "prop": "call",
+        "ident": "LV7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "privacy-settings",
+      "type": "local-jsx",
+      "byte_range": [
+        11314612,
+        11314804
+      ],
+      "line_range": [
+        [
+          6957,
+          1161
+        ],
+        [
+          6957,
+          1353
+        ]
+      ],
+      "handler": {
+        "name": "zV7",
+        "fqn": "bundle::zV7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 6957,
+          "end_line": 6957,
+          "start_col": 133,
+          "end_col": 971
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "bPq",
+        "prop": "call",
+        "ident": "zV7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "hooks",
+      "type": "local-jsx",
+      "byte_range": [
+        11344691,
+        11344841
+      ],
+      "line_range": [
+        [
+          7041,
+          15509
+        ],
+        [
+          7041,
+          15659
+        ]
+      ],
+      "handler": {
+        "name": "EV7",
+        "fqn": "bundle::EV7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7041,
+          "end_line": 7041,
+          "start_col": 15263,
+          "end_col": 15430
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "fXq",
+        "prop": "call",
+        "ident": "EV7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "loops",
+      "type": "local-jsx",
+      "byte_range": [
+        11356723,
+        11356905
+      ],
+      "line_range": [
+        [
+          7041,
+          27541
+        ],
+        [
+          7041,
+          27723
+        ]
+      ],
+      "handler": {
+        "name": "SV7",
+        "fqn": "bundle::SV7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7041,
+          "end_line": 7041,
+          "start_col": 26481,
+          "end_col": 27418
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "WXq",
+        "prop": "call",
+        "ident": "SV7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "branch",
+      "type": "local-jsx",
+      "byte_range": [
+        11356947,
+        11357141
+      ],
+      "line_range": [
+        [
+          7041,
+          27765
+        ],
+        [
+          7041,
+          27959
+        ]
+      ],
+      "handler": {
+        "name": "mM7",
+        "fqn": "bundle::mM7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 5548,
+          "end_line": 5548,
+          "start_col": 1585,
+          "end_col": 1670
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "bR_",
+        "prop": "call",
+        "ident": "mM7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "agents",
+      "type": "local-jsx",
+      "byte_range": [
+        11443188,
+        11443313
+      ],
+      "line_range": [
+        [
+          7154,
+          11951
+        ],
+        [
+          7154,
+          12076
+        ]
+      ],
+      "handler": {
+        "name": "mI7",
+        "fqn": "bundle::mI7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7154,
+          "end_line": 7154,
+          "start_col": 11728,
+          "end_col": 11870
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "r2q",
+        "prop": "call",
+        "ident": "mI7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "plugin",
+      "type": "local-jsx",
+      "byte_range": [
+        11443512,
+        11443683
+      ],
+      "line_range": [
+        [
+          7154,
+          12275
+        ],
+        [
+          7154,
+          12446
+        ]
+      ],
+      "handler": {
+        "name": "UI7",
+        "fqn": "bundle::UI7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7154,
+          "end_line": 7154,
+          "start_col": 12121,
+          "end_col": 12199
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "t2q",
+        "prop": "call",
+        "ident": "UI7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "reload-plugins",
+      "type": "local",
+      "byte_range": [
+        11447066,
+        11447285
+      ],
+      "line_range": [
+        [
+          7156,
+          195
+        ],
+        [
+          7156,
+          414
+        ]
+      ],
+      "handler": {
+        "name": "cI7",
+        "fqn": "bundle::cI7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7154,
+          "end_line": 7156,
+          "start_col": 14829,
+          "end_col": 96
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "LWq",
+        "prop": "call",
+        "ident": "cI7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "rewind",
+      "type": "local",
+      "byte_range": [
+        11447454,
+        11447668
+      ],
+      "line_range": [
+        [
+          7156,
+          583
+        ],
+        [
+          7156,
+          797
+        ]
+      ],
+      "handler": {
+        "name": "nI7",
+        "fqn": "bundle::nI7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7156,
+          "end_line": 7156,
+          "start_col": 459,
+          "end_col": 552
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "$Wq",
+        "prop": "call",
+        "ident": "nI7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "heapdump",
+      "type": "local",
+      "byte_range": [
+        11452680,
+        11452843
+      ],
+      "line_range": [
+        [
+          7163,
+          113
+        ],
+        [
+          7163,
+          276
+        ]
+      ],
+      "handler": {
+        "name": "aI7",
+        "fqn": "bundle::aI7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7160,
+          "end_line": 7161,
+          "start_col": 1049,
+          "end_col": 4
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "JWq",
+        "prop": "call",
+        "ident": "aI7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "bridge-kick",
+      "type": "local",
+      "byte_range": [
+        11462934,
+        11463118
+      ],
+      "line_range": [
+        [
+          7174,
+          1517
+        ],
+        [
+          7174,
+          1701
+        ]
+      ],
+      "handler": {
+        "name": "Av7",
+        "fqn": "bundle::Av7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7172,
+          "end_line": 7174,
+          "start_col": 48,
+          "end_col": 1483
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "load_ident",
+      "via_module_id": null,
+      "via_load_ident": {
+        "load_ident": "Av7"
+      }
+    },
+    {
+      "cmd": "version",
+      "type": "local-jsx",
+      "byte_range": [
+        11467798,
+        11468005
+      ],
+      "line_range": [
+        [
+          7174,
+          6381
+        ],
+        [
+          7174,
+          6588
+        ]
+      ],
+      "handler": {
+        "name": "fv7",
+        "fqn": "bundle::fv7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7174,
+          "end_line": 7174,
+          "start_col": 6181,
+          "end_col": 6227
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "load_ident",
+      "via_module_id": null,
+      "via_load_ident": {
+        "load_ident": "fv7"
+      }
+    },
+    {
+      "cmd": "sandbox",
+      "type": "local-jsx",
+      "byte_range": [
+        11484503,
+        11485152
+      ],
+      "line_range": [
+        [
+          7174,
+          23086
+        ],
+        [
+          7174,
+          23735
+        ]
+      ],
+      "handler": {
+        "name": "Xv7",
+        "fqn": "bundle::Xv7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7174,
+          "end_line": 7174,
+          "start_col": 21673,
+          "end_col": 22951
+        }
+      },
+      "n_hits": 2,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "nWq",
+        "prop": "call",
+        "ident": "Xv7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "chrome",
+      "type": "local-jsx",
+      "byte_range": [
+        11495731,
+        11495908
+      ],
+      "line_range": [
+        [
+          7182,
+          6163
+        ],
+        [
+          7182,
+          6340
+        ]
+      ],
+      "handler": {
+        "name": "uv7",
+        "fqn": "bundle::uv7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7182,
+          "end_line": 7182,
+          "start_col": 5651,
+          "end_col": 6010
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "L0q",
+        "prop": "call",
+        "ident": "uv7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "stickers",
+      "type": "local",
+      "byte_range": [
+        11496250,
+        11496410
+      ],
+      "line_range": [
+        [
+          7182,
+          6682
+        ],
+        [
+          7182,
+          6842
+        ]
+      ],
+      "handler": {
+        "name": "pv7",
+        "fqn": "bundle::pv7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7182,
+          "end_line": 7182,
+          "start_col": 6385,
+          "end_col": 6629
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "O0q",
+        "prop": "call",
+        "ident": "pv7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "radio",
+      "type": "local",
+      "byte_range": [
+        11496727,
+        11496932
+      ],
+      "line_range": [
+        [
+          7182,
+          7159
+        ],
+        [
+          7182,
+          7364
+        ]
+      ],
+      "handler": {
+        "name": "Bv7",
+        "fqn": "bundle::Bv7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7182,
+          "end_line": 7182,
+          "start_col": 6887,
+          "end_col": 7101
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "D0q",
+        "prop": "call",
+        "ident": "Bv7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "advisor",
+      "type": "local-jsx",
+      "byte_range": [
+        11505050,
+        11505337
+      ],
+      "line_range": [
+        [
+          7187,
+          3427
+        ],
+        [
+          7187,
+          3714
+        ]
+      ],
+      "handler": {
+        "name": "ev7",
+        "fqn": "bundle::ev7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7187,
+          "end_line": 7187,
+          "start_col": 2860,
+          "end_col": 3273
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "T0q",
+        "prop": "call",
+        "ident": "ev7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "exit",
+      "type": "local-jsx",
+      "byte_range": [
+        11517779,
+        11517940
+      ],
+      "line_range": [
+        [
+          7190,
+          6711
+        ],
+        [
+          7190,
+          6872
+        ]
+      ],
+      "handler": {
+        "name": "jN7",
+        "fqn": "bundle::jN7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7190,
+          "end_line": 7190,
+          "start_col": 5936,
+          "end_col": 6175
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "m0q",
+        "prop": "call",
+        "ident": "jN7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "update",
+      "type": "local",
+      "byte_range": [
+        11528329,
+        11528531
+      ],
+      "line_range": [
+        [
+          7193,
+          138
+        ],
+        [
+          7193,
+          340
+        ]
+      ],
+      "handler": {
+        "name": "ZN7",
+        "fqn": "bundle::ZN7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7190,
+          "end_line": 7193,
+          "start_col": 15127,
+          "end_col": 6
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "i0q",
+        "prop": "call",
+        "ident": "ZN7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "export",
+      "type": "local-jsx",
+      "byte_range": [
+        11533760,
+        11533956
+      ],
+      "line_range": [
+        [
+          7193,
+          5569
+        ],
+        [
+          7193,
+          5765
+        ]
+      ],
+      "handler": {
+        "name": "RN7",
+        "fqn": "bundle::RN7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7193,
+          "end_line": 7193,
+          "start_col": 4963,
+          "end_col": 5471
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "HGq",
+        "prop": "call",
+        "ident": "RN7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "model",
+      "type": "local",
+      "byte_range": [
+        11541312,
+        11541486
+      ],
+      "line_range": [
+        [
+          7194,
+          7190
+        ],
+        [
+          7194,
+          7364
+        ]
+      ],
+      "handler": {
+        "name": "bN7",
+        "fqn": "bundle::bN7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7193,
+          "end_line": 7194,
+          "start_col": 5810,
+          "end_col": 177
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "KGq",
+        "prop": "call",
+        "ident": "bN7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "remote-env",
+      "type": "local-jsx",
+      "byte_range": [
+        11547257,
+        11547527
+      ],
+      "line_range": [
+        [
+          7194,
+          13135
+        ],
+        [
+          7194,
+          13405
+        ]
+      ],
+      "handler": {
+        "name": "rN7",
+        "fqn": "bundle::rN7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7194,
+          "end_line": 7194,
+          "start_col": 12990,
+          "end_col": 13053
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "WGq",
+        "prop": "call",
+        "ident": "rN7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "upgrade",
+      "type": "local-jsx",
+      "byte_range": [
+        11548549,
+        11548809
+      ],
+      "line_range": [
+        [
+          7194,
+          14427
+        ],
+        [
+          7194,
+          14687
+        ]
+      ],
+      "handler": {
+        "name": "k06",
+        "fqn": "bundle::k06",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7194,
+          "end_line": 7194,
+          "start_col": 13442,
+          "end_col": 14314
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "ZGq",
+        "prop": "call",
+        "ident": "k06"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "pro-trial-expired",
+      "type": "local-jsx",
+      "byte_range": [
+        11550229,
+        11550434
+      ],
+      "line_range": [
+        [
+          7194,
+          16107
+        ],
+        [
+          7194,
+          16312
+        ]
+      ],
+      "handler": {
+        "name": "aN7",
+        "fqn": "bundle::aN7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7194,
+          "end_line": 7194,
+          "start_col": 15956,
+          "end_col": 16031
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "kGq",
+        "prop": "call",
+        "ident": "aN7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "rate-limit-options",
+      "type": "local-jsx",
+      "byte_range": [
+        11553797,
+        11553981
+      ],
+      "line_range": [
+        [
+          7194,
+          19675
+        ],
+        [
+          7194,
+          19859
+        ]
+      ],
+      "handler": {
+        "name": "eN7",
+        "fqn": "bundle::eN7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7194,
+          "end_line": 7194,
+          "start_col": 19398,
+          "end_col": 19481
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "CGq",
+        "prop": "call",
+        "ident": "eN7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "statusline",
+      "type": "prompt",
+      "byte_range": [
+        11554028,
+        11554542
+      ],
+      "line_range": [
+        [
+          7194,
+          19906
+        ],
+        [
+          7194,
+          20420
+        ]
+      ],
+      "handler": {
+        "name": "getPromptForCommand",
+        "fqn": "bundle::getPromptForCommand",
+        "kind": "Method",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7194,
+          "end_line": 7194,
+          "start_col": 20211,
+          "end_col": 20419
+        }
+      },
+      "n_hits": 1,
+      "hint": "getPromptForCommand",
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "effort",
+      "type": "local-jsx",
+      "byte_range": [
+        11565276,
+        11565539
+      ],
+      "line_range": [
+        [
+          7202,
+          878
+        ],
+        [
+          7202,
+          1141
+        ]
+      ],
+      "handler": {
+        "name": "Ek7",
+        "fqn": "bundle::Ek7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7194,
+          "end_line": 7194,
+          "start_col": 29504,
+          "end_col": 29744
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "gGq",
+        "prop": "call",
+        "ident": "Ek7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "focus",
+      "type": "local-jsx",
+      "byte_range": [
+        11565806,
+        11567274
+      ],
+      "line_range": [
+        [
+          7202,
+          1408
+        ],
+        [
+          7202,
+          2876
+        ]
+      ],
+      "handler": {
+        "name": "call",
+        "fqn": "bundle::call",
+        "kind": "Method",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7202,
+          "end_line": 7202,
+          "start_col": 1592,
+          "end_col": 2873
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "brief",
+      "type": "local-jsx",
+      "byte_range": [
+        11567800,
+        11568690
+      ],
+      "line_range": [
+        [
+          7202,
+          3402
+        ],
+        [
+          7204,
+          128
+        ]
+      ],
+      "handler": {
+        "name": "call",
+        "fqn": "bundle::call",
+        "kind": "Method",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7202,
+          "end_line": 7204,
+          "start_col": 3550,
+          "end_col": 125
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "remote-control",
+      "type": "local-jsx",
+      "byte_range": [
+        11580888,
+        11581139
+      ],
+      "line_range": [
+        [
+          7206,
+          3519
+        ],
+        [
+          7206,
+          3770
+        ]
+      ],
+      "handler": {
+        "name": "ik7",
+        "fqn": "bundle::ik7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7206,
+          "end_line": 7206,
+          "start_col": 3158,
+          "end_col": 3264
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "DTq",
+        "prop": "call",
+        "ident": "ik7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "daemon",
+      "type": "local-jsx",
+      "byte_range": [
+        11796368,
+        11796572
+      ],
+      "line_range": [
+        [
+          7715,
+          427
+        ],
+        [
+          7715,
+          631
+        ]
+      ],
+      "handler": {
+        "name": "yS7",
+        "fqn": "bundle::yS7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7714,
+          "end_line": 7714,
+          "start_col": 18548,
+          "end_col": 18713
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "jF_",
+        "prop": "call",
+        "ident": "yS7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "voice",
+      "type": "local",
+      "byte_range": [
+        11808737,
+        11808979
+      ],
+      "line_range": [
+        [
+          7726,
+          1274
+        ],
+        [
+          7726,
+          1516
+        ]
+      ],
+      "handler": {
+        "name": "YR7",
+        "fqn": "bundle::YR7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7724,
+          "end_line": 7726,
+          "start_col": 1316,
+          "end_col": 1145
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "kVq",
+        "prop": "call",
+        "ident": "YR7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "recap",
+      "type": "local",
+      "byte_range": [
+        11809452,
+        11809668
+      ],
+      "line_range": [
+        [
+          7726,
+          1989
+        ],
+        [
+          7726,
+          2205
+        ]
+      ],
+      "handler": {
+        "name": "JR7",
+        "fqn": "bundle::JR7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7726,
+          "end_line": 7726,
+          "start_col": 1568,
+          "end_col": 1950
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "load_ident",
+      "via_module_id": null,
+      "via_load_ident": {
+        "load_ident": "JR7"
+      }
+    },
+    {
+      "cmd": "goal",
+      "type": "local-jsx",
+      "byte_range": [
+        11814797,
+        11815000
+      ],
+      "line_range": [
+        [
+          7727,
+          573
+        ],
+        [
+          7727,
+          776
+        ]
+      ],
+      "handler": {
+        "name": "GR7",
+        "fqn": "bundle::GR7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7726,
+          "end_line": 7726,
+          "start_col": 5898,
+          "end_col": 6419
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "mVq",
+        "prop": "call",
+        "ident": "GR7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "web-setup",
+      "type": "local-jsx",
+      "byte_range": [
+        11819924,
+        11820305
+      ],
+      "line_range": [
+        [
+          7727,
+          5700
+        ],
+        [
+          7727,
+          6081
+        ]
+      ],
+      "handler": {
+        "name": "kR7",
+        "fqn": "bundle::kR7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7727,
+          "end_line": 7727,
+          "start_col": 5447,
+          "end_col": 5509
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "lVq",
+        "prop": "call",
+        "ident": "kR7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "team-onboarding",
+      "type": "prompt",
+      "byte_range": [
+        11831614,
+        11832609
+      ],
+      "line_range": [
+        [
+          7868,
+          159
+        ],
+        [
+          7868,
+          1154
+        ]
+      ],
+      "handler": {
+        "name": "getPromptForCommand",
+        "fqn": "bundle::getPromptForCommand",
+        "kind": "Method",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7868,
+          "end_line": 7868,
+          "start_col": 497,
+          "end_col": 1153
+        }
+      },
+      "n_hits": 2,
+      "hint": "getPromptForCommand",
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "background",
+      "type": "local-jsx",
+      "byte_range": [
+        11897772,
+        11897992
+      ],
+      "line_range": [
+        [
+          7943,
+          7009
+        ],
+        [
+          7943,
+          7229
+        ]
+      ],
+      "handler": {
+        "name": "cC7",
+        "fqn": "bundle::cC7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7943,
+          "end_line": 7943,
+          "start_col": 6353,
+          "end_col": 6772
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "oIq",
+        "prop": "call",
+        "ident": "cC7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "stop",
+      "type": "local-jsx",
+      "byte_range": [
+        11898938,
+        11899122
+      ],
+      "line_range": [
+        [
+          7943,
+          8175
+        ],
+        [
+          7943,
+          8359
+        ]
+      ],
+      "handler": {
+        "name": "eC7",
+        "fqn": "bundle::eC7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7943,
+          "end_line": 7943,
+          "start_col": 7865,
+          "end_col": 7929
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "tIq",
+        "prop": "call",
+        "ident": "eC7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "fork",
+      "type": "local-jsx",
+      "byte_range": [
+        11899789,
+        11899985
+      ],
+      "line_range": [
+        [
+          7943,
+          9026
+        ],
+        [
+          7943,
+          9222
+        ]
+      ],
+      "handler": {
+        "name": "Kb7",
+        "fqn": "bundle::Kb7",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 7943,
+          "end_line": 7943,
+          "start_col": 8606,
+          "end_col": 8923
+        }
+      },
+      "n_hits": 0,
+      "hint": null,
+      "resolution_path": "module_id",
+      "via_module_id": {
+        "module_id": "Kvq",
+        "prop": "call",
+        "ident": "Kb7"
+      },
+      "via_load_ident": null
+    },
+    {
+      "cmd": "insights",
+      "type": "prompt",
+      "byte_range": [
+        11973589,
+        11974893
+      ],
+      "line_range": [
+        [
+          8841,
+          283
+        ],
+        [
+          8854,
+          125
+        ]
+      ],
+      "handler": {
+        "name": "getPromptForCommand",
+        "fqn": "bundle::getPromptForCommand",
+        "kind": "Method",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 8841,
+          "end_line": 8854,
+          "start_col": 457,
+          "end_col": 124
+        }
+      },
+      "n_hits": 1,
+      "hint": "getPromptForCommand",
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "function",
+      "type": "function",
+      "byte_range": [
+        12164827,
+        12164860
+      ],
+      "line_range": [
+        [
+          8936,
+          2435
+        ],
+        [
+          8936,
+          2468
+        ]
+      ],
+      "handler": {
+        "name": "Eu7",
+        "fqn": "bundle::Eu7",
+        "kind": "Function",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 8936,
+          "end_line": 8936,
+          "start_col": 2093,
+          "end_col": 2562
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "callback",
+      "type": "callback",
+      "byte_range": [
+        12164895,
+        12164928
+      ],
+      "line_range": [
+        [
+          8936,
+          2503
+        ],
+        [
+          8936,
+          2536
+        ]
+      ],
+      "handler": {
+        "name": "Eu7",
+        "fqn": "bundle::Eu7",
+        "kind": "Function",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 8936,
+          "end_line": 8936,
+          "start_col": 2093,
+          "end_col": 2562
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "install",
+      "type": "local-jsx",
+      "byte_range": [
+        12413483,
+        12413773
+      ],
+      "line_range": [
+        [
+          9149,
+          30934
+        ],
+        [
+          9149,
+          31224
+        ]
+      ],
+      "handler": {
+        "name": "call",
+        "fqn": "bundle::call",
+        "kind": "Method",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 9149,
+          "end_line": 9149,
+          "start_col": 31039,
+          "end_col": 31223
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    },
+    {
+      "cmd": "explain_command",
+      "type": "tool",
+      "byte_range": [
+        12637915,
+        12637951
+      ],
+      "line_range": [
+        [
+          9272,
+          131
+        ],
+        [
+          9272,
+          167
+        ]
+      ],
+      "handler": {
+        "name": "wbq",
+        "fqn": "bundle::wbq",
+        "kind": "AsyncFunction",
+        "loc": {
+          "file": "/private/var/folders/cl/c43qdv8548d75pckjr4x2dwh0000gn/T/cc-arbor-2.1.141-IRdd4n/bundle.js",
+          "start_line": 9263,
+          "end_line": 9272,
+          "start_col": 62,
+          "end_col": 1374
+        }
+      },
+      "n_hits": 1,
+      "hint": null,
+      "resolution_path": "direct",
+      "via_module_id": null,
+      "via_load_ident": null
+    }
+  ],
+  "unresolved": []
+}

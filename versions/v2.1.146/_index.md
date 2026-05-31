@@ -5,7 +5,7 @@ git_sha: "c900a8c71aa966a1a8bf14c49139d87fac9ae881"
 bundle_lines: 23951
 bundle_size: "14.41 MB"
 prev_version: "2.1.145"
-generated: "2026-05-26"
+generated: "2026-05-31"
 ---
 
 # CC v2.1.146
@@ -98,3 +98,16 @@ generated: "2026-05-26"
 
 <!-- Populated by automation when new commands are detected. -->
 <!-- No new commands this version -->
+
+## Handler Resolution (G3-B integration)
+
+| Metric | Value |
+|---|---:|
+| Total commands | 99 |
+| Handler resolved | **99 / 99 (100%)** |
+| via direct byte-range (path 1) | 17 |
+| via module_id follow (path 2) | 78 |
+| via load_ident direct (path 3) | 4 |
+| Unresolved | 0 |
+
+Per-command detail: [`_handlers.json`](_handlers.json).
