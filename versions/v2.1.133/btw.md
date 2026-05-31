@@ -1,13 +1,12 @@
 ---
 type: feature-spec
 feature: "btw"
-cc_version: 2.1.133
-updated: "2026-05-18"
+cc_version: "2.1.133"
+updated: "2026-05-31"
 tags: ["btw", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.132
-analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.133 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +14,14 @@ license: "AGPL-3.0-only"
 
 # `/btw`
 
-> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.132
+> Analysis basis: CC v2.1.133 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.133
 
 ---
 
 ## Overview
 
-The `/btw` ("by the way") slash command allows a user to ask a quick side question without breaking the flow of the main ongoing conversation. When invoked with a question argument, it dispatches the question immediately as a `control-request` to the thin client, rendering the question via a JSX element while persisting the main conversation context. If no argument is provided, the command responds with a usage hint.
+The `/btw` ("by the way") command lets the user pose a quick side question to the agent without interrupting or forking the main conversation thread. It is a `local-jsx` command that dispatches immediately via the `control-request` thin-client path, injecting the question as a `system`-role message before returning a JSX element to the UI. The handler is the async function `UH7` (resolved via module `Do9`), which validates the argument, builds a system-scoped prompt, and renders the response inline.
 
 ---
 
@@ -30,211 +29,160 @@ The `/btw` ("by the way") slash command allows a user to ask a quick side questi
 
 | Field | Value |
 |---|---|
-| type | `local-jsx` |
-| name | `btw` |
-| description | Ask a quick side question without interrupting the main conversation |
-| argumentHint | `<question>` |
-| immediate | `true` |
-| thinClientDispatch | `control-request` |
-| module_id | `ur9` |
+| `type` | `local-jsx` |
+| `name` | `btw` |
+| `description` | Ask a quick side question without interrupting the main conversation |
+| `argumentHint` | `<question>` |
+| `immediate` | `true` |
+| `thinClientDispatch` | `control-request` |
+| `module_id` | `Do9` |
+| `load_inline` | `true` |
+| `loc_byte` | `9809726` |
+| `loc_byte_end` | `9809965` (registration block: bytes `9809726`–`9809965`) |
+| `arbor_handler.name` | `UH7` |
+| `arbor_handler.fqn` | `claude-2.1.133::UH7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` (Arbor followed `module_id` → `Do9` → `UH7`) |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.132 bundle.js:+9795621
+Analysis basis: CC v2.1.133 bundle.js:+9809726
 
 ---
 
 ## Input Branching
 
-The command handler inspects the trimmed argument string immediately upon invocation. The `immediate: true` flag means the handler fires without waiting for a follow-up Enter keypress.
+Three distinct paths exist based on argument presence and content, warranting a Mermaid flowchart.
 
 ```mermaid
 flowchart TD
     A([User types /btw]) --> B{Argument provided?}
-    B -- No argument / empty string --> C[Emit system message:\n'Usage: /btw <your question>']
-    B -- Argument present --> D[Build JSX element via createElement]
-    D --> E[Dispatch control-request\nvia thinClientDispatch]
-    E --> F[Persist main conversation context\nunchanged]
-    F --> G[Save/update config with lock\nvia configWriteWithLock]
-    G --> H{Lock acquisition\nsuccessful within timeout?}
-    H -- Yes --> I[Write config atomically\nwith backup rotation]
-    H -- No / contention --> J[Emit telemetry:\ntengu_config_lock_contention]
-    J --> K[Log warning and\nretry or abort write]
-    I --> L([Side question rendered\nto user])
-    C --> L
+    B -- No / empty --> C[Emit usage hint\n'Usage: /btw <your question>'\nReturn without dispatching]
+    B -- Yes --> D{Argument non-empty\nafter trim?}
+    D -- No --> C
+    D -- Yes --> E[Build system-role message\nwith question text]
+    E --> F[Call randomDelayHelper\nMath.random × 2 + 1 → setTimeout]
+    F --> G[Call configPersistence\nvia e6 → fe8 pipeline]
+    G --> H[Invoke pL.createElement\nReturn JSX to UI]
+    H --> I([Response rendered inline])
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+9795228, +9795230, +9795269, +9795338
+Analysis basis: CC v2.1.133 bundle.js:+9809333 (usage string), +9809374 (system role literal), +9809443 (JSX creation)
 
 ---
 
 ## Behavioral Spec
 
-### Entry Point: Command Handler
+### 1. Argument Validation
+
+When the command is invoked, `UH7` first checks whether an argument was supplied. If the trimmed argument string is absent or empty, the handler emits the usage hint string `"Usage: /btw <your question>"` and returns early without dispatching any request.
 
 ```
-function btwCommandHandler(inputArgument):
-    trimmed = inputArgument.trim()
-    if trimmed is empty:
-        emit message of type "system" with text "Usage: /btw <your question>"
-        return
-    element = createElement(BtwDisplayComponent, { question: trimmed })
-    dispatch("control-request", element)
-    persistConfigState()
+async function btwHandler(context, args):
+    question = args.trim()
+    if question is empty:
+        return renderUsageHint("Usage: /btw <your question>")
+    # proceed to dispatch
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+9795228, +9795230, +9795269, +9795292, +9795338
+Analysis basis: CC v2.1.133 bundle.js:+9809333, +9809335
 
----
+### 2. System-Role Message Construction
 
-### Sub-feature: Randomised Jitter Delay
-
-The call graph shows that the random-jitter helper is reached from the command entry point. It generates a small random delay before certain async operations (most likely used internally during config lock acquisition retries).
+When a non-empty question is present, `UH7` constructs a message object with role `"system"` containing the user's question text. This framing ensures the question is treated as an out-of-band inquiry rather than a new user turn in the main conversation.
 
 ```
-function randomJitterDelay(baseDelayMs):
-    // Observed constants: multiplier range [1, 2]
-    jitter = Math.random() * (2 - 1) + 1   // result in [1.0, 2.0)
-    actualDelay = baseDelayMs * jitter
-    setTimeout(callback, actualDelay)
+async function btwHandler(context, args):
+    ...
+    message = {
+        role: "system",
+        content: question
+    }
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+12264283, +12264285, +12264299, +12264322
+Analysis basis: CC v2.1.133 bundle.js:+9809374
 
----
+### 3. Random Delay Helper (`H`)
 
-### Sub-feature: Config Write with File Lock
-
-When the command triggers a state update, it calls through to a locked config-write subsystem. The subsystem:
-
-1. Resolves the config file path and ensures the parent directory exists.
-2. Acquires a filesystem lock by creating a lock file; if the lock file already exists (`EEXIST`) and is older than the lock timeout, it is considered stale and removed.
-3. Reads the current on-disk config and compares it against the in-memory cache before writing, specifically to detect auth-field loss (guarding against the regression described in GH #3117).
-4. Writes the config atomically: the new content is written to a timestamped backup file, then copied to the canonical path.
-5. Rotates old backup files, keeping only the most recent 5.
-6. Releases the lock by unlinking the lock file.
+`UH7` calls the helper identified as `H` (descriptive name: `randomDelayHelper`), which schedules execution via `setTimeout` after a delay derived from `Math.random`. The delay formula uses the constants `2` and `1` (both found at adjacent byte offsets), producing a jittered delay in the range `[1, 3)` arbitrary units before the next step proceeds.
 
 ```
-function configWriteWithLock(configPath, newConfigData, cachedConfig):
-    parentDir = path.dirname(configPath)
-    ensureDirectoryExists(parentDir)
-    lockFilePath = buildLockPath(configPath)
-
-    acquired = false
-    deadline = Date.now() + LOCK_TIMEOUT_MS          // 60000 ms
-    while not acquired:
-        try:
-            createLockFileExclusive(lockFilePath)     // fails with EEXIST if held
-            acquired = true
-        except EEXIST:
-            stat = fs.statSync(lockFilePath)
-            age = Date.now() - stat.mtimeMs
-            if age > LOCK_TIMEOUT_MS:                 // 60000 ms
-                emitTelemetry("tengu_config_lock_contention")
-                fs.unlinkSync(lockFilePath)            // remove stale lock
-            elif Date.now() > deadline:
-                logWarning("Lock acquisition took longer than expected" +
-                           " - another Claude instance may be running")
-                break
-            else:
-                wait(randomJitterDelay(100))           // 100 ms base
-
-    diskConfig = readAndParseConfig(configPath)
-
-    if cachedConfig has auth fields AND diskConfig is missing those auth fields:
-        emitTelemetry("tengu_config_stale_write")
-        logError("saveConfigWithLock: re-read config is missing auth that" +
-                 " cache has; refusing to write to avoid wiping ~/.claude.json." +
-                 " See GH #3117.")
-        releaseLock(lockFilePath)
-        return
-
-    backupPath = buildBackupPath(configPath, Date.now())  // contains ".backup."
-    writeFileSync(backupPath, serialize(newConfigData), { encoding: "utf-8",
-                                                          mode: 0o600 })  // 384 decimal
-    fs.copyFileSync(backupPath, configPath)
-
-    rotateBackups(configPath, maxKeep=5)
-
-    releaseLock(lockFilePath)
+function randomDelayHelper(callback):
+    delay = Math.random() * 2 + 1   # constants: 2 @ +12285767, 1 @ +12285783
+    setTimeout(callback, delay)
 ```
 
-Lock timeout: 60 000 ms (Analysis basis: CC v2.1.132 bundle.js:+3106079)
-Lock retry base delay: 100 ms (Analysis basis: CC v2.1.132 bundle.js:+3105303)
-Maximum backup files retained: 5 (Analysis basis: CC v2.1.132 bundle.js:+3106328)
-Config file write mode: `0o600` (384 decimal) (Analysis basis: CC v2.1.132 bundle.js:+3106610)
-Config file encoding: `utf-8` (Analysis basis: CC v2.1.132 bundle.js:+3106597)
-Lock-contention warning text: "Lock acquisition took longer than expected - another Claude instance may be running" (Analysis basis: CC v2.1.132 bundle.js:+3105309)
-Auth-loss guard message (saveConfigWithLock path): "saveConfigWithLock: re-read config is missing auth that cache has; refusing to write to avoid wiping ~/.claude.json. See GH #3117." (Analysis basis: CC v2.1.132 bundle.js:+3105725)
-Auth-loss guard message (saveGlobalConfig fallback path): "saveGlobalConfig fallback: re-read config is missing auth that cache has; refusing to write. See GH #3117." (Analysis basis: CC v2.1.132 bundle.js:+3102607)
+Analysis basis: CC v2.1.133 bundle.js:+9809333 (call site), +12285769 (constant `2`), +12285783 (constant `1`), +12285806 (setTimeout)
 
----
+### 4. Configuration Persistence Pipeline (`e6` → `fe8`)
 
-### Sub-feature: Config Read with Access Guard
+After the delay, `UH7` calls `e6` (descriptive name: `globalConfigDispatch`), which internally calls `fe8` (descriptive name: `configWriteWithLock`). This pipeline is responsible for persisting any state changes triggered by the side question. Key behaviors within this pipeline:
 
-Before any read of the global config is permitted, an access-allowed guard is evaluated. If config is accessed before the system is ready, an `Error` is thrown with the message "Config accessed before allowed."
-
-```
-function guardedReadConfig(configPath):
-    if not configAccessAllowed():
-        raise Error("Config accessed before allowed.")
-    raw = fs.readFileSync(configPath, encoding)
-    parsed = parseJSON(raw)
-    return parsed
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+3107284, +3107290, +3107346
-
----
-
-### Sub-feature: Global Config Save (Fallback Path)
-
-A separate fallback save path exists (reached via `saveGlobalConfig`). It performs the same auth-loss check as the primary locked path and refuses to write if auth fields present in the cache are absent from the on-disk re-read.
+- **Lock acquisition**: `fe8` calls `K.mkdirSync` to acquire a filesystem lock. If lock acquisition takes longer than expected, the warning `"Lock acquisition took longer than expected - another Claude instance may be running"` is emitted at log level `"error"`.
+- **Stale-write guard**: If a re-read of the config detects that cached auth would be overwritten, the write is refused and telemetry event `tengu_config_stale_write` is fired. The guard message references GH #3117.
+- **Auth-loss prevention**: A separate check fires `tengu_config_auth_loss_prevented` if auth data would be lost.
+- **Config parse error**: If the config file cannot be parsed, `tengu_config_parse_error` is fired and an `Error` is thrown with `"Config accessed before allowed."`.
+- **Lock contention**: Prolonged lock waits fire `tengu_config_lock_contention`.
+- **Backup rotation**: `fe8` manages up to `5` backup copies (constant `5` at +3112203), stored in a `"backups"` subdirectory, with filenames containing `".backup."`. Files are rotated using `K.copyFileSync` / `K.unlinkSync`. Backup directory creation tolerates `EEXIST`. Missing config files are treated via `ENOENT` handling.
+- **60-second timeout**: A 60 000 ms timeout (constant `60000` at +3111954) guards the lock acquisition loop.
+- **File permissions**: Temporary files are created with mode `384` (octal `0o600`) for security.
 
 ```
-function saveGlobalConfigFallback(configPath, newData, cachedConfig):
-    diskConfig = readAndParseConfig(configPath)
-    if cachedConfig has auth AND diskConfig lacks auth:
-        emitTelemetry("tengu_config_auth_loss_prevented")
-        logError("saveGlobalConfig fallback: re-read config is missing auth" +
-                 " that cache has; refusing to write. See GH #3117.")
-        return
-    writeConfig(configPath, newData)
-```
+async function globalConfigDispatch(sessionContext, question):
+    t2Context = loadContext()
+    history = loadHistory()
+    fxhData = loadFxhData()
+    jX1Result = buildEntries(Object.entries(...))
+    MxHTimestamp = Date.now()
+    configResult = await configWriteWithLock(sessionContext)
+    return configResult
 
-Analysis basis: CC v2.1.132 bundle.js:+3102597, +3102607
-
----
-
-### Sub-feature: Message Log Write
-
-When the system-message usage hint is emitted, or when the side question is recorded, a message-log write is performed. The log writer uses `path.dirname`, ensures the directory exists, and writes with a timestamp sourced from `Date.now`.
-
-```
-function writeMessageToLog(logDir, message):
-    dir = path.dirname(logDir)
-    fs.mkdirSync(dir, { recursive: true })
+async function configWriteWithLock(sessionContext):
+    A.mkdirSync(dirname)          # ensure directory exists
+    Ez.dirname(path)
+    acquireLock(K.mkdirSync)      # filesystem lock via mkdir
     timestamp = Date.now()
-    entry = buildLogEntry(timestamp, message)
-    appendToLog(logDir, entry)
+    recordId = generateRecordId(ql_)
+    messageBlock = buildMessageBlock(k)
+    if lockTookTooLong:
+        emit("error", "Lock acquisition took longer than expected...")
+        fire(tengu_config_lock_contention)
+    existingConfig = readConfigFile()   # K.statSync, q.readFileSync
+    if staleWriteDetected:
+        fire(tengu_config_stale_write)
+        refuse write
+    if authLossDetected:
+        fire(tengu_config_auth_loss_prevented)
+        refuse write
+    manageBackups()               # up to 5 backups, 60s timeout
+    atomicWrite(KhH)              # atomic rename with temp file @ mode 0o600
+    releaseLock(K.unlinkSync)
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+3105098, +3105104, +3105125, +3105170
+Analysis basis: CC v2.1.133 bundle.js:+9809397, +3108275, +3110973, +3111000, +3111045, +3111100, +3111184, +3111273, +3111409, +3111539, +3111584, +3111600, +3111752, +3111800, +3111954, +3112177, +3112203, +3112321, +3112485, +3113211, +3113217, +3113273, +3113854, +3114033, +3114068
 
----
+### 5. JSX Rendering (`pL.createElement`)
 
-### Sub-feature: Logger / Severity Routing
-
-Internal log calls route through a severity-aware logger. The `/btw` call graph reaches log levels `"debug"` and `"error"`.
+After the config pipeline completes, `UH7` calls `pL.createElement` to build and return a JSX element representing the inline response. Because the command is `immediate: true` and `local-jsx` typed, the element is rendered directly into the conversation view without creating a new top-level turn.
 
 ```
-function routeLog(level, messageText):
-    if level is "debug":
-        forwardToDebugSink(messageText)
-    elif level is "error":
-        forwardToErrorSink(messageText)
-    // additional levels handled by caller
+async function btwHandler(context, args):
+    ...
+    element = pL.createElement(InlineResponseComponent, { question, systemMessage })
+    return element
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+161637, +3105266
+Analysis basis: CC v2.1.133 bundle.js:+9809443
+
+### 6. Background Session Management (via `w`)
+
+The call graph reaches `w` (descriptive name: `backgroundSessionManager`) through the config pipeline. This function manages background Claude sessions and is not specific to `/btw`, but is invoked as part of the shared infrastructure. Relevant behaviors:
+
+- Escalates to `SIGKILL` after `30`s / `15`s thresholds when terminating background sessions (`tengu_bg_dispatch_sigkill_escalate`).
+- Monitors free memory (`hP8.freemem`) with a `1024`-byte threshold and fires `tengu_bg_dispatch_low_mem`.
+- Manages spare session slots (`"spare"`) with events `tengu_bg_spare_enable`, `tengu_bg_spare_claim`, `tengu_bg_spare_claim_fail`.
+- Spawns new sessions via `gm.spawn`.
+
+Analysis basis: CC v2.1.133 bundle.js:+14156922, +14156995, +14157006, +14157040, +14157088, +14157449, +14157513, +14157619, +14157754, +14158234, +14158349, +14158355, +14158618, +14158677
 
 ---
 
@@ -242,16 +190,15 @@ Analysis basis: CC v2.1.132 bundle.js:+161637, +3105266
 
 | Item | Detail |
 |---|---|
-| Telemetry — `tengu_config_lock_contention` | Fired when a stale or contested filesystem lock is detected during config write (bundle.js:+3105398) |
-| Telemetry — `tengu_config_stale_write` | Fired when a config write is blocked because the on-disk file is missing auth data present in the cache (bundle.js:+3105534) |
-| Telemetry — `tengu_config_auth_loss_prevented` | Fired on the global-config fallback path when an auth-loss write is refused (bundle.js:+3105877) |
-| Telemetry — `tengu_config_parse_error` | Fired when the config file cannot be parsed during a guarded read (bundle.js:+3107927) |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | The main conversation message history is left untouched; only the side-question payload is dispatched as a `control-request` (bundle.js:+9795621) |
-| Config file side effect | Atomic write + backup rotation of the global config file (`~/.claude.json`); up to 5 `.backup.` files retained (bundle.js:+3106195, +3106328) |
-| Config file permissions | Written with mode `0o600` (384 decimal) (bundle.js:+3106610) |
+| Telemetry | `tengu_config_lock_contention` (+3111273), `tengu_config_stale_write` (+3111409), `tengu_config_parse_error` (+3113854), `tengu_config_auth_loss_prevented` (+3111752), `tengu_bg_dispatch_sigkill_escalate` (+14157040), `tengu_bg_dispatch_low_mem` (+14157619), `tengu_bg_spare_enable` (+14158234), `tengu_bg_spare_claim` (+14158355), `tengu_bg_spare_claim_fail` (+14158618) |
+| Config write | `fe8` / `configWriteWithLock` may write or refuse to write `~/.claude.json`; uses atomic rename via temp file with mode `0o600` |
+| Backup files | Up to `5` rotated backups in `"backups"` subdirectory with `".backup."` in filename |
+| Filesystem lock | Acquired via `K.mkdirSync`; released via `K.unlinkSync`; 60 000 ms timeout guard |
+| Background sessions | `w` / `backgroundSessionManager` may spawn, retire, or SIGKILL background sessions as a side effect of shared infrastructure calls |
+| JSX element | Returns a `pL.createElement` element for inline rendering in the active conversation view |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| thinClientDispatch | Dispatches a `control-request` event to the thin client layer carrying the JSX-rendered side question (bundle.js:+9795621) |
+| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Hook registration | `immediate: true`; dispatches via `thinClientDispatch: "control-request"` — no deferred hook registration observed at depth ≤ 2 |
 
 ---
 
@@ -259,17 +206,17 @@ Analysis basis: CC v2.1.132 bundle.js:+161637, +3105266
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis — command registered as `local-jsx`, `immediate: true`, dispatching via `control-request` |
+| v2.1.133 | Initial analysis. Handler `UH7` in module `Do9`; `local-jsx` type; `control-request` dispatch; immediate execution. |
 
 ---
 
 ## Common Mistakes
 
-1. **Omitting the argument entirely.** Typing `/btw` with no text produces the system-level usage hint `"Usage: /btw <your question>"` and does not dispatch any request. Always include the question text directly after the command.
-2. **Expecting the side question to interrupt or replace the main conversation.** The command is explicitly designed to leave the primary conversation context intact. The side question is injected as a separate `control-request` and does not alter the ongoing message thread.
-3. **Assuming the command is asynchronous or requires confirmation.** The `immediate: true` flag means the handler executes the moment the command is recognised; there is no secondary confirmation step.
-4. **Ignoring lock-contention warnings.** If the log emits "Lock acquisition took longer than expected - another Claude instance may be running", a concurrent Claude process may be writing the config. Running multiple Claude instances against the same config file simultaneously can lead to write contention.
-5. **Expecting auth credentials to survive a corrupt config round-trip.** The guard described in GH #3117 is intentional: if the on-disk config is found to be missing auth fields that exist in the cache, the write is refused entirely to prevent wiping credentials. This is a safety mechanism, not a bug.
+1. **Omitting the argument**: Invoking `/btw` without a question results in the usage hint `"Usage: /btw <your question>"` being shown and no request being dispatched. Always supply a non-empty question string.
+2. **Expecting a new conversation turn**: Because `/btw` is `immediate: true` and `local-jsx`, the response is rendered inline. It does not create a separate top-level turn or fork the conversation history.
+3. **Assuming no side effects**: The command routes through the full config-persistence pipeline (`e6` → `fe8`). On systems where another Claude instance holds the config lock, the command may log a lock-contention warning and experience a delay of up to 60 000 ms before completing.
+4. **Conflating the system role with a system prompt**: The question is wrapped in a `"system"` role message for out-of-band framing, but it is not a persistent system prompt. It scopes only to this single side inquiry.
+5. **Ignoring the jitter delay**: The `randomDelayHelper` (`H`) introduces a small non-deterministic delay before dispatch. Automated tests that expect synchronous or zero-latency responses will be flaky.
 
 ---
 
@@ -279,15 +226,47 @@ Analysis basis: CC v2.1.132 bundle.js:+161637, +3105266
 
 | Identifier | Role |
 |---|---|
-| `Ye4` | `/btw` command handler (entry point) |
-| `H` | Random jitter delay helper |
-| `A8` | Global config save orchestrator |
-| `Nt8` | Config write with filesystem lock (primary path) |
-| `FbH` | Config serialiser / formatter |
-| `CJ1` | Config object entry iterator (uses `Object.entries`) |
-| `gbH` | Timestamp helper for config writes (uses `Date.now`) |
-| `k` | Severity-aware logger / log router |
-| `k5H` | Guarded config read (enforces access-allowed check) |
-| `uq6` | Auth-loss detection / comparison utility |
-| `d` | Log entry builder / appender |
-| `vt8` | Message log write helper (path resolution + directory creation) |
+| `UH7` | Main async handler for `/btw` (arbor_handler; resolved via module `Do9`) |
+| `H` | Random-delay helper (uses `Math.random` + `setTimeout`) |
+| `e6` | Global config dispatch orchestrator |
+| `fe8` | Config write-with-lock implementation |
+| `A` | Filesystem abstraction (mkdir, statSync, readdirStringSync) |
+| `F6` | Path / file utility helper |
+| `K` | Primary filesystem I/O module (statSync, mkdirSync, readdirStringSync, copyFileSync, unlinkSync) |
+| `q` | Secondary filesystem I/O module (readFileSync, readlinkSync, lstatSync, statSync, unlinkSync, mkdirSync, readdirStringSync, copyFileSync) |
+| `f` | File handle / stream object (close, toLowerCase, toString) |
+| `ql_` | Record ID / metadata generator |
+| `jQ8` | Record ID sub-component builder |
+| `k` | Message block builder (includes debug/redacted handling) |
+| `Ztq` | Sub-helper within message block builder |
+| `SH` | JSON serialization helper (JSON.stringify) |
+| `Uf` | String normalization / path extraction helper |
+| `LkH` | Additional string utility (calls `UnA`) |
+| `vtq` | Buffer / byte-length computation and file write helper |
+| `d` | Context/state accessor |
+| `w8` | Error construction / wrapping utility |
+| `m5H` | Config file read and parse pipeline |
+| `p6` | JSON parse wrapper |
+| `nh` | String prefix stripper (startsWith / slice) |
+| `PX1` | Backup directory scanner and file locator |
+| `fH` | Error logging / push helper (logError) |
+| `Me8` | Path join + normalization helper |
+| `w` | Background session manager (spawn, SIGKILL, memory monitor) |
+| `lq6` | Lock release / cleanup helper |
+| `_` | Lowercase normalizer / general utility |
+| `Z` | Filename/path string being checked for prefix |
+| `P` | SDK/HTTP connection manager (Promise.all, connected/failed states) |
+| `jP8` | SDK sub-component |
+| `HA` | Error factory (Error + String coercion) |
+| `I` | Array slice source (config history slice) |
+| `KhH` | Atomic file write helper (temp file, fchmod, fsync, rename) |
+| `O` | Stat result object (isSymbolicLink check) |
+| `D8` | Error wrapping utility (calls `w8`) |
+| `fxH` | Session context data loader |
+| `jX1` | Object entries iterator / builder |
+| `MxH` | Timestamp recorder (Date.now) |
+| `Ke8` | Config entry construction helper (dirname, JV, SH, KhH) |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

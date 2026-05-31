@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "terminal-setup"
 cc_version: "2.1.133"
-updated: "2026-05-18"
+updated: "2026-05-31"
 tags: ["terminal-setup", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/terminal-setup` command detects the user's current terminal emulator and operating system, then automatically configures terminal-specific settings to improve the Claude Code experience — most notably installing Shift+Enter keybindings for multi-line input and, on macOS, enabling Option-as-Meta and disabling the audio bell in Apple Terminal or enabling clipboard access in iTerm2. The command is a local JSX command that renders its results inline and requires no user-supplied arguments.
+`/terminal-setup` detects the user's active terminal emulator and installs a Shift+Enter (or Option+Enter) key binding that sends a newline escape sequence to Claude Code's input field. The command supports multiple terminal targets — Apple Terminal.app, iTerm2, VS Code, Cursor, Windsurf, Alacritty, and Zed — and performs per-terminal configuration file manipulation including backup, patch, and atomic write operations. On macOS terminals where native Shift+Enter is not applicable, it modifies preference plists or JSON keymaps; on terminals already supporting Shift+Enter natively, it emits an informational note instead.
 
 ---
 
@@ -31,9 +31,18 @@ The `/terminal-setup` command detects the user's current terminal emulator and o
 |---|---|
 | type | `local-jsx` |
 | name | `terminal-setup` |
-| description | `null` |
+| description | `Install Shift+Enter key binding for newlines` |
+| loc_byte | `11072068` |
+| loc_byte_end | `11072606` |
+| loc_line | `6864` |
 | isHidden | `null` |
 | module_id | `pN1` |
+| load_inline | `true` |
+| arbor_handler.name | `BRK` |
+| arbor_handler.fqn | `claude-2.1.133::BRK` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `1` |
 
 Analysis basis: CC v2.1.133 bundle.js:+11072068
 
@@ -41,496 +50,569 @@ Analysis basis: CC v2.1.133 bundle.js:+11072068
 
 ## Input Branching
 
-The top-level orchestrator (described here as `runTerminalSetup`) is invoked by the command handler (`commandHandler`), which first reads `fa.platform` to decide the macOS-vs-other split, then delegates to `dispatchByTerminal` for per-terminal work.
+The command branches across seven distinct terminal targets (plus a fallback path), making a Mermaid flowchart the appropriate representation.
 
 ```mermaid
 flowchart TD
-    A(["/terminal-setup invoked"]) --> B{fa.platform == 'darwin'?}
-    B -- yes --> C[detectTerminalDarwin]
-    B -- no --> D[detectTerminalGeneric]
+    A["/terminal-setup invoked"] --> B{Detect platform\nfa.platform}
+    B -->|not darwin| C{Check non-macOS\nterminal env}
+    B -->|darwin| D{Detect macOS terminal\nterm env vars}
 
-    C --> E{Terminal identifier}
-    E -- Apple_Terminal --> F[configureAppleTerminal]
-    E -- iTerm2 / iTerm.app --> G[configureITerm2]
-    E -- vscode --> H[configureVSCodeFamily\nvscode variant]
-    E -- cursor --> I[configureVSCodeFamily\ncursor variant]
-    E -- windsurf --> J[configureVSCodeFamily\nwindsurf variant]
-    E -- alacritty --> K[configureAlacritty]
-    E -- zed --> L[configureZed]
-    E -- tmux / screen / other --> M[printNativeSupport\nHint only]
+    D -->|Apple_Terminal| E[terminalSetupAppleTerminal\nFRK]
+    D -->|iTerm.app / screen| F[iTerm2Handler\nuN1]
+    D -->|vscode / cursor / windsurf\nor *-server path| G{VS Code variant\nbN1}
+    D -->|alacritty| H[alacrittyHandler\ngRK]
+    D -->|zed| I[zedHandler\nQRK]
+    D -->|other / unrecognized| J[Emit native support note\nShift+Enter already works]
 
-    D --> N{Terminal identifier}
-    N -- vscode --> H
-    N -- cursor --> I
-    N -- windsurf --> J
-    N -- alacritty --> K
-    N -- zed --> L
-    N -- other --> M
+    G -->|vscode| K[VSCode keybindings\nq_A]
+    G -->|cursor| L[Cursor keybindings\n__A]
+    G -->|windsurf| M[Windsurf keybindings\n__A variant]
 
-    F --> O[backupPreferences]
-    O --> P{Backup ok?}
-    P -- no --> Q([error: Failed to create backup\nof Terminal.app preferences])
-    P -- yes --> R[readDefaultProfile]
-    R --> S[readStartupProfile]
-    S --> T[setPlistBuddyOptions\nOption-as-Meta + visual bell]
-    T --> U[killall cfprefsd]
-    U --> V([success output])
+    C -->|vscode / cursor / windsurf\non non-darwin| K
+    C -->|other non-darwin| J
 
-    G --> W[readITerm2Pref\nAllowClipboardAccess]
-    W --> X{Already enabled?}
-    X -- yes --> Y([already enabled message])
-    X -- no --> Z[writeITerm2Pref\n-bool true]
-    Z --> AA([success + restart hint])
+    E --> N{Backup plist\nyN1}
+    N -->|backup ok| O[Read default + startup\nprofile names via defaults]
+    N -->|backup fail| P[Abort with error:\n'Failed to create backup...']
+    O --> Q[PlistBuddy: set OptionMeta + visual bell\nSN1 / RN1]
+    Q -->|at least one profile ok| R[killall cfprefsd\nflush prefs daemon]
+    Q -->|all profiles fail| S[Error: 'Failed to enable Option as Meta key...']
+    R --> T[Emit success summary:\n'Configured Terminal.app settings:']
 
-    H --> AB[resolveVSCodeKeybindingsPath]
-    I --> AB
-    J --> AB
-    AB --> AC[ensureDirectoryExists]
-    AC --> AD[readOrInitKeybindingsJSON]
-    AD --> AE{shift+enter binding present?}
-    AE -- yes --> AF([already configured warning])
-    AE -- no --> AG[appendShiftEnterBinding]
-    AG --> AH[writeKeybindingsJSON]
-    AH --> AI([success output])
+    F --> U{Check AllowClipboardAccess\ndefaults read}
+    U -->|already enabled| V[Emit 'already enabled' note]
+    U -->|not enabled| W[defaults write -bool true]
+    W -->|success| X[Emit enable confirmation]
+    W -->|fail| Y[Emit warning]
 
-    K --> AJ[resolveAlacrittyConfigPath]
-    AJ --> AK{Config path found?}
-    AK -- no --> AL([error: No valid config path found])
-    AK -- yes --> AM[readAlacrittyConfig]
-    AM --> AN{Binding already present?}
-    AN -- yes --> AO([already configured message])
-    AN -- no --> AP[backupAlacrittyConfig]
-    AP --> AQ{Backup ok?}
-    AQ -- no --> AR([error: Error backing up config])
-    AQ -- yes --> AS[appendAlacrittyKeyBinding]
-    AS --> AT([success + restart hint])
+    K & L & M --> Z[Locate keybindings.json /\nsettings.json path\nmN1]
+    Z --> AA[Read existing file\nparse JSON]
+    AA --> AB{Binding already present?}
+    AB -->|yes| AC[Emit 'already configured' note]
+    AB -->|no| AD[Backup file\nrandomBytes suffix]
+    AD --> AE[Patch JSON: insert shift+enter binding\nV4_ / I4_]
+    AE --> AF[Write file\nHG.writeFile]
+    AF --> AG[Emit success]
 
-    L --> AU[resolveZedKeymapPath]
-    AU --> AV[readOrInitKeymapJSON]
-    AV --> AW{shift-enter binding present?}
-    AW -- yes --> AX([already configured message])
-    AW -- no --> AY[backupZedKeymap]
-    AY --> AZ{Backup ok?}
-    AZ -- no --> BA([error: Error backing up keymap])
-    AZ -- yes --> BB[appendZedKeyBinding]
-    BB --> BC[writeZedKeymap]
-    BC --> BD([success output])
+    H --> AH[Find alacritty.toml path]
+    AH -->|not found| AI[Error: 'No valid config path found']
+    AH -->|found| AJ{Binding present?\nmods=Shift key=Return}
+    AJ -->|yes| AK[Emit 'already configured']
+    AJ -->|no| AL[Backup + patch TOML\nwrite file]
+    AL --> AM[Emit success + restart note]
+
+    I --> AN[Locate ~/.config/zed/keymap.json]
+    AN --> AO[mkdir if needed\nread file]
+    AO --> AP{shift-enter binding present?}
+    AP -->|yes| AQ[Emit 'already configured']
+    AP -->|no| AR[Backup + patch JSON array\nadd terminal::SendText binding]
+    AR --> AS[Write file]
+    AS --> AT[Emit success]
+    AS -->|error| AU[Error: 'Failed to install Zed...']
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+3762920, +3763179, +3763213, +3763238, +3763426, +3763457, +3763493, +3763812, +3764856, +3766326
+Analysis basis: CC v2.1.133 bundle.js:+3764856 (handler entry `BRK`), +3762920 (platform detection), +3763179 (terminal dispatch `Xn6`)
 
 ---
 
 ## Behavioral Spec
 
-### Terminal Detection
+### Top-level Handler (`BRK`)
+
+The Arbor-resolved handler is `BRK` (AsyncFunction, resolved via `module_id` → `pN1`).
 
 ```
-function detectTerminalDarwin():
-    env = process.env
-    term_program = env["TERM_PROGRAM"]    // checked against known identifiers
-    platform = fa.platform()              // expected "darwin"
+async function terminalSetupHandler(args, appState):
+    platform = os.platform()                         // fa.platform
+    terminalName = detectTerminal(platform)          // uN1 → returns descriptive name string
+    emit dim-styled preamble with terminal name
 
-    if term_program == "Apple_Terminal":
-        return "Apple_Terminal"
-    if term_program == "vscode":
-        // distinguish VS Code family by server directory presence
-        home = fa.homedir()
-        if home contains ".vscode-server":  return "vscode"
-        if home contains ".cursor-server":  return "cursor"
-        if home contains ".windsurf-server":return "windsurf"
-        return "vscode"
-    if term_program == "iTerm.app" or env indicates "iTerm2":
-        return "iTerm2"
-    for each id in ["alacritty", "zed", "tmux", "screen"]:
-        if env matches id: return id
-    return "unknown"
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+3762920, +3762936, +3762960, +3762992, +3763016, +3763040, +3763066, +3763093, +3762497, +3762508, +3762538, +3762568
-
----
-
-### Apple Terminal Configuration (`configureAppleTerminal`)
-
-```
-function configureAppleTerminal():
-    // Step 1 — export plist backup
-    result = runCommand("defaults", "export", "com.apple.Terminal", backupPath)
-    // result exit code is checked; a non-zero exit code OR byte length == 0 means failure
-    if result.exitCode != 0 or result.stdout.length == 0:
-        throw Error("Failed to create backup of Terminal.app preferences, bailing out")
-
-    // Step 2 — read current default window settings
-    defaultProfile = runCommand("defaults", "read", "com.apple.Terminal",
-                                "Default Window Settings")
-    if defaultProfile.trim() == "":
-        throw Error("Failed to read default Terminal.app profile")
-
-    startupProfile = runCommand("defaults", "read", "com.apple.Terminal",
-                                "Startup Window Settings")
-    if startupProfile.trim() == "":
-        throw Error("Failed to read startup Terminal.app profile")
-
-    // Step 3 — apply PlistBuddy settings to each profile
-    profiles = deduplicate([defaultProfile, startupProfile])
-    successCount = 0
-    for each profile in profiles:
-        ok = applyPlistBuddySettings(profile)
-        if ok: successCount++
-
-    if successCount == 0:
-        throw Error("Failed to enable Option as Meta key or disable audio bell"
-                    " for any Terminal.app profile")
-
-    // Step 4 — flush preference daemon
-    runCommand("killall", "cfprefsd")
-
-    // Step 5 — render success output
-    output = []
-    output.push("Configured Terminal.app settings:")
-    output.push("- Enabled \"Use Option as Meta key\"")
-    output.push("- Switched to visual bell")
-    output.push("Shift+Return will now enter a newline.")
-    output.push("Option+Enter will now enter a newline.")
-    output.push("You must restart Terminal.app for changes to take effect.")
-    return renderSuccess(output)
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+3770354, +3770361, +3770365, +3770394, +3770400, +3770495, +3770510, +3770538, +3770577, +3770598, +3770715, +3770754, +3770775, +3770829, +3771084, +3771095, +3771124, +3771137, +3771204, +3771266, +3771311, +3771360, +3771445
-
----
-
-### PlistBuddy Profile Settings (`applyPlistBuddySettings`)
-
-The helper `applyPlistBuddySettings` (mapped from `SN1` / `RN1`) calls `/usr/libexec/PlistBuddy` with `-c` flag arguments to mutate the Terminal preference plist for each named profile.
-
-```
-function applyPlistBuddySettings(profileName):
-    plistBuddy = "/usr/libexec/PlistBuddy"
-    flag = "-c"
-    // Sets "Use Option as Meta key" = true and "Bell" = false
-    // Uses runCommand (fH) internally; errors are caught and surfaced
-    result1 = runCommand(plistBuddy, flag, setMetaKeyCommand(profileName))
-    result2 = runCommand(plistBuddy, flag, setBellCommand(profileName))
-    return result1.ok or result2.ok
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+3769643, +3769670, +3769736, +3769887, +3769890
-
----
-
-### iTerm2 Clipboard Configuration (`configureITerm2`)
-
-```
-function configureITerm2():
-    domain = "com.googlecode.iterm2"
-    key    = "AllowClipboardAccess"
-
-    current = runCommand("defaults", "read", domain, key)
-    if current.trim() == "1" or current.trim().toLowerCase() == "true":
-        return renderMessage("iTerm2 clipboard access already enabled")
-
-    result = runCommand("defaults", "write", domain, key, "-bool", "true")
-    if result.exitCode != 0:
-        return renderWarning("Couldn't update iTerm2 clipboard setting.")
-
-    return renderSuccess([
-        "Enabled \"Applications in terminal may access clipboard\" in iTerm2",
-        "Restart iTerm2 for this to take effect. " +
-        "Undo: defaults write com.googlecode.iterm2 AllowClipboardAccess -bool false"
-    ])
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+3763891, +3763913, +3763937, +3764012, +3764100, +3764155, +3764206, +3764297, +3764380
-
----
-
-### VS Code Family Keybindings (`configureVSCodeFamily`)
-
-Handles VS Code, Cursor, and Windsurf. All three share the same keybinding injection path; they differ only in the application name used in output strings and the config directory path.
-
-```
-function resolveVSCodeConfigDir(appVariant):
-    // appVariant ∈ {"Code", "Cursor", "Windsurf"}
-    platform = fa.platform()
-    home     = fa.homedir()
-    if platform == "win32":
-        return path.join(home, "AppData", "Roaming", appVariant, "User")
     if platform == "darwin":
-        return path.join(home, "Library", "Application Support", appVariant, "User")
-    // linux / other
-    return path.join(home, ".config", appVariant, "User")
+        run macOSDispatch(terminalName, appState)    // Xn6
+    else:
+        // non-darwin: only VS Code family handled
+        run vscodeVariantDispatch(terminalName)      // subset of Xn6 paths
 
-function configureVSCodeFamily(appVariant):
-    // appVariant label: "VSCode" | "Cursor" | "Windsurf"
-    configDir      = resolveVSCodeConfigDir(appVariant)
-    keybindingFile = path.join(configDir, "keybindings.json")
-
-    ensureDirectoryExists(configDir, { recursive: true })
-
-    rawContent = readFileOrDefault(keybindingFile, "[]", "utf-8")
-    parsed     = parseJSON(rawContent)           // via Z9 / JSON-safe parser
-    if not Array.isArray(parsed): parsed = []
-
-    // Check whether the binding already exists
-    existing = parsed.find(entry =>
-        entry.key == "shift+enter" and
-        entry.command == "workbench.action.terminal.sendSequence")
-    if existing != null:
-        return renderWarning(appVariant + " Shift+Enter key binding already configured")
-
-    // Generate a 4-byte random hex suffix for the backup filename
-    suffix   = crypto.randomBytes(4).toString("hex")
-    backupPath = keybindingFile + ".backup." + suffix
-    copyFile(keybindingFile, backupPath)          // best-effort; no bail on failure
-
-    // Append the new binding
-    newBinding = {
-        key:     "shift+enter",
-        command: "workbench.action.terminal.sendSequence",
-        args:    { text: "\u001b\r" },            // ESC + CR
-        when:    "terminalFocus"
-    }
-    parsed.push(newBinding)
-    writeFile(keybindingFile, serializeJSON(parsed, null, 2), "utf-8")
-
-    return renderSuccess("Shift+Return will now enter a newline.")
+    emit contextual note about backslash+return or native support
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+3762992, +3763016, +3763040, +3763213, +3763285, +3763355, +3766405, +3766421, +3766429, +3766442, +3766458, +3766474, +3766484, +3766496, +3766537, +3766547, +3766587, +3767749, +3767764, +3767767, +3768217, +3768401, +3768410, +3768420, +3768450, +3768483, +3768510, +3768534, +3768551, +3768575, +3768601, +3768617, +3768629, +3768664, +3768802, +3768869, +3768891, +3768943, +3768958, +3768977, +3769347, +3769369, +3769528, +3769534
-
-The VS Code family also patches `settings.json` (separate from keybindings) in a parallel sub-flow (`__A`):
-
-```
-function patchVSCodeSettings(appVariant):
-    configDir    = resolveVSCodeConfigDir(appVariant)
-    settingsFile = path.join(configDir, "settings.json")
-
-    raw    = readFileOrDefault(settingsFile, "{}", "utf-8")
-    parsed = parseJSON(raw)
-    if typeof parsed != "object" or Array.isArray(parsed): parsed = {}
-
-    // Merges terminal-relevant settings; existing keys are preserved
-    // Uses writeShiftEnterEntry (I4_) and writeSettingsEntry (V4_)
-    suffix     = crypto.randomBytes(4).toString("hex")
-    backupPath = settingsFile + ".backup." + suffix
-    copyFile(settingsFile, backupPath)
-
-    writeFile(settingsFile, serializeJSON(parsed, null, 2), "utf-8")
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+3766638, +3766714, +3766744, +3766752, +3766759, +3766786, +3766808, +3766860, +3766880, +3766921, +3766947, +3767140, +3767162, +3767286, +3767337, +3767473, +3767632
+Analysis basis: CC v2.1.133 bundle.js:+3764856 (`BRK` → `fa.platform`), +3765052 (`BRK` → `uN1`), +3766326 (`BRK` → `Xn6`)
 
 ---
 
-### Alacritty Keybinding Configuration (`configureAlacritty`)
+### Terminal Detection (`uN1`)
 
 ```
-function configureAlacritty():
-    // Collect candidate config paths for this platform
-    candidatePaths = buildAlacrittyConfigPaths()   // uses fa.homedir, fa.platform
-    // Primary filename: "alacritty.toml"
-    configPath = candidatePaths.find(p => fileExists(p))
-
-    if configPath == null:
-        throw Error("No valid config path found for Alacritty")
-
-    content = readFile(configPath, "utf-8")
-    parsed  = parseToml(content)      // Z9 — TOML-safe parser
-
-    // Check if binding is already present by scanning for both marker strings
-    if content.includes("mods = \"Shift\"") and content.includes("key = \"Return\""):
-        return renderMessage("Alacritty Shift+Enter key binding already configured")
-
-    // Backup
-    suffix     = crypto.randomBytes(4).toString("hex")
-    backupPath = configPath + ".backup." + suffix
-    result     = copyFile(configPath, backupPath)
-    if result.error:
-        throw Error("Error backing up existing Alacritty config. Bailing out.")
-
-    // Inject TOML key-binding block
-    appendAlacrittyBlock(configPath, content)
-    // Ensures parent directory exists before writing
-    ensureDirectoryExists(path.dirname(configPath))
-    writeFile(configPath, newContent, "utf-8")
-
-    return renderSuccess([
-        "Installed Alacritty Shift+Enter key binding",
-        "You may need to restart Alacritty for changes to take effect"
-    ])
+function detectCurrentTerminal(platform):
+    read relevant environment variables (TERM_PROGRAM, LC_TERMINAL, etc.)
+    trim whitespace from values                      // _.trim
+    resolve color-rendering capability              // K_
+    match against known terminal identifiers:
+        "iTerm.app" | "screen" → return "iTerm2"
+        "Apple_Terminal"       → return "Apple_Terminal"
+        others                 → return raw env value or "your current terminal"
+    emit dim output of detected terminal name
+    return terminal name string
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+3771976, +3771983, +3772005, +3772044, +3772101, +3772253, +3772315, +3772360, +3772366, +3772423, +3772434, +3772464, +3772491, +3772507, +3772570, +3772584, +3772606, +3772669, +3772717, +3772865, +3772874, +3772919, +3773035, +3773091, +3773161, +3773277, +3773289
+Analysis basis: CC v2.1.133 bundle.js:+3763848 (`uN1` entry), +3763891 (`uN1` → `Y8` env read), +3763972 (`uN1` → `_.trim`), +3763996 (`uN1` → `K_` color resolve), +3764527 (`uN1` → `fH` log)
 
 ---
 
-### Zed Keymap Configuration (`configureZed`)
+### macOS Dispatch (`Xn6`)
+
+`Xn6` is the macOS-level dispatcher. It calls sub-handlers based on the detected terminal string:
 
 ```
-function configureZed():
-    home        = fa.homedir()
-    keymapPath  = path.join(home, ".config", "zed", "keymap.json")
-    ensureDirectoryExists(path.dirname(keymapPath))
+async function macOSDispatch(terminalName, appState):
+    if isRemoteVSCodeEnv(terminalName):              // bN1
+        await vscodeSetup(terminalName)              // q_A or __A
+    elif terminalName contains "Apple_Terminal":
+        await appleTerminalSetup()                   // FRK
+    elif terminalName contains "Cursor":
+        await cursorSetup()                          // __A
+    elif terminalName contains "Windsurf":
+        await windsurfSetup()                        // __A variant
+    elif terminalName contains "alacritty":
+        await alacrittySetup()                       // gRK
+    elif terminalName contains "zed":
+        await zedSetup()                             // QRK
+    else:
+        emit note: terminals like iTerm2, WezTerm, Ghostty, Kitty, Warp,
+                   Windows Terminal support Shift+Enter natively
+```
 
-    raw    = readFileOrDefault(keymapPath, "[]", "utf-8")
-    parsed = parseJSON(raw)
-    if not Array.isArray(parsed): parsed = []
+Analysis basis: CC v2.1.133 bundle.js:+3763179 (`Xn6` → `FRK`), +3763213 (`Xn6` → `q_A`), +3763238 (`Xn6` → `__A`), +3763426 (`Xn6` → `gRK`), +3763457 (`Xn6` → `QRK`), +3763493 (`Xn6` → `e6`), +3763812 (`Xn6` → `guH`)
 
-    // Check presence of "shift-enter" binding
-    if parsed some entry contains "shift-enter":
-        return renderMessage("Zed Shift+Enter key binding already configured")
+---
 
-    // Backup
-    suffix     = crypto.randomBytes(4).toString("hex")
-    backupPath = keymapPath + ".backup." + suffix
-    result     = copyFile(keymapPath, backupPath)
-    if result.error:
-        throw Error("Error backing up existing Zed keymap. Bailing out.")
+### Remote VS Code Detection (`bN1`)
 
-    // Build Zed binding object
-    // Context: "Terminal", action: "terminal::SendText", value: "\u001b\r"
+```
+function isRemoteVSCodeServer(terminalName):
+    return terminalName.includes(".vscode-server")
+        or terminalName.includes(".cursor-server")
+        or terminalName.includes(".windsurf-server")
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+3762497 (`bN1` → `H.includes` `.vscode-server`), +3762538 (`.cursor-server`), +3762568 (`.windsurf-server`)
+
+---
+
+### Apple Terminal Setup (`FRK`)
+
+The most complex sub-handler. Operates on macOS Terminal.app preferences via `defaults` CLI and `/usr/libexec/PlistBuddy`.
+
+```
+async function appleTerminalSetup():
+    // Step 1: Backup the plist
+    backupResult = await backupTerminalPlist()       // yN1
+    if backupResult indicates failure:
+        throw Error("Failed to create backup of Terminal.app preferences, bailing out")
+                                                     // loc_byte: 3770400
+
+    // Step 2: Read default profile name
+    defaultProfile = await runCommand(
+        ["defaults", "read", "com.apple.Terminal", "Default Window Settings"]
+    )                                               // Y8 at 3770495; literals: 3770510, 3770538
+    if defaultProfile is empty after trim:
+        throw Error("Failed to read default Terminal.app profile")
+                                                     // loc_byte: 3770598
+
+    // Step 3: Read startup profile name
+    startupProfile = await runCommand(
+        ["defaults", "read", "com.apple.Terminal", "Startup Window Settings"]
+    )                                               // literals: 3770715
+    if startupProfile is empty after trim:
+        throw Error("Failed to read startup Terminal.app profile")
+                                                     // loc_byte: 3770775
+
+    // Step 4: Apply PlistBuddy changes to each unique profile
+    successItems = []
+    profileSet = deduplicate([defaultProfile, startupProfile])
+    for each profile in profileSet:
+        result = await applyPlistBuddySettings(profile)  // SN1 (enable OptionMeta) + RN1 (visual bell)
+        if result ok:
+            successItems.push(result)
+
+    if successItems is empty:
+        throw Error("Failed to enable Option as Meta key or disable audio bell for any Terminal.app profile")
+                                                     // loc_byte: 3770985
+
+    // Step 5: Flush preferences daemon
+    await runCommand(["killall", "cfprefsd"])        // literals: 3771084, 3771095
+
+    // Step 6: Emit success summary
+    emit "success" styled "Configured Terminal.app settings:"  // loc_byte: 3771137
+    if OptionMeta enabled:
+        emit "- Enabled \"Use Option as Meta key\""  // loc_byte: 3771204
+    if visual bell enabled:
+        emit "- Switched to visual bell"             // loc_byte: 3771266
+    emit "Shift+Return will now enter a newline."    // loc_byte: 3771311
+    emit "Option+Enter will now enter a newline."    // loc_byte: 3771360
+    emit "You must restart Terminal.app for changes to take effect."
+                                                     // loc_byte: 3771445
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+3770354 (`FRK` → `fq_`), +3770382 (`FRK` → `yN1`), +3770394 (`FRK` → `Error`), +3770495 (`FRK` → `Y8`), +3770855 (`FRK` → `SN1`), +3770870 (`FRK` → `RN1`), +3771084 (killall cfprefsd)
+
+---
+
+### Plist Backup (`yN1`)
+
+```
+async function backupTerminalPlist():
+    plistPath = path.join(os.homedir(), "Library", "Preferences",
+                          "com.apple.Terminal.plist")
+                                                     // literals: 3759979, 3759989, 3760003
+    stat = await fs.stat(plistPath)                  // sAA.stat at 3760179
+    if stat fails:
+        return { status: "no_backup" }               // literal: 3760386
+
+    // Run: defaults export com.apple.Terminal <tmpfile>
+    await runCommand(["defaults", "export", "com.apple.Terminal", tmpFile])
+                                                     // literals: 3760102, 3760114, 3760123
+
+    if export fails:
+        return { status: "failed" }                  // literal: 3760595
+
+    return { status: "ok", path: tmpFile }
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+3760058 (`yN1` → `duH` homedir join), +3760179 (`yN1` → `sAA.stat`), +3760271 (`yN1` → `mRK` run command)
+
+---
+
+### PlistBuddy Profile Configurator (`SN1`, `RN1`)
+
+```
+async function enableOptionMeta(profileName):         // SN1
+    cmd = ["/usr/libexec/PlistBuddy", "-c",
+           "Set :Window\ Settings:<profileName>:useOptionAsMetaKey true",
+           plistPath]
+    result = await runCommand(cmd)
+    if fails: return { status: "failed" }
+    return { status: "ok", label: "Option as Meta" }
+
+async function enableVisualBell(profileName):         // RN1
+    cmd = ["/usr/libexec/PlistBuddy", "-c",
+           "Set :Window\ Settings:<profileName>:Bell false",
+           plistPath]
+    result = await runCommand(cmd)
+    if fails: return { status: "failed" }
+    return { status: "ok", label: "visual bell" }
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+3769640 (`SN1` → `Y8`), +3769643 (`/usr/libexec/PlistBuddy`), +3770019 (`RN1` → `Y8`), +3770102 (`RN1` → `duH`)
+
+---
+
+### VS Code / Cursor / Windsurf Keybindings — Install (`q_A`)
+
+```
+async function installVSCodeKeybinding(variant):
+    // variant: "VSCode" | "Cursor" | "Windsurf"
+    keybindingsPath = resolveVSCodeKeybindingsPath(variant)  // mN1
+                                                     // mN1 → fa.homedir, fa.platform
+    fs.mkdir(dir, { recursive: true })               // HG.mkdir at 3768450
+    existing = await fs.readFile(keybindingsPath, "utf-8")
+                                                     // HG.readFile at 3768510
+              ?? "[]"                                // literal: 3768483
+
+    parsed = parseJSON(existing)                     // nh8 → tN6/nh
+
+    if binding for "shift+enter" already present:    // literal: 3768869
+        emit "already configured"
+        return
+
+    // Backup existing file
+    backupSuffix = crypto.randomBytes(n).toString("hex")
+                                                     // IK6.randomBytes at 3768601
+    await fs.copyFile(keybindingsPath, keybindingsPath + ".backup." + suffix)
+                                                     // HG.copyFile at 3768664
+
+    // Patch JSON: insert new binding entry
     newEntry = {
-        context: "Terminal",
+        key: "shift+enter",                          // literal: 3768869
+        command: "workbench.action.terminal.sendSequence",
+                                                     // literal: 3768891
+        args: { text: "\x1b\r" },                   // literal: 3768943 (ESC + CR)
+        when: "terminalFocus"                        // literal: 3768958
+    }
+    patched = jsonPatch(parsed, newEntry)            // V4_ at 3769347
+    await fs.writeFile(keybindingsPath, patched)     // HG.writeFile at 3769369
+    emit success
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+3767749 (`q_A` → `bN1`), +3768401 (`q_A` → `mN1`), +3768420 (keybindings.json), +3768551 (`q_A` → `nh8`), +3768601 (randomBytes), +3768664 (copyFile), +3769347 (`q_A` → `V4_`), +3769369 (writeFile)
+
+---
+
+### VS Code Config Path Resolver (`mN1`)
+
+```
+function resolveVSCodeConfigPath(variant):
+    platform = os.platform()
+    if platform == "win32":
+        base = path.join(os.homedir(), "AppData", "Roaming")
+                                                     // literals: 3766458, 3766474, 3766484
+    elif platform == "darwin":
+        base = path.join(os.homedir(), "Library", "Application Support")
+                                                     // literal: 3766547
+    else:
+        base = path.join(os.homedir(), ".config")    // literal: 3766587
+
+    appDir = variant == "VSCode" ? "Code" :
+             variant == "Cursor" ? "Cursor" :
+             variant == "Windsurf" ? "Windsurf" : "Code"
+                                                     // literals: 3766405, 3763285, 3763355
+    return path.join(base, appDir, "User", "keybindings.json")
+                                                     // literals: 3766496, 3768420
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+3766421 (`mN1` → `QS.join`), +3766429 (`mN1` → `fa.homedir`), +3766442 (`mN1` → `fa.platform`), +3766458 (win32), +3766547 (Application Support)
+
+---
+
+### Cursor / Windsurf Settings Patch (`__A`)
+
+Operates on `settings.json` (not `keybindings.json`) for Cursor and Windsurf variants. Follows the same backup → read → check-present → patch → write pattern as `q_A`, but targets a different file path and JSON key structure.
+
+```
+async function installCursorOrWindsurfBinding(variant):
+    settingsPath = resolveSettingsPath(variant)      // mN1 variant → "settings.json"
+                                                     // literal: 3766759
+    existing = await fs.readFile(settingsPath) ?? "{}"
+                                                     // literal: 3766786
+    parsed = parseJSON(existing)                     // nh8
+
+    if binding present:
+        emit already configured
+        return
+
+    backupSuffix = crypto.randomBytes(...)           // IK6.randomBytes at 3767286
+    await fs.copyFile(...)                           // HG.copyFile at 3767337
+    patched = jsonPatch(parsed, newBindingEntry)     // I4_ at 3767162
+    await fs.writeFile(settingsPath, patched)        // HG.writeFile at 3767473
+
+    if error:
+        emit warning "VSCode"                        // literals: 3767734, 3767767
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+3766638 (`__A` → `M6.dim`), +3766714 (`__A` → `bN1`), +3766744 (`__A` → `QS.join`), +3766808 (`__A` → `HG.readFile`), +3767162 (`__A` → `I4_`), +3767473 (`__A` → `HG.writeFile`)
+
+---
+
+### Alacritty Setup (`gRK`)
+
+```
+async function alacrittySetup():
+    candidates = [
+        "~/.config/alacritty/alacritty.toml",
+        "~/.alacritty.toml",
+        ...
+    ]
+    configPath = candidates.find(p => fileExists(p))
+    if not found:
+        throw Error("No valid config path found for Alacritty")
+                                                     // literal: 3772366
+
+    content = await fs.readFile(configPath)          // HG.readFile at 3772253
+
+    if content.includes('mods = "Shift"') and
+       content.includes('key = "Return"'):           // literals: 3772434, 3772464
+        emit "Alacritty Shift+Enter key binding already configured"
+                                                     // literal: 3772507
+        return
+
+    // Backup
+    suffix = crypto.randomBytes(...)                 // IK6.randomBytes at 3772606
+    await fs.copyFile(configPath, backupPath)        // HG.copyFile at 3772669
+    if backup fails:
+        throw Error("Error backing up existing Alacritty config. Bailing out.")
+                                                     // literal: 3772717
+
+    // Append TOML keyboard section
+    dir = path.dirname(configPath)                   // QS.dirname at 3772874
+    await fs.mkdir(dir, { recursive: true })         // HG.mkdir at 3772865
+    if content.endsWith("\n") → adjust
+    await fs.writeFile(configPath, patchedContent)   // HG.writeFile at 3773035
+
+    emit "Installed Alacritty Shift+Enter key binding"
+                                                     // literal: 3773091
+    emit "You may need to restart Alacritty for changes to take effect"
+                                                     // literal: 3773161
+    if error:
+        emit "Failed to install Alacritty Shift+Enter key binding"
+                                                     // literal: 3773289
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+3771976 (`gRK` → `_.push`), +3772044 (`gRK` → `fa.homedir`), +3772101 (`gRK` → `fa.platform`), +3772253 (`gRK` → `HG.readFile`), +3772315 (`gRK` → `Z9`), +3772423 (`gRK` → `K.includes`)
+
+---
+
+### Zed Setup (`QRK`)
+
+```
+async function zedSetup():
+    keymapPath = path.join(os.homedir(), ".config", "zed", "keymap.json")
+                                                     // QS.join + fa.homedir at 3773373/3773381
+    await fs.mkdir(dir, { recursive: true })         // HG.mkdir at 3773448
+    existing = await fs.readFile(keymapPath) ?? "[]"
+    parsed = JSON.parse(existing)                    // p6 at 3773979; HG.readFile at 3773503
+
+    if not Array.isArray(parsed):
+        parsed = []
+
+    if any entry has binding "shift-enter":          // literal: 3773589
+        emit "Zed Shift+Enter key binding already configured"
+                                                     // literal: 3773629
+        return
+
+    // Backup
+    suffix = crypto.randomBytes(...)                 // IK6.randomBytes at 3773722
+    await fs.copyFile(keymapPath, backupPath)        // HG.copyFile at 3773785
+    if backup fails:
+        throw Error("Error backing up existing Zed keymap. Bailing out.")
+                                                     // literal: 3773833
+
+    // Append binding entry
+    newEntry = {
+        context: "Terminal",                         // literal: 3774042
         bindings: {
-            "shift-enter": ["terminal::SendText", "\u001b\r"]
+            "shift-enter": "terminal::SendText",     // literals: 3773589, 3774078
+            // args: "\x1b\r" (ESC CR escape sequence)
         }
     }
-    parsed.push(newEntry)    // indentation level: 2
-    writeFile(keymapPath, serializeJSON(parsed, null, 2), "utf-8")
+    parsed.push(newEntry)                            // K.push at 3774026
+    serialized = JSON.stringify(parsed, null, 2)     // SH at 3774133
+    await fs.writeFile(keymapPath, serialized)       // HG.writeFile at 3774118
 
-    return renderSuccess("Installed Zed Shift+Enter key binding")
+    emit "Installed Zed Shift+Enter key binding"     // literal: 3774189
+    if error:
+        emit "Failed to install Zed Shift+Enter key binding"
+                                                     // literal: 3774294
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+3773373, +3773381, +3773423, +3773448, +3773503, +3773555, +3773578, +3773589, +3773613, +3773629, +3773686, +3773700, +3773722, +3773785, +3773833, +3773979, +3773986, +3774026, +3774042, +3774078, +3774118, +3774133, +3774143, +3774189, +3774282, +3774288, +3774294
+Analysis basis: CC v2.1.133 bundle.js:+3773373 (`QRK` → `QS.join`), +3773503 (`QRK` → `HG.readFile`), +3773555 (`QRK` → `Z9`), +3773578 (`QRK` → `q.includes`), +3773613 (`QRK` → `K_`), +3774026 (`QRK` → `K.push`), +3774133 (`QRK` → `SH`)
 
 ---
 
-### Command Execution Helper (`runCommand`)
+### iTerm2 Setup (`uN1` path for iTerm2)
 
-The `runCommand` helper (mapped from `fH`) wraps all external process calls. It uses an internal error-logging path and pushes entries to an in-memory error list.
+When the detected terminal is `iTerm2`, the handler calls `defaults` to enable clipboard access rather than installing a key binding (iTerm2 handles Shift+Enter natively).
 
 ```
-function runCommand(executable, ...args):
-    try:
-        result = spawnSync(executable, args)
-        if result.status != 0:
-            logError(result.stderr)
-            return { ok: false, exitCode: result.status, stdout: "", stderr: result.stderr }
-        return { ok: true, exitCode: 0, stdout: result.stdout.toString(), stderr: "" }
-    catch err:
-        logError(err)
-        return { ok: false, exitCode: -1, stdout: "", stderr: String(err) }
+async function iTerm2Setup():
+    result = await runCommand(
+        ["defaults", "read", "com.googlecode.iterm2", "AllowClipboardAccess"]
+    )                                               // literals: 3763913, 3763937
+    if result == "1" or "yes" or "on":
+        emit "iTerm2 clipboard access already enabled"
+                                                     // literal: 3764012
+        return
+
+    writeResult = await runCommand([
+        "defaults", "write",
+        "com.googlecode.iterm2", "AllowClipboardAccess",
+        "-bool", "true"
+    ])                                              // literals: 3764100, 3764155
+    if writeResult fails:
+        emit warning "Couldn't update iTerm2 clipboard setting."
+                                                     // literal: 3764206
+        return
+
+    emit "Enabled \"Applications in terminal may access clipboard\" in iTerm2"
+                                                     // literal: 3764297
+    emit "Restart iTerm2 for this to take effect. Undo: defaults write ..."
+                                                     // literal: 3764380
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+912461, +912474, +912720, +912803, +912821, +912836, +912861
+Analysis basis: CC v2.1.133 bundle.js:+3763848 (`uN1`), +3763891 (`uN1` → `Y8`), +3763913 (com.googlecode.iterm2), +3764012 (already enabled message), +3764957 (iTerm.app literal), +3765006 (screen literal)
 
 ---
 
-### Foreground Color Detection for Output (`detectForegroundColor`)
+### Shell Command Runner (`Y8` / `GA`)
 
-The `detectForegroundColor` helper (mapped from `K_`) is used by multiple per-terminal configurators to style their console output. It checks whether the terminal's foreground color spec starts with `"rgb("`, `"ansi256("`, or `"ansi:"`.
+Internal utility used by multiple sub-handlers to execute system commands.
 
 ```
-function detectForegroundColor(colorSpec):
-    if colorSpec.startsWith("rgb("):    return parseRgbColor(colorSpec)
-    if colorSpec.startsWith("ansi256("): return parseAnsi256Color(colorSpec)
-    if colorSpec.startsWith("ansi:"):   return parseAnsiColor(colorSpec)
-    return defaultColor
+async function runShellCommand(argv, options):
+    spawn process with argv                          // GA
+    collect stdout / stderr
+    wait for exit code
+    if exitCode != 0:
+        log error via logError
+    return { stdout, stderr, exitCode }
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+3553244, +3553288, +3553301, +3553342, +3553368, +3553384, +3553408
+- Timeout constant observed at depth-2 call site: 10 (units: <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->)
+- Concurrent-execution limit: 1,000,000 (internal semaphore) — Analysis basis: CC v2.1.133 bundle.js:+989587
+- Queue management: `NJL` rotates a fixed-size queue via `AN6.shift` / `AN6.push` — Analysis basis: CC v2.1.133 bundle.js:+912141, +912153
+
+Analysis basis: CC v2.1.133 bundle.js:+3760099 (`yN1` → `Y8`), +989120 (`GA` depth-2 entry), +989626 (1,000,000 constant), +989763, +989819, +989942
 
 ---
 
-### Preference Restore / Rollback (`restoreAppleTerminalPreferences`)
+### JSON Patch Helper (`V4_`, `I4_`)
 
-The `restoreAppleTerminalPreferences` helper (mapped from `Dn6`) handles rollback of Apple Terminal preferences when an earlier step fails mid-flight.
+Both `V4_` and `I4_` implement a structured JSON patch operation used when modifying keybinding arrays.
 
 ```
-function restoreAppleTerminalPreferences(backupPath):
-    if backupPath == null or backupPath == "no_backup":
-        return { status: "no_backup" }
-
-    result = runCommand("defaults", "import", "com.apple.Terminal", backupPath)
-    if result.exitCode != 0:
-        return { status: "failed" }
-
-    stat = sAA.stat(backupPath)
-    if stat is ok:
-        // attempt to unlink the temp backup file
-        unlinkSync(backupPath)
-    return { status: "restored" }
+function patchJSONArray(existingText, newEntry):
+    trimmed = existingText.trim()                    // H.trim at 1032267
+    serialized = JSON.stringify(newEntry)            // SH at 1032288
+    // Normalize existing JSON structure via nh / tN6
+    // Check if Array.isArray
+    if is array:
+        use ch8 (insert operation) to append entry  // ch8 at 1032362
+    else:
+        use lh8 (modify operation) to set entry     // lh8 at 1032516
+    return patched JSON string
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+3760360, +3760386, +3760412, +3760449, +3760523, +3760538, +3760595, +3760672, +3760700, +3760703
+Analysis basis: CC v2.1.133 bundle.js:+1032267 (`V4_` → `H.trim`), +1032288 (`V4_` → `SH`), +1032309 (`V4_` → `nh`), +1032327 (`V4_` → `Array.isArray`), +1031953 (`I4_` → `H.trim`)
 
 ---
 
-### Main Terminal Orchestration (`dispatchByTerminal`)
+### Color / Dim Rendering (`K_`, `a5H`)
 
-The root orchestrator (mapped from `BRK`) reads the platform, collects the detected terminal name, and dispatches to the correct configurator. It also prints the "already natively supported" hint for terminals that do not need setup.
+Used throughout to render dim-styled terminal output for progress messages.
 
 ```
-function dispatchByTerminal(context):
-    platform    = fa.platform()
-    terminalId  = detectTerminalDarwin()      // or generic on non-darwin
-
-    // Run iTerm2 clipboard path on macOS regardless of per-terminal branch
-    if platform == "darwin" and terminalId includes "iterm":
-        configureITerm2()
-
-    // Run t2H (terminal capability check) to read env
-    caps = detectTerminalCapabilities()
-
-    // Dispatch per-terminal
-    switch terminalId:
-        case "Apple_Terminal": return configureAppleTerminal()
-        case "iTerm2":         return configureITerm2()
-        case "vscode":         return configureVSCodeFamily("Code")
-        case "cursor":         return configureVSCodeFamily("Cursor")
-        case "windsurf":       return configureVSCodeFamily("Windsurf")
-        case "alacritty":      return configureAlacritty()
-        case "zed":            return configureZed()
-        default:
-            print("Note: You can already use backslash (\\) + return to add newlines.")
-            print("Note: iTerm2, WezTerm, Ghostty, Kitty, Warp, and Windows Terminal"
-                  " support Shift+Enter natively.")
+function renderColorSegment(text, colorSpec):
+    if colorSpec.startsWith("foreground"):           // literal: 3553244
+        apply foreground color
+    elif colorSpec.startsWith("rgb("):               // literal: 3553301
+        parse r,g,b and apply M6.rgb
+    elif colorSpec.startsWith("ansi256("):           // literal: 3553342
+        parse index and apply M6.ansi256
+    elif colorSpec.startsWith("ansi:"):              // literal: 3553368
+        map named color to M6 method
+    else:
+        apply M6.dim or named color method
+    return styled string
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+3764856, +3764957, +3764984, +3765006, +3765052, +3765183, +3765198, +3765403, +3765429, +3765455, +3765472, +3765549, +3765697, +3765849, +3766184, +3766326
+Analysis basis: CC v2.1.133 bundle.js:+3553288 (`K_` → `H.startsWith`), +3553384 (`K_` → `a5H`), +3227667 (`a5H` → `A.startsWith`), +3227748 (`a5H` → `M6.black`)
 
 ---
 
-### Config File Locking and Backup (`configLockManager`)
+### Onboarding Hook (`guH`)
 
-The `configLockManager` (mapped from `fe8` / `e6` / `G$`) is a general-purpose config-save guard used across Claude Code. It is reached indirectly through the onboarding completion hook fired at command end.
-
-Key constants:
-- Lock contention warning threshold: **100 ms** (Analysis basis: CC v2.1.133 bundle.js:+3111178)
-- Maximum lock wait timeout: **60 000 ms** (Analysis basis: CC v2.1.133 bundle.js:+3111954)
-- Maximum retained backup files per config: **5** (Analysis basis: CC v2.1.133 bundle.js:+3112203)
-- File permission mode for new config files: **0o600 (384 decimal)** (Analysis basis: CC v2.1.133 bundle.js:+3112485)
-- Background spare process idle interval: **2 000 ms** (Analysis basis: CC v2.1.133 bundle.js:+14156750)
+After the core setup completes, `guH` is invoked to record onboarding state.
 
 ```
-function acquireConfigLock(lockFilePath):
-    deadline = Date.now() + 60000
-    while Date.now() < deadline:
-        try:
-            createExclusive(lockFilePath)   // O_EXCL — throws EEXIST if held
-            return lockHandle
-        catch EEXIST:
-            if elapsed > 100:
-                emitTelemetry("tengu_config_lock_contention")
-                logWarning("Lock acquisition took longer than expected - " +
-                           "another Claude instance may be running")
-            sleep(small_interval)
-    throw Error("could not acquire lock")
+function recordOnboardingComplete(appState):
+    telemetryEvent = "onboarding_project_complete"   // literal: 3759317
+    update appState via dM (state mutation)          // dM at 3759212
+    register new project context via IN1 / aAA       // IN1 at 3759257
+    log config change via G$ (config writer)         // G$ at 3759263
+    update hook state via hH                         // hH at 3759314
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+3111184, +3111273, +3111931, +3111954
+Analysis basis: CC v2.1.133 bundle.js:+3763812 (`Xn6` → `guH`), +3759212 (`guH` → `dM`), +3759257 (`guH` → `IN1`), +3759263 (`guH` → `G$`), +3759314 (`guH` → `hH`), +3759317 (onboarding_project_complete literal)
 
 ---
 
@@ -538,22 +620,14 @@ Analysis basis: CC v2.1.133 bundle.js:+3111184, +3111273, +3111931, +3111954
 
 | Item | Detail |
 |---|---|
-| Telemetry — `tengu_bg_spare_enable` | Fired when a background spare process is enabled (CC v2.1.133 bundle.js:+14156457) |
-| Telemetry — `tengu_bg_spare_spawn` | Fired when a background spare process is spawned (CC v2.1.133 bundle.js:+14156817) |
-| Telemetry — `tengu_config_lock_contention` | Fired when config-lock acquisition exceeds 100 ms threshold (CC v2.1.133 bundle.js:+3111273) |
-| Telemetry — `tengu_config_stale_write` | Fired when a stale config write is detected and suppressed (CC v2.1.133 bundle.js:+3111409) |
-| Telemetry — `tengu_config_auth_loss_prevented` | Fired when a write that would erase auth credentials is blocked (CC v2.1.133 bundle.js:+3111752) |
-| Telemetry — `tengu_config_parse_error` | Fired when a JSON/plist config file cannot be parsed (CC v2.1.133 bundle.js:+3113854) |
-| Telemetry — `tengu_feature_ok` | Fired on successful feature check (CC v2.1.133 bundle.js:+907381) |
-| Onboarding hook | `hH` sets the `onboarding_project_complete` flag in app state on successful completion (CC v2.1.133 bundle.js:+3759317, +3759314) |
-| File system — Apple Terminal | Exports `com.apple.Terminal` plist to a temp backup; kills `cfprefsd`; no permanent new files left on error (CC v2.1.133 bundle.js:+3770354, +3771084) |
-| File system — VS Code family | Creates or patches `keybindings.json` and `settings.json` under the editor's User config directory; leaves `.backup.<hex>` copy of the original (CC v2.1.133 bundle.js:+3768664, +3769369) |
-| File system — Alacritty | Patches `alacritty.toml`; leaves `.backup.<hex>` copy (CC v2.1.133 bundle.js:+3772669, +3773035) |
-| File system — Zed | Patches `~/.config/zed/keymap.json`; leaves `.backup.<hex>` copy (CC v2.1.133 bundle.js:+3773785, +3774118) |
-| File system — iTerm2 | Calls `defaults write` only; no file copied directly (CC v2.1.133 bundle.js:+3764100) |
-| appState changes | `onboarding_project_complete` boolean updated via `hH` → `IN1` → `aAA` path (CC v2.1.133 bundle.js:+3759257, +3759115) |
-| Sound | No audio output. The command explicitly **disables** the audio bell for Apple Terminal profiles (CC v2.1.133 bundle.js:+3771266) |
-| External processes spawned | `defaults`, `/usr/libexec/PlistBuddy`, `killall cfprefsd` on macOS only (CC v2.1.133 bundle.js:+3760102, +3769643, +3771084) |
+| Telemetry | `tengu_config_auth_loss_prevented` (bundle.js:+3108610), `tengu_bg_spare_enable` (+14156457), `tengu_bg_low_mem_mb` (+14156207), `tengu_bg_spare_spawn` (+14156817), `tengu_config_lock_contention` (+3111273), `tengu_config_stale_write` (+3111409), `tengu_config_parse_error` (+3113854), `tengu_feature_ok` (+907381) |
+| Filesystem writes | Modifies `~/Library/Preferences/com.apple.Terminal.plist` (via `defaults export`), `keybindings.json` or `settings.json` (VS Code family), `~/.config/alacritty/alacritty.toml`, `~/.config/zed/keymap.json`. All writes are preceded by a random-suffix backup copy. |
+| Backup files | Created via `HG.copyFile` / `IK6.randomBytes`; suffix format `.backup.<hex>`. Existing backup is never overwritten. |
+| Process spawning | Spawns `defaults`, `/usr/libexec/PlistBuddy`, and `killall cfprefsd` on macOS. |
+| appState changes | `onboarding_project_complete` state flag set via `guH` → `dM` on completion. |
+| Config lock | Uses file-based config locking (`fe8` / `G$`); emits `tengu_config_lock_contention` when acquisition exceeds threshold. Lock timeout: 60,000 ms (bundle.js:+3111954). |
+| Sound | No sound side effects found in depth-2 traversal. |
+| Hook registration | `guH` → `IN1` → `aAA` registers/updates a project context entry referencing `CLAUDE.md` (literal: +3758805) and `workspace` scope (literal: +3758843). |
 
 ---
 
@@ -561,23 +635,23 @@ Analysis basis: CC v2.1.133 bundle.js:+3111184, +3111273, +3111931, +3111954
 
 | Version | Change |
 |---|---|
-| v2.1.133 | Initial analysis |
+| v2.1.133 | Initial analysis. Supports Apple Terminal, iTerm2, VS Code, Cursor, Windsurf, Alacritty, and Zed. |
 
 ---
 
 ## Common Mistakes
 
-1. **Running on an unsupported terminal and expecting changes** — If the terminal is not one of `Apple_Terminal`, `iTerm2/iTerm.app`, `vscode`, `cursor`, `windsurf`, `alacritty`, or `zed`, the command only prints informational notes and does not modify any files. It does not report an error in that case.
+1. **Running on a non-macOS terminal that is already natively supported** — iTerm2, WezTerm, Ghostty, Kitty, Warp, and Windows Terminal handle Shift+Enter without any configuration. Running `/terminal-setup` on these terminals will emit only an informational note; no changes are made. (bundle.js:+3766184)
 
-2. **Not restarting the terminal after setup** — All per-terminal configurators that modify files print a restart-required notice. Changes to Apple Terminal preferences and iTerm2 `defaults` do not apply to already-running terminal windows.
+2. **Forgetting to restart the terminal after setup** — Apple Terminal.app changes require a full restart (`tengu_config_auth_loss_prevented` flush via `killall cfprefsd` is automatic, but the UI restart is not). The command always emits the restart reminder at bundle.js:+3771445. Alacritty similarly may require a restart (bundle.js:+3773161).
 
-3. **Running under tmux or screen** — The terminal detection uses `TERM_PROGRAM` and related environment variables. Inside a `tmux` or `screen` session these variables may not be set, causing the command to fall through to the informational-only path and skip the actual configuration.
+3. **Invoking on Apple Terminal without plist write permissions** — If `defaults export` fails, the command aborts before making any changes (`no_backup` / `failed` states at bundle.js:+3760386, +3760595). No partial writes occur.
 
-4. **Assuming settings.json is unchanged** — In addition to `keybindings.json`, the VS Code family path also patches `settings.json` in the same User config directory. Both files receive a `.backup.<8-char-hex>` copy before modification.
+4. **Expecting VS Code remote-server environments to behave like local VS Code** — When the terminal reports `.vscode-server`, `.cursor-server`, or `.windsurf-server` in its path, `bN1` redirects to the server-side keybinding path (`q_A`), which writes to the remote user's config directory, not the local machine.
 
-5. **Expecting rollback on VS Code / Alacritty / Zed failures** — Only the Apple Terminal path has an explicit rollback mechanism (`restoreAppleTerminalPreferences`). For the other terminals, the `.backup.<hex>` file is left on disk but is not automatically restored; users must restore it manually.
+5. **Assuming the binding survives a VS Code keybindings reset** — The command writes to `keybindings.json` directly. Any VS Code operation that resets or overwrites this file will remove the installed binding without warning.
 
-6. **Multiple Claude instances racing on config** — The config-lock system warns (and emits `tengu_config_lock_contention` telemetry) if another Claude instance holds the lock for more than 100 ms, but `/terminal-setup` itself does not retry failed terminal-file writes.
+6. **Multiple Claude instances contending on config lock** — If another Claude Code instance is running simultaneously, `tengu_config_lock_contention` may fire and the config write may be delayed or skipped with a stale-write guard (bundle.js:+3111184, +3111409).
 
 ---
 
@@ -587,58 +661,93 @@ Analysis basis: CC v2.1.133 bundle.js:+3111184, +3111273, +3111931, +3111954
 
 | Identifier | Role |
 |---|---|
-| `t2H` | Terminal capability / environment variable reader |
-| `Xn6` | Top-level terminal-setup command handler (dispatcher) |
-| `FRK` | Apple Terminal configuration orchestrator |
-| `yN1` | Apple Terminal plist export / backup runner |
-| `Y8` | Shell command executor (generic wrapper) |
-| `q` | File-unlink / temp-file helper |
-| `K` | Async task set (add / delete / find / push) |
-| `SN1` | PlistBuddy profile setter — Option-as-Meta |
-| `RN1` | PlistBuddy profile setter — audio bell disable |
-| `QuH` | Preference-restore helper dispatcher |
-| `K_` | Terminal foreground color detector / formatter |
-| `Y` | Background spare process manager |
-| `fH` | External process runner (`runCommand`) |
-| `Dn6` | Apple Terminal preferences rollback / restore helper |
-| `q_A` | VS Code family keybindings configurator |
-| `bN1` | VS Code family server-directory detector |
-| `mN1` | VS Code family config-directory resolver |
-| `nh8` | JSON-safe file reader with error classification |
-| `Z9` | TOML / JSON parser (safe wrapper) |
-| `dS` | File-URL builder (`CN1.pathToFileURL` wrapper) |
-| `V4_` | VS Code keybindings entry writer |
-| `__A` | VS Code `settings.json` patcher |
-| `I4_` | VS Code settings entry writer |
-| `gRK` | Alacritty keybinding configurator |
-| `_` | String collection / lowercase helper |
-| `QRK` | Zed keymap configurator |
-| `p6` | JSON.parse wrapper |
+| `BRK` | Top-level `/terminal-setup` async handler (Arbor-resolved) |
+| `Xn6` | macOS terminal dispatch router |
+| `FRK` | Apple Terminal.app setup (plist + PlistBuddy) |
+| `yN1` | Apple Terminal plist backup helper |
+| `mRK` | Shell command execution wrapper (inner) |
+| `duH` | Home-directory path joiner |
+| `SN1` | PlistBuddy: enable Option-as-Meta-key per profile |
+| `RN1` | PlistBuddy: enable visual bell per profile |
+| `QuH` | Command result accumulator / output buffer |
+| `Dn6` | Plist import/restore helper for backup rollback |
+| `pRK` | Plist restore orchestrator |
+| `uN1` | Terminal name detector + iTerm2 clipboard setup |
+| `Yn6` | Terminal identification utility |
+| `t2H` | Platform check helper (darwin gate) |
+| `q_A` | VS Code keybindings.json patch installer |
+| `__A` | Cursor / Windsurf settings.json patch installer |
+| `bN1` | Remote VS Code server environment detector |
+| `mN1` | VS Code-family config path resolver |
+| `gRK` | Alacritty TOML key binding installer |
+| `QRK` | Zed keymap.json binding installer |
+| `guH` | Onboarding completion hook registrar |
+| `dM` | App state mutation handler |
+| `IN1` | Project context registration helper |
+| `aAA` | CLAUDE.md / workspace context builder |
+| `IN6` | Context entry constructor |
+| `G$` | Config file writer with lock |
+| `fe8` | Config file read/write with lock and backup |
+| `hH` | Hook state updater |
+| `Y8` | Shell command runner (async, with semaphore) |
+| `GA` | Process spawner (low-level) |
+| `N6` | Command queue manager |
+| `NJL` | Sliding-window queue rotate (shift/push) |
+| `K_` | Color-spec string renderer |
+| `a5H` | ANSI / named-color / RGB / hex style applicator |
+| `M6` | Chalk-style color library reference |
+| `V4_` | JSON array patch helper (VS Code keybindings) |
+| `I4_` | JSON object patch helper (Cursor/Windsurf settings) |
+| `ch8` | JSON insert-operation executor |
+| `X4_` | JSON node insertion logic |
+| `lh8` | JSON slice/modify operation executor |
+| `sN6` | JSON substring replacement utility |
+| `nh8` | JSON parse with error fallback |
+| `nh` | JSON comment-strip / normalize prefix |
+| `Z9` | Error code classifier (ENOENT, EACCES, etc.) |
+| `w8` | Error code string matcher |
+| `dS` | File URL conversion helper |
+| `s0` | Platform integer parser |
 | `SH` | JSON.stringify wrapper |
-| `e6` | Global config save / lock manager (entry point) |
-| `fe8` | Config file lock acquisition and rotation helper |
-| `H` | Random-delay / retry helper (uses Math.random + setTimeout) |
-| `fxH` | Config file path resolver |
-| `jX1` | Config object entries iterator |
-| `MxH` | Config timestamp tracker |
-| `k` | Config serializer / validator |
-| `m5H` | Per-project config reader |
-| `lq6` | Config cache manager |
-| `d` | Async deferred / promise helper |
-| `Ke8` | Current project config saver |
-| `guH` | Onboarding completion handler |
-| `dM` | Onboarding state machine initializer |
-| `IN1` | Onboarding project-complete flag setter |
-| `G$` | Current project config save orchestrator |
-| `hH` | Onboarding hook registrar |
-| `M_A` | Multi-config merge helper |
-| `R6` | Global config reader |
-| `F6` | Config file path constant provider |
-| `He8` | Config file existence checker |
-| `u2K` | Config file watcher |
-| `K_A` | Config read-only accessor |
-| `f_A` | Config write accessor |
-| `L_A` | Config listener registrar |
-| `uN1` | iTerm2 clipboard configuration handler |
-| `BRK` | Main per-terminal dispatch orchestrator |
-| `Yn6` | Terminal name label builder |
+| `p6` | JSON.parse wrapper |
+| `e6` | Global config save with auth-loss guard |
+| `fH` | Structured logger |
+| `HA` | Error formatter |
+| `kH` | String coercion helper |
+| `yq` | Network traffic classifier |
+| `R6` | Telemetry event emitter |
+| `MxH` | Timestamp recorder |
+| `m5H` | Config file reader with parse and backup |
+| `Me8` | Backup directory path builder |
+| `KhH` | Atomic file write with permission preservation |
+| `lq6` | Config lock acquire/release |
+| `d` | Async delay / sleep |
+| `Ke8` | Config file atomic overwrite |
+| `ql_` | Object assign merger |
+| `k` | Log entry formatter |
+| `fxH` | Log level filter |
+| `J6` | Background spare process launcher |
+| `_d6` | Spare process deduplication tracker |
+| `XDq` | Process disposal handler |
+| `sFA` | Spare process factory |
+| `lFA` | Background daemon spawner (Bun.spawn) |
+| `h9` | Daemon config builder |
+| `Qe9` | Spare socket path resolver |
+| `de9` | Daemon socket path resolver |
+| `Yg` | Base socket path builder |
+| `hd7` | Daemon metadata builder |
+| `vd7` | Daemon environment builder |
+| `_N` | Daemon log reader |
+| `Y` | Spare process record / lifecycle manager |
+| `$` | Process disposal wrapper |
+| `Bq6` | Spawn configuration builder |
+| `gq6` | Spare process pool accessor |
+| `Po` | Process handle wrapper |
+| `M_A` | Telemetry emitter variant A |
+| `K_A` | Telemetry emitter variant B |
+| `f_A` | Telemetry emitter variant C |
+| `L_A` | Telemetry emitter variant D |
+
+---
+
+> Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

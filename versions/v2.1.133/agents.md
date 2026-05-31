@@ -1,13 +1,11 @@
 ---
 type: feature-spec
 feature: "agents"
-cc_version: 2.1.133
+cc_version: "2.1.133"
 tags: ["agents", "commands", "slash-commands"]
-updated: "2026-05-18"
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.132
-analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.133 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +13,14 @@ license: "AGPL-3.0-only"
 
 # `/agents`
 
-> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.132
+> Analysis basis: CC v2.1.133 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.133
 
 ---
 
 ## Overview
 
-The `/agents` slash command provides a management interface for agent configurations within Claude Code. It reads current application state, enumerates registered agents filtered by status and origin type, and renders a JSX component listing those agents with their relevant metadata. The command integrates with the feature-flag system and platform-detection logic to conditionally display or suppress entries.
+The `/agents` command is a local JSX-rendered slash command that provides an interactive management interface for agent configurations within Claude Code. It reads current application state, assembles a structured view of active and available agents (including their permission contexts, connection types, and run states), and renders the result as a React element in the CLI. The command is the primary surface for inspecting and manipulating the agent registry at runtime.
 
 ---
 
@@ -30,254 +28,414 @@ The `/agents` slash command provides a management interface for agent configurat
 
 | Field | Value |
 |---|---|
-| type | `local-jsx` |
-| name | `agents` |
-| description | `Manage agent configurations` |
-| module_id | `Y3q` |
+| `type` | `local-jsx` |
+| `name` | `agents` |
+| `description` | `Manage agent configurations` |
+| `loc_byte` | `11270655` |
+| `loc_byte_end` | `11270780` |
+| `loc_line` | `7076` |
+| `module_id` | `l3q` |
+| `load_inline` | `true` |
+| `arbor_handler.name` | `nD7` |
+| `arbor_handler.fqn` | `claude-2.1.133::nD7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.132 bundle.js:+11253411
+Analysis basis: CC v2.1.133 bundle.js:+11270655–+11270780
+
+> **Handler note**: The handler was resolved via `module_id` → `l3q` → exported symbol `nD7`. The `load_inline: true` field confirms the module is loaded synchronously via an inline `Promise.resolve({call: nD7})` shape. The Arbor resolver (`resolution_path: "module_id"`) is authoritative; `nD7` is treated as the true entry point throughout this spec.
 
 ---
 
 ## Input Branching
 
-The top-level handler (`commandHandler`) first resolves application state, then delegates to the agent-list renderer. The renderer applies several sequential filters before building the display list.
+The command's call graph contains more than three distinct branching paths (agent type filtering, permission-set evaluation, connection-type selection, feature-flag gating, and background-session state checking). A Mermaid flowchart is therefore used.
 
 ```mermaid
 flowchart TD
-    A([/agents invoked]) --> B[Read appState via getAppState]
-    B --> C[Call agentListRenderer with appState]
-    C --> D[Build raw agent list via rawListBuilder]
-    D --> E[Filter: remove blocked-status agents]
-    E --> F{Feature flag: agents enabled?}
-    F -- disabled --> G[Return empty / suppressed list]
-    F -- enabled --> H[Filter: remove agents in tbH exclusion set]
-    H --> I[Map agents: resolve enabled state via isEnabled check]
-    I --> J{Platform check}
-    J -- windows --> K[Apply windows-specific path normalization]
-    J -- other --> L[Continue with standard formatting]
-    K --> M[Format name column: padEnd 40 chars, separator two-spaces]
-    L --> M
-    M --> N{Origin type check}
-    N -- cli --> O[Tag as CLI-origin]
-    N -- remote --> P[Tag as remote-origin]
-    N -- sdk-ts / sdk-py / sdk-cli --> Q[Tag as SDK-origin]
-    N -- local-agent --> R[Tag as local-agent-origin]
-    O & P & Q & R --> S[Assemble JSX via createElement]
-    S --> T([Render agent list to terminal])
+    A(["/agents invoked"]) --> B["Read app state\n(getAppState)"]
+    B --> C["Build agent display list\n(renderAgentUI)"]
+    C --> D{"For each agent entry:\ncheck connection type"}
+    D -->|cli| E["Tag as CLI agent\n(tengu_slate_harbor)"]
+    D -->|remote| F["Tag as remote agent"]
+    D -->|sdk-ts / sdk-py / sdk-cli| G["Tag as SDK-sourced agent"]
+    D -->|local-agent| H["Tag as local agent"]
+    C --> I["Collect active permissions\n(permissionSetBuilder)"]
+    I --> J{"Permission source?"}
+    J -->|b5H registry hit| K["Resolve from cached set"]
+    J -->|Ut8 miss| L["Register in Ut8, emit pt8/ct8"]
+    C --> M["Filter agent list\n(agentFilter)"]
+    M --> N{"Blocked status?"}
+    N -->|'blocked' literal| O["Exclude from display"]
+    N -->|pass| P["Include in list"]
+    P --> Q{"Feature flag:\nQ9.isEnabled"}
+    Q -->|enabled| R["Apply extended agent set\n(WxH membership check)"]
+    Q -->|disabled| S["Use base agent set"]
+    R --> T{"O.isEnabled check\n(background session gate)"}
+    S --> T
+    T -->|'stopped' / 'background session'| U["Mark session stopped"]
+    T -->|running| V["Include in active display"]
+    U --> W{"Vertex AI context?\n(Q_ check)"}
+    V --> W
+    W -->|yes| X["Suppress ToolSearch beta header\n(emit warning literal)"]
+    W -->|no| Y["Normal tool configuration"]
+    X --> Z["Emit tengu_cobalt_ridge\n(oxHandler)"]
+    Y --> Z
+    Z --> AA["Emit tengu_amber_flint\n(i1 / --agent-teams gate)"]
+    AA --> AB["Write daemon.status.json\n(Sj6 path builder)"]
+    AB --> AC["Render JSX element\n(ARA.createElement)"]
+    AC --> AD([Return rendered component])
 ```
-
-Analysis basis: CC v2.1.132 bundle.js:+11253218, +11253258, +11253271, +8877018, +8877057, +8877089, +8877113, +8877125, +8877212, +8877230, +8877257, +8877269, +8877280, +8877356, +8877371, +8877399, +8877410, +8877452, +8877496
 
 ---
 
 ## Behavioral Spec
 
-### Top-Level Command Handler
+### 1. Handler Entry — `agentsCommandHandler` (`nD7`)
+
+Analysis basis: CC v2.1.133 bundle.js:+11270462
 
 ```
-function commandHandler(context):
-    appState = getAppState(context)           // reads global app state
-    result   = agentListRenderer(appState)   // delegates all logic
-    return createElement(result)             // wraps output as JSX element
+async function agentsCommandHandler(context):
+    appState = getAppState(context)              // A.getAppState @ +11270462
+    uiElement = renderAgentUI(appState)          // GT @ +11270502
+    return createElement(uiElement)             // ARA.createElement @ +11270515
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11253218, +11253258, +11253271
+The handler is an `AsyncFunction` (Arbor kind: `AsyncFunction`). It reads the global application state and delegates the heavy lifting to the agent UI renderer (`GT`) before wrapping the result in a React element for display.
 
----
+### 2. Agent UI Renderer — `renderAgentUI` (`GT`)
 
-### Boolean Coercion Helper
-
-The boolean coercion helper converts loose string/number truthy representations into strict booleans. Recognized truthy literals:
-
-- Number `1` (Analysis basis: CC v2.1.132 bundle.js:+25147)
-- String `"yes"` (Analysis basis: CC v2.1.132 bundle.js:+25237)
-- String `"on"` (Analysis basis: CC v2.1.132 bundle.js:+25243)
+Analysis basis: CC v2.1.133 bundle.js:+8887274–+8887708
 
 ```
-function coerceToBool(value):
-    normalized = String(value).toLowerCase()
-    if normalized in ["1", "yes", "on"]:
-        return true
-    return false
+function renderAgentUI(appState):
+    // Step 1: stringify/normalize agent identifiers
+    agentKeys = normalizeAgentKeys(appState)     // kH @ +8887274
+
+    // Step 2: build connection-type tagged entries
+    agentEntries = buildAgentEntries(appState)   // DX @ +8887313
+    // connection type literals encountered: "cli", "remote",
+    // "sdk-ts", "sdk-py", "sdk-cli", "local-agent"
+
+    // Step 3: filter by blocked status
+    filteredAgents = filterAgents(agentEntries)  // dt @ +8887345
+    // removes any entry whose status equals "blocked" (+8886703)
+
+    // Step 4: attach permission contexts
+    agentsWithPerms = attachPermissions(filteredAgents) // eGA @ +8887369
+
+    // Step 5: build key-value layout entries
+    layoutEntries = buildLayoutEntries(appState) // KL @ +8887381
+
+    // Step 6: compose full agent panel
+    panel = composeAgentPanel(                   // nt @ +8887468
+        layoutEntries,
+        filteredAgents,
+        agentsWithPerms
+    )
+
+    // Step 7: check membership in extended set
+    if extendedSetRegistry.has(panel):           // _.has @ +8887486
+        panel = applyExtendedLayout(panel)
+
+    // Step 8: feature flag gate (primary)
+    if featureFlagPrimary.isEnabled():           // Q9.isEnabled @ +8887536
+        filteredAgents = filteredAgents.filter(  // L.filter @ +8887612
+            entry => !blockedRegistry.has(entry) // WxH.has @ +8887627
+        )
+        agentMap = filteredAgents.map(...)       // L.map @ +8887655
+
+    // Step 9: feature flag gate (secondary — background session)
+    if featureFlagSecondary.isEnabled():         // O.isEnabled @ +8887666
+        // marks sessions with status "stopped" as "background session"
+        // literals: "stopped" @ +14191200, "background session" @ +14191243
+
+    // Step 10: connection-type inclusion check
+    if connectionTypes.includes(entry.type):     // $.includes @ +8887752
+        applyConnectionPolicy(entry)
+
+    // Step 11: apply Tz normalization
+    normalizeAgentStrings(panel)                 // Tz @ +8887708
+
+    return panel
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+25188, +25237, +25243, +25147
+### 3. Agent Entry Builder — `buildAgentEntries` (`DX`)
 
----
-
-### Agent Origin Classifier
-
-Each agent entry carries an origin-type tag. The classifier maps the raw origin field to one of five canonical values:
-
-| Raw origin value | Canonical tag |
-|---|---|
-| `"cli"` | CLI-origin |
-| `"remote"` | Remote-origin |
-| `"sdk-ts"` | SDK (TypeScript) origin |
-| `"sdk-py"` | SDK (Python) origin |
-| `"sdk-cli"` | SDK (CLI wrapper) origin |
-| `"local-agent"` | Local-agent origin |
+Analysis basis: CC v2.1.133 bundle.js:+3140362–+3140541
 
 ```
-function classifyOrigin(agent):
-    origin = agent.originType
-    if origin == "cli":        return "CLI-origin"
-    if origin == "remote":     return "remote-origin"
-    if origin == "sdk-ts":     return "SDK-TS-origin"
-    if origin == "sdk-py":     return "SDK-PY-origin"
-    if origin == "sdk-cli":    return "SDK-CLI-origin"
-    if origin == "local-agent":return "local-agent-origin"
-    return "unknown-origin"
+function buildAgentEntries(appState):
+    // Normalize agent name via string coercion
+    agentName = coerceToString(appState.agentId)   // ah @ +3140362
+    agentKey  = buildKey(agentName)                // Zq @ +3140379
+    normalized = normalizeKey(agentKey)            // kH @ +3140424
+
+    // Determine connection type
+    // Checks literal strings in order:
+    //   "cli"    (+3140514)
+    //   "remote" (+3140525)
+    // Emits telemetry on cli match:
+    //   tengu_slate_harbor (+3140544)
+
+    // SDK type checks (further in callGraph):
+    //   "sdk-ts"     (+3140771)
+    //   "sdk-py"     (+3140785)
+    //   "sdk-cli"    (+3140799)
+    //   "local-agent" (+3140814)
+
+    entry = buildPermissionEntry(normalized)       // J6 @ +3140541
+    return entry
 ```
 
-Telemetry event `tengu_slate_harbor` is emitted during origin classification or the surrounding agent-registration routine.
+### 4. Permission-Set Builder — `permissionSetBuilder` (`J6`)
 
-Analysis basis: CC v2.1.132 bundle.js:+3134295, +3134306, +3134552, +3134566, +3134580, +3134595, +3134325
-
----
-
-### Raw Agent List Builder
-
-The raw list builder reads all registered agent handles from application state and applies an initial status filter.
+Analysis basis: CC v2.1.133 bundle.js:+3091299–+3091462
 
 ```
-function rawListBuilder(agentRegistry):
-    allAgents = agentRegistry.filter(entry => entry.status != "blocked")
-    return allAgents
+function permissionSetBuilder(agentEntry):
+    // Resolve base permission descriptor
+    basePerms  = resolveBasePermissions(agentEntry)   // Bq6 @ +3091299
+    grantedSet = resolveGrantedSet(agentEntry)        // gq6 @ +3091336
+
+    // Check deny list
+    accessPolicy = checkAccessPolicy(agentEntry)      // Po @ +3091371
+    // Po internally uses kH (string normalization) and jo (policy lookup)
+
+    // Has the agent been seen before?
+    if knownAgentRegistry.has(agentEntry.id):         // b5H.has @ +3091388
+        return cachedPermissions(agentEntry.id)       // _d6 @ +3091399
+
+    // Register new agent
+    knownAgentRegistry.add(agentEntry.id)             // pq6.add @ +3091411
+
+    // Check connection-level registry
+    if connectionRegistry.has(agentEntry.conn):       // cU.has @ +3091425
+        cachedConn = connectionRegistry.get(...)      // cU.get @ +3091442
+
+    // Build runtime permission record
+    permRecord = buildRuntimeRecord(agentEntry)       // R6 @ +3091462
+    return permRecord
 ```
 
-Blocked-status agents are unconditionally excluded from all downstream processing.
+### 5. Cached-Permission Resolver — `cachedPermissionResolver` (`_d6`)
 
-Analysis basis: CC v2.1.132 bundle.js:+8876386, +8876401, +8876447
-
----
-
-### Feature-Flag Gate
-
-After the raw list is built, the feature-flag gate checks whether the agents feature is enabled for the current session.
+Analysis basis: CC v2.1.133 bundle.js:+3089099–+3089224
 
 ```
-function featureFlagGate(rawList, featureFlags):
-    if not featureFlags.isEnabled("agents"):
-        return []
-    return rawList
+function cachedPermissionResolver(agentId):
+    if seenSet.has(agentId):                    // Ut8.has @ +3089099
+        cached = knownRegistry.get(agentId)     // b5H.get @ +3089123
+        return cached
+
+    // First-time registration
+    seenSet.add(agentId)                        // Ut8.add @ +3089139
+    emitRegistrationEvent(agentId)              // pt8 @ +3089150
+    emitCompletionEvent(agentId)                // ct8 @ +3089224
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+8877280
+### 6. Runtime Permission Record Builder — `runtimeRecordBuilder` (`R6`)
 
----
-
-### Exclusion-Set Filter
-
-A secondary exclusion set (`tbH`) is applied after the feature-flag gate. Agents whose identifiers appear in this set are removed.
+Analysis basis: CC v2.1.133 bundle.js:+3110101–+3110243
 
 ```
-function exclusionSetFilter(list, exclusionSet):
-    return list.filter(agent => not exclusionSet.has(agent.id))
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+8877371
-
----
-
-### Enabled-State Resolver
-
-Each surviving agent is mapped through an `isEnabled` check. Agents whose `isEnabled` check returns `false` (which may reference the `"stopped"` status or `"background session"` classification) are marked as inactive but **are still included in the rendered list** — they are not filtered out, only visually distinguished.
-
-```
-function resolveEnabledState(agentList, sessionFlags):
-    return agentList.map(agent => {
-        active = sessionFlags.isEnabled(agent)
-        // "stopped" state and "background session" type inform this check
-        return { ...agent, active: active }
-    })
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+8877399, +8877410, +14163882, +14163925, +14163920
-
----
-
-### Platform-Aware Name Formatter
-
-Agent names are padded to a fixed column width before display. On Windows the path separator handling differs.
-
-- Column width: **40 characters** (Analysis basis: CC v2.1.132 bundle.js:+14154022)
-- Column separator: two-space string `"  "` (Analysis basis: CC v2.1.132 bundle.js:+14152051)
-- Platform branch triggers on value `"windows"` (Analysis basis: CC v2.1.132 bundle.js:+4258861)
-
-```
-function formatAgentName(agent, platform):
-    name = agent.displayName
-    if platform == "windows":
-        name = normalizeWindowsPaths(name)   // s6 + J6H helpers
-    paddedName = name.padEnd(40)
-    return paddedName + "  "
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+14152017, +14152030, +14154022, +14152051, +4258854, +4258887, +4258861
-
----
-
-### Agent Row Renderer
-
-The row renderer assembles the per-agent display record and delegates to the shared JSX row component.
-
-```
-function renderAgentRow(agent, platform):
-    formattedName  = formatAgentName(agent, platform)
-    originTag      = classifyOrigin(agent)
-    enabledLabel   = agent.active ? "enabled" : "stopped"
-    rowProps = {
-        name:    formattedName,
-        origin:  originTag,
-        status:  enabledLabel,
-        context: agent.contextHandle     // cx field
+function runtimeRecordBuilder(agentEntry):
+    formatted  = formatEntry(agentEntry)        // F6 @ +3110101
+    tagged     = tagEntry(formatted)            // t2 @ +3110115
+    annotated  = annotateEntry(tagged)          // He8 @ +3110134
+    merged     = mergeMetadata(annotated)       // m5H @ +3110138
+    timestamp  = Date.now()                     // Date.now @ +3110190
+    record = {
+        ...merged,
+        createdAt: timestamp,
+        extra: buildExtraPayload(merged)        // u2K @ +3110243
     }
-    return jsxRowComponent(rowProps)    // MZH + nA helpers
+    return record
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+8876945, +8876969, +8876975
+### 7. Agent Filter — `agentFilter` (`dt`)
 
----
-
-### Agent Detail Panel (Bt)
-
-The detail panel is the richer per-agent sub-component invoked when a specific agent has sufficient context. It composes multiple sub-helpers including the exclusion-set filter (`_L`), a metadata resolver (`MD`), input validators (`Ij`), additional boolean coercion (`yH`), time/duration display (`tdH`), a capability badge renderer (`FB4`), list utilities (`l1`, `UB4`, `BB4`), the row renderer (`JGA`), an overflow handler (`OU9`), and a teardown routine (`tu`).
+Analysis basis: CC v2.1.133 bundle.js:+8886642–+8886657
 
 ```
-function agentDetailPanel(agent, appState):
-    filteredAgent = exclusionSetFilter([agent], exclusionSet)[0]
-    if filteredAgent is undefined:
-        return null
-    meta       = resolveMetadata(filteredAgent)      // MD
-    validated  = validateInputs(filteredAgent)        // Ij
-    coerced    = coerceToBool(filteredAgent.flag)     // yH
-    duration   = formatDuration(filteredAgent)        // tdH
-    badges     = renderCapabilityBadges(filteredAgent)// FB4
-    items      = buildListItems(filteredAgent)        // l1, UB4, BB4
-    rows       = renderAgentRow(filteredAgent, platform) // JGA
-    overflow   = handleOverflow(items)               // OU9
-    onTeardown = registerTeardown(filteredAgent)      // tu
-    return assembleDetailView(meta, validated, coerced,
-                              duration, badges, items,
-                              rows, overflow, onTeardown)
+function agentFilter(agentList):
+    // Remove entries whose connection type matches deny rules
+    allowed = agentList.filter(                  // H.filter @ +8886642
+        entry => !isDenied(entry)                // D58 @ +8886657
+    )
+    // isDenied checks literal "deny" (+9650429)
+    // and "cliArg" source (+9650999)
+    return allowed
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+8875784, +8875800, +8875904, +8875981, +8876052, +8876071, +8876112, +8876118, +8876124, +8876275, +8876316, +8876343
+`D58` (deny evaluator) calls `QzH` (flat-maps the global rule set via `rIA.flatMap` at +9650352) and `oIA` (which further checks `JS8`, `T66`, `$k` sub-classifiers at +9650675–+9650778). A third path `Di9` handles edge cases at +9651074.
 
----
+### 8. Permission-Context Attacher — `permissionContextAttacher` (`eGA`)
 
-### String Inclusion Gate
-
-A final string-inclusion check determines whether a given agent identifier appears in an allow-list (`$`), which itself is built via the `mzq` helper.
+Analysis basis: CC v2.1.133 bundle.js:+8887201–+8887231
 
 ```
-function stringInclusionGate(agentId, allowList):
-    return allowList.includes(agentId)
+function permissionContextAttacher(agentList):
+    for entry in agentList:
+        ctx = buildPermissionContext(entry)      // ox @ +8887201
+        // ox checks "windows" platform literal (+4266747)
+        // ox emits tengu_cobalt_ridge (+4266841)
+
+        hook = attachHook(ctx)                   // jZH @ +8887225
+        loopState = initLoopState()              // A_ @ +8887231
+    return agentList
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+8877496, +14141983
+`ox` (platform-context builder) internally calls `a6` (platform lookup at +4266740), `kH` (string normalize at +4266764), `Zq` (key builder at +4266773), `v6H` (variant handler at +4266809), and `J6` (permission-set builder at +4266838).
+
+`A_` (loop state initializer) calls module bootstrap helpers `OwH`, `P28`, `S06.call`, `R06.bind`, `Llq`, and stores state via `SgA.set`.
+
+### 9. Agent Panel Composer — `agentPanelComposer` (`nt`)
+
+Analysis basis: CC v2.1.133 bundle.js:+8886040–+8886599
+
+```
+function agentPanelComposer(layoutEntries, filteredAgents, agentsWithPerms):
+    // Layout key-value rows
+    kvRows = buildLayoutRows(layoutEntries)          // KL @ +8886040
+
+    // Normalize display strings
+    displayStr = normalizeDisplayString(kvRows)      // Tz @ +8886056
+
+    // Resolve display variant
+    variant = resolveDisplayVariant(kvRows)          // vX @ +8886160
+    // vX calls kH (normalize) and NA (variant accessor)
+
+    // String normalization pass
+    normalized = normalizeStrings(filteredAgents)    // kH @ +8886237
+
+    // Compute column width (constant: 40, +14181334)
+    colWidth = computeColumnWidth(normalized)        // GcH @ +8886308
+
+    // Render expanded panel state
+    expandedPanel = renderExpandedState(colWidth)    // Og4 @ +8886327
+    // Og4 calls TU9 (expansion helper) and A_ (loop state)
+
+    // Agent-teams feature gate
+    if agentTeamsFlag.enabled:                       // "--agent-teams" @ +3064954
+        teamEntry = buildTeamEntry(filteredAgents)   // i1 @ +8886368
+        // i1 emits tengu_amber_flint @ +3065066
+
+    // Render "more" panel state
+    morePanel = renderMoreState(colWidth)            // Mg4 @ +8886374
+    // Mg4 calls AU9 and A_
+
+    // Render collapsed/summary panel state
+    summaryPanel = renderSummaryState(colWidth)      // $g4 @ +8886380
+    // $g4 calls MU9 and A_
+
+    // Attach permission context
+    withPerms = attachPermissionContext(summaryPanel) // eGA @ +8886531
+
+    // Apply display mode selector
+    displayMode = selectDisplayMode(withPerms)        // gU9 @ +8886572
+
+    // Apply formatting pipeline
+    formatted = applyFormattingPipeline(displayMode)  // fm @ +8886599
+
+    return formatted
+```
+
+### 10. Formatting Pipeline — `formattingPipeline` (`fm`)
+
+Analysis basis: CC v2.1.133 bundle.js:+9372816–+9373030
+
+```
+function formattingPipeline(displayMode):
+    // Apply primary display adapter
+    // IZA checks "standard" (+9372338), "tst" (+9372417),
+    // numeric limit 100 (+9372430), "tst-auto" (+9372467)
+    adapted = applyDisplayAdapter(displayMode)    // IZA @ +9372816
+
+    // Apply key formatter
+    keyFormatted = formatKeys(adapted)            // k @ +9372856
+    // k normalizes: trims, uppercases, checks debug mode (+162555),
+    // applies dN and LkH transforms, evaluates vtq condition
+
+    // Apply provider/platform filter
+    // Checks: "bedrock" (+1980750), "foundry" (+1980800),
+    //         "anthropicAws" (+1980856), "mantle" (+1980910),
+    //         "vertex" (+1980958), "firstParty" (+1980967)
+    // Also checks api.anthropic.com endpoint (+1981585)
+    providerFiltered = applyProviderFilter(keyFormatted) // Q_ @ +9373008
+
+    // Apply output renderer
+    rendered = applyOutputRenderer(providerFiltered)     // o3 @ +9373030
+
+    // Note: Vertex AI path suppresses ToolSearch beta header
+    // Warning literal: "[ToolSearch:optimistic] disabled..." (+9373352)
+
+    return rendered
+```
+
+### 11. Daemon Status Writer — `daemonStatusWriter` (`Sj6` / `XDq` chain)
+
+Analysis basis: CC v2.1.133 bundle.js:+11407084–+11407140; +11406973–+11406987
+
+```
+function writeDaemonStatus(sessionData):
+    // Build status file path
+    statusPath = path.join(..., "daemon.status.json")  // Sj6/JDq.join @ +11406973
+    // filename literal: "daemon.status.json" @ +11406987
+
+    // Generate random write token (4 bytes, hex encoding)
+    token = randomBytes(4).toString("hex")             // iY/Xa8.randomBytes @ +2867005
+
+    // Atomic write: temp file → rename
+    await fs.writeFile(tempPath, payload, "utf8")      // Lo.writeFile @ +2867052
+    await fs.rename(tempPath, statusPath)              // Lo.rename @ +2867105
+
+    // Track open handles
+    openHandles.add(handle)                            // o41.has @ +2867156
+    // Copy if needed:
+    await fs.copyFile(src, dst)                        // Lo.copyFile @ +2867178
+    // Cleanup:
+    await fs.unlink(tempPath)                          // Lo.unlink @ +2867232
+
+    // Serialize state
+    serialized = JSON.stringify(sessionData)           // SH/JSON.stringify @ +143548
+```
+
+The status file path is constructed by joining a base directory constant with the literal filename `"daemon.status.json"` (bundle.js:+11406987). The write uses an atomic rename pattern to avoid partial reads.
+
+### 12. Agent-Teams Gate — `agentTeamsGate` (`i1`)
+
+Analysis basis: CC v2.1.133 bundle.js:+3064954–+3065066
+
+```
+function agentTeamsGate(agentList):
+    // Check for --agent-teams CLI argument
+    if cliArgs.includes("--agent-teams"):          // literal @ +3064954
+        teamView = buildTeamView(agentList)        // lPK @ +3065044
+        entries  = buildPermissionEntries(teamView) // J6 @ +3065063
+        // emits tengu_amber_flint telemetry @ +3065066
+        return entries
+    return null
+```
+
+The `--agent-teams` flag (bundle.js:+3064954) gates an additional panel section that groups agents into team views.
+
+### 13. Boolean/Flag Normalizer — `flagNormalizer` (`kH`, `Zq`)
+
+Analysis basis: CC v2.1.133 bundle.js:+25147–+25393
+
+```
+function flagNormalizer(value):
+    // Truthy literals: 1 (+25147), "yes" (+25237), "on" (+25243)
+    // Falsy literals:  "no" (+25388), "off" (+25393)
+    coerced = String(value)                       // kH → String @ +25188
+    strKey  = buildStringKey(coerced)             // Zq → String @ +25338
+    return evaluate(strKey)
+```
+
+This utility is called pervasively across the call graph wherever agent flags and permission booleans are normalized.
 
 ---
 
@@ -285,14 +443,17 @@ Analysis basis: CC v2.1.132 bundle.js:+8877496, +14141983
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_slate_harbor` — emitted during origin classification / agent registration (bundle.js:+3134325) |
-| appState reads | `getAppState` called once at command entry (bundle.js:+11253218) |
-| Hook registration | Teardown hook registered per agent via `tu` helper (bundle.js:+8876343) |
-| JSX rendering | Output assembled via `wSA.createElement` (bundle.js:+11253271) |
-| Feature flags | `d9.isEnabled` (agents gate) and `O.isEnabled` (per-agent enabled state) queried at render time (bundle.js:+8877280, +8877410) |
-| Exclusion set | `tbH` Set consulted to suppress specific agent IDs (bundle.js:+8877371) |
-| Platform detection | `"windows"` branch alters name formatting (bundle.js:+4258861) |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| **Telemetry** | `tengu_slate_harbor` (emitted on CLI-type agent registration, +3140544); `tengu_cobalt_ridge` (emitted during platform-context attachment in `ox`, +4266841); `tengu_amber_flint` (emitted when `--agent-teams` gate fires, +3065066) |
+| **App state read** | `A.getAppState` called at handler entry (+11270462); reads the full application state object |
+| **Permission registries** | `Ut8` (seen-agent set, `.has`/`.add`); `b5H` (cached permission map, `.has`/`.get`); `pq6` (new-agent registration set, `.add`); `cU` (connection-level registry, `.has`/`.get`) |
+| **Agent filter registries** | `WxH` (blocked-agent set, `.has` at +8887627); `_` (extended-set registry, `.has` at +8887486) |
+| **Daemon status file** | Written to `<basedir>/daemon.status.json` (+11406987) via atomic rename; 4-byte hex token generated per write (+2867005) |
+| **Hook registration** | `A_` (loop state initializer) registers via `SgA.set` at +1692; `R06.bind` at +1630 sets a bound callback |
+| **File system** | `Lo.writeFile`, `Lo.rename`, `Lo.copyFile`, `Lo.unlink` (all via `iY`); `Ydq.unlinkSync` (via `q` at +14137065) for synchronous cleanup |
+| **Timers** | `setTimeout` used in `H` (background jitter, with `Math.random` multiplied by constant `2`, +12285767) |
+| **JSX render** | `ARA.createElement` called at +11270515 to wrap the composed panel as a React element |
+| **Sound** | None detected in depth-2 traversal |
+| **Vertex AI suppression** | When Vertex AI provider is detected, the ToolSearch beta header is suppressed with a warning emitted as a string literal (+9373352) |
 
 ---
 
@@ -300,18 +461,25 @@ Analysis basis: CC v2.1.132 bundle.js:+8877496, +14141983
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis — command registered as `local-jsx`, origin classifier supports six origin types, telemetry event `tengu_slate_harbor` confirmed |
+| v2.1.133 | Initial analysis; `nD7` handler identified via Arbor `module_id` resolution; three telemetry events confirmed; `--agent-teams` flag gate documented |
 
 ---
 
 ## Common Mistakes
 
-1. **Assuming blocked agents are shown.** Agents with status `"blocked"` are removed before any other processing; they will never appear in the rendered list regardless of feature flags.
-2. **Expecting the command to accept sub-arguments.** The registration has no `args` or `subCommands` field; `/agents` is invoked bare and produces a read-only list view.
-3. **Treating `"stopped"` as filtered-out.** Agents in a stopped or background-session state are still listed; they are marked inactive visually but not excluded.
-4. **Ignoring the exclusion set.** Even if an agent passes the feature-flag gate, it may still be suppressed by the `tbH` exclusion set, which operates independently of status and flags.
-5. **Column-width assumptions on Windows.** The name column is padded to exactly 40 characters, but Windows paths are normalized before padding; tools that parse raw output should account for both code paths.
-6. **Conflating origin types.** The six origin values (`cli`, `remote`, `sdk-ts`, `sdk-py`, `sdk-cli`, `local-agent`) are distinct and not interchangeable; filtering or matching on origin requires exact string comparison.
+1. **Assuming `/agents` is read-only**: The command writes `daemon.status.json` to disk as a side effect on every invocation. Scripts that call `/agents` in a loop will produce repeated file-system writes.
+
+2. **Ignoring the `--agent-teams` flag**: The additional team-grouping panel section is gated behind a CLI argument (`--agent-teams`). Without this flag, team-view entries are silently omitted and there is no error message.
+
+3. **Expecting synchronous output for remote agents**: Entries tagged `"remote"` go through the full permission-set builder pipeline including async file I/O (atomic rename pattern). Treat the command as asynchronous end-to-end.
+
+4. **Overlooking the blocked-agent filter**: Agents with status `"blocked"` are removed from the display list before rendering. A missing agent in the output does not necessarily mean it is unconfigured — it may be blocked by `WxH`.
+
+5. **Confusing `"stopped"` with removal**: When the secondary feature flag (`O.isEnabled`) is active, sessions with status `"stopped"` are relabelled `"background session"` rather than removed. These entries remain visible in the panel.
+
+6. **Vertex AI and ToolSearch**: On Vertex AI deployments, the ToolSearch beta header is suppressed automatically. Setting `ENABLE_TOOL_SEARCH=true` overrides this suppression (as noted in the warning literal at +9373352).
+
+7. **Flag normalization edge cases**: Boolean flags are normalised through `flagNormalizer`. The strings `"yes"` and `"on"` are treated as truthy; `"no"` and `"off"` are treated as falsy. Passing raw `true`/`false` JavaScript booleans also works because `String()` coercion is applied first.
 
 ---
 
@@ -321,18 +489,106 @@ Analysis basis: CC v2.1.132 bundle.js:+8877496, +14141983
 
 | Identifier | Role |
 |---|---|
-| `Wz7` | Top-level command handler (entry point for `/agents`) |
-| `A` | Application state container (source of `getAppState`) |
-| `NT` | Agent list renderer (orchestrates all filtering and mapping) |
-| `yH` | Boolean coercion helper (normalizes `"yes"` / `"on"` / `1` to bool) |
-| `zj` | Agent origin classifier (maps raw origin string to canonical tag) |
-| `mt` | Raw agent list builder (initial status filter, removes `"blocked"`) |
-| `JGA` | JSX agent row renderer (assembles per-row display component) |
-| `_L` | Platform-aware name formatter / exclusion-set filter composite |
-| `Bt` | Agent detail panel component (rich per-agent sub-view) |
-| `_` | Identifier lookup helper (uses `toLowerCase` for case-insensitive key matching) |
-| `L` | Agent display list builder (applies `map` and `padEnd` for column formatting) |
-| `eL` | Supplementary list utility called after feature-flag gate |
-| `O` | Per-agent enabled-state resolver (wraps `isEnabled` and `Q8` session check) |
-| `MD` | Agent metadata resolver (used in both list and detail panel) |
-| `$` | Allow-list inclusion checker (backed by `mzq` allow-list builder) |
+| `nD7` | `agentsCommandHandler` — async entry-point for the `/agents` command (Arbor-resolved handler) |
+| `GT` | `renderAgentUI` — top-level agent UI renderer; orchestrates all sub-steps |
+| `kH` | `normalizeAgentKey` / `flagNormalizer (string path)` — pervasive string normalization utility |
+| `DX` | `buildAgentEntries` — constructs connection-type-tagged agent entry objects |
+| `ah` | `coerceAgentName` — converts raw agent identifier to a normalized string |
+| `Zq` | `buildStringKey` — secondary string-key builder used alongside `kH` |
+| `J6` | `permissionSetBuilder` — assembles the permission descriptor for a given agent entry |
+| `Bq6` | `resolveBasePermissions` — extracts base permission descriptor |
+| `gq6` | `resolveGrantedSet` — extracts granted permission set |
+| `Po` | `checkAccessPolicy` — evaluates deny/allow policy for an agent |
+| `jo` | `policyLookup` — inner lookup used by `Po` |
+| `_d6` | `cachedPermissionResolver` — returns cached permissions or registers on first sight |
+| `R6` | `runtimeRecordBuilder` — constructs the full runtime permission record with timestamp |
+| `F6` | `formatEntry` — first formatting pass inside `runtimeRecordBuilder` |
+| `t2` | `tagEntry` — adds type tags to a formatted entry |
+| `He8` | `annotateEntry` — attaches annotations to a tagged entry |
+| `m5H` | `mergeMetadata` — merges metadata fields into a single record |
+| `u2K` | `buildExtraPayload` — assembles supplementary payload fields |
+| `dt` | `agentFilter` — filters agent list by deny rules |
+| `H` | `backgroundJitterTimer` — applies random `setTimeout` jitter (constant `2` multiplier) |
+| `D58` | `denyEvaluator` — top-level deny-rule evaluator |
+| `QzH` | `ruleSetFlattener` — flat-maps the global rule set |
+| `oIA` | `subClassifierDispatch` — dispatches to `JS8`, `T66`, `$k` sub-classifiers |
+| `Di9` | `denyEdgeCaseHandler` — handles edge cases in deny evaluation |
+| `JS8` | `subClassifierA` — one of three deny sub-classifiers |
+| `T66` | `subClassifierB` — one of three deny sub-classifiers |
+| `$k` | `subClassifierC` — one of three deny sub-classifiers |
+| `eGA` | `permissionContextAttacher` — attaches platform permission context to each agent entry |
+| `ox` | `platformContextBuilder` — builds platform-aware permission context; emits `tengu_cobalt_ridge` |
+| `a6` | `platformLookup` — resolves platform identifier (e.g. `"windows"`) |
+| `v6H` | `platformVariantHandler` — handles platform-specific variant logic |
+| `jZH` | `hookAttacher` — attaches lifecycle hook to permission context |
+| `A_` | `loopStateInitializer` — initializes loop/iteration state; stores via `SgA.set` |
+| `R06` | `boundCallback` — callback bound during loop state initialization |
+| `KL` | `buildLayoutEntries` — constructs key-value layout rows for the agent panel |
+| `nt` | `agentPanelComposer` — assembles the full agent panel from sub-components |
+| `Tz` | `normalizeDisplayString` — normalizes display strings inside the panel |
+| `vX` | `resolveDisplayVariant` — resolves display variant from layout rows |
+| `NA` | `variantAccessor` — accesses the specific display variant value |
+| `GcH` | `columnWidthComputer` — computes column width (constant: 40) |
+| `Og4` | `renderExpandedState` — renders the expanded panel state |
+| `TU9` | `expansionHelper` — assists in rendering expanded state |
+| `i1` | `agentTeamsGate` — gates `--agent-teams` panel; emits `tengu_amber_flint` |
+| `lPK` | `buildTeamView` — builds the team-grouping view |
+| `Mg4` | `renderMoreState` — renders the "more" (paginated) panel state |
+| `AU9` | `moreStateHelper` — assists in rendering the "more" state |
+| `$g4` | `renderSummaryState` — renders the collapsed/summary panel state |
+| `MU9` | `summaryStateHelper` — assists in rendering summary state |
+| `fm` | `formattingPipeline` — applies the full display formatting pipeline |
+| `IZA` | `displayAdapter` — adapts display mode; checks `"standard"`, `"tst"`, `"tst-auto"` |
+| `ld9` | `displayAdapterHelper` — inner helper used by `IZA` |
+| `_r4` | `displayAdapterSecondary` — secondary helper used by `IZA` |
+| `k` | `keyFormatter` — formats and normalizes display keys; handles `"debug"` mode |
+| `NsH` | `debugModeChecker` — checks debug mode flag |
+| `Ztq` | `keyTransformA` — first key transform step |
+| `SH` | `jsonSerializerWrapper` — wraps `JSON.stringify` |
+| `dN` | `keyTransformB` — second key transform step |
+| `LkH` | `keyTransformC` — third key transform step |
+| `vtq` | `conditionEvaluator` — evaluates a condition on the formatted key |
+| `Uf` | `trimAndUpperHelper` — assists `toUpperCase`/`trim` operations |
+| `Q_` | `providerPlatformFilter` — filters output based on provider/platform type |
+| `o3` | `outputRenderer` — final rendering step in the formatting pipeline |
+| `_` | `extendedSetRegistry` — registry of agents in the extended display set |
+| `f` | `handleManager` — manages open file/process handles |
+| `q` | `unlinkManager` — manages synchronous file unlink operations |
+| `K` | `handleTracker` — tracks open handles; uses `q.add`, `f.finally`, `q.delete` |
+| `L` | `agentDisplayList` — the working list of agent display entries (filtered, mapped) |
+| `AK` | `auxiliaryProcessor` — auxiliary processing step after feature-flag filter |
+| `O` | `backgroundSessionFlag` — feature flag for background session labelling |
+| `d8` | `backgroundSessionChecker` — checks session stopped/background status |
+| `$` | `connectionTypeList` — list of valid connection type strings for inclusion check |
+| `XDq` | `daemonStatusOrchestrator` — orchestrates daemon status write sequence |
+| `yr` | `sessionMetadataBuilder` — builds session metadata object |
+| `y7H` | `sessionMetadataHelper` — inner helper for session metadata |
+| `iY` | `atomicFileWriter` — performs atomic write via temp file + rename |
+| `Sj6` | `daemonStatusPathBuilder` — builds path to `daemon.status.json` |
+| `n8` | `baseDirectoryResolver` — resolves the base directory for daemon files |
+| `Og4` | *(see above)* |
+| `gU9` | `displayModeSelector` — selects the active display mode |
+| `o$` | `ruleSetHelper` — helper used during rule-set flat-map |
+| `pq6` | `newAgentRegistrationSet` — Set tracking newly registered agents |
+| `cU` | `connectionLevelRegistry` — Map of connection-level cached data |
+| `Ut8` | `seenAgentSet` — Set of already-seen agent IDs |
+| `b5H` | `cachedPermissionMap` — Map of cached permission descriptors |
+| `WxH` | `blockedAgentSet` — Set of blocked agent identifiers |
+| `Q9` | `primaryFeatureFlag` — primary feature flag object (`.isEnabled()`) |
+| `SgA` | `loopStateStore` — storage map for loop/iteration state |
+| `Llq` | `loopInitHelper` — helper called during loop state initialization |
+| `Xa8` | `cryptoModule` — Node.js `crypto` module wrapper (`randomBytes`) |
+| `Lo` | `fsModule` — Node.js `fs` (promises) module wrapper |
+| `Ydq` | `fsSyncModule` — Node.js `fs` sync module wrapper (`unlinkSync`) |
+| `JDq` | `pathModule` — Node.js `path` module wrapper (`join`) |
+| `o41` | `openHandleSet` — Set tracking open file handles |
+| `a41` | `copyGuardSet` — Set guarding copy operations |
+| `ARA` | `reactModule` — React (or compatible) module (`createElement`) |
+| `rIA` | `globalRuleSet` — global flat array of deny/allow rules |
+| `pt8` | `registrationEventEmitter` — emits first-registration event for new agents |
+| `ct8` | `completionEventEmitter` — emits completion event after agent registration |
+| `XDq` | *(see daemonStatusOrchestrator above)* |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

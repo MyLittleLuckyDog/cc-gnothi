@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "model"
 cc_version: "2.1.133"
-updated: "2026-05-18"
+updated: "2026-05-31"
 tags: ["model", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/model` slash command allows users to set or switch the active AI model used by Claude Code. When given a model name argument it validates the name, checks account-level availability for special configurations such as 1M-context variants, and applies the change to application state; when invoked without an argument it presents an interactive model-selection flow.
+The `/model` command allows users to switch the active AI model for the current Claude Code session. When invoked with a model name argument, it validates the requested model against the current account's allowed models and, if valid, updates the session's active model. When invoked without an argument (interactive mode), it presents an interactive model-selection picker.
 
 ---
 
@@ -29,327 +29,278 @@ The `/model` slash command allows users to set or switch the active AI model use
 
 | Field | Value |
 |---|---|
-| type | `local` |
-| name | `model` |
-| description | Set the AI model for Claude Code |
-| argumentHint | `<model>` |
-| supportsNonInteractive | `true` |
-| module\_id | `_zq` |
+| `type` | `local` |
+| `name` | `model` |
+| `description` | `Set the AI model for Claude Code` |
+| `argumentHint` | `<model>` |
+| `supportsNonInteractive` | `true` |
+| `module_id` | `_zq` |
+| `load_inline` | `true` |
+| `loc_byte` | `11367608` |
+| `loc_byte_end` | `11367782` |
+| `loc_line` | `7116` |
+| `arbor_handler.name` | `dw7` |
+| `arbor_handler.fqn` | `claude-2.1.133::dw7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.n_hits` | `0` |
 
+The registration block spans bytes `11367608`–`11367782`.
 Analysis basis: CC v2.1.133 bundle.js:+11367608
 
 ---
 
 ## Input Branching
 
-The command entry point (`commandHandler`) receives the raw user input string and immediately branches on whether a model name was provided inline.
+The command has four distinct top-level branches based on whether an argument is provided, whether the model name is in the inline alias list, and whether it resolves to a known/valid model. A Mermaid flowchart is used accordingly.
 
 ```mermaid
 flowchart TD
-    A(["/model invoked"]) --> B{Argument supplied?}
-    B -- "No argument" --> C[Launch interactive model selector]
-    B -- "Argument present" --> D["Trim whitespace from input"]
-    D --> E{Trimmed string in known model list?}
-    E -- "Not found in list" --> F[Emit tengu_model_command_inline telemetry]
-    F --> G[Call model-validation pipeline]
-    G --> H{Validation result}
-    H -- "Empty name" --> I[Return error: 'Model name cannot be empty']
-    H -- "Passes API check" --> J[Apply model to appState]
-    H -- "API rejects model" --> K[Return error: 'invalid_model']
-    H -- "Validation exception" --> L[Return error: 'validate_exception']
-    E -- "Found in list" --> M{Extended-context variant?}
-    M -- "Opus + 1M context" --> N{Account allows opus 1M?}
-    N -- "Not allowed" --> O["Error: opus_1m_unavailable\n(with docs URL)"]
-    N -- "Allowed" --> J
-    M -- "Sonnet + 1M context" --> P{Account allows sonnet 1M?}
-    P -- "Not allowed" --> Q["Error: sonnet_1m_unavailable\n(with docs URL)"]
-    P -- "Allowed" --> J
-    M -- "Standard model" --> J
-    J --> R[Display confirmation with fast-mode / billing suffix]
-    C --> S([Interactive selection complete]) --> J
+    A["/model invoked"] --> B{Argument provided?}
+    B -- No --> C[Launch interactive model picker\noz8 / wOq]
+    B -- Yes --> D["Trim whitespace from argument\ndw7 → H.trim"]
+    D --> E{Argument in inline\nalias list?\ndw7 → ov6.includes}
+    E -- Yes --> F["Emit telemetry:\ntengu_model_command_inline\ndw7 → d"]
+    F --> G["Read current appState\ndw7 → A.getAppState"]
+    E -- No --> G
+    G --> H["Resolve model via\ngetAllowedModels\ndw7 → az8"]
+    H --> I{Model in allowed\nmodels list?\ndw7 → nKH.includes}
+    I -- No --> J["Validate model via API call\n(rz8 validation path)"]
+    J --> K{API response}
+    K -- Auth error --> L["Return error:\n'Authentication failed...'"]
+    K -- Network error --> M["Return error:\n'Network error...'"]
+    K -- not_found_error --> N["Return error:\n'model: ...' not found"]
+    K -- validate_exception --> O["Return validation exception"]
+    K -- invalid_model --> P["Return invalid model error"]
+    K -- Success --> Q["Persist model to settings\nwOq path"]
+    I -- Yes --> Q
+    Q --> R["Display confirmation\nwith fast-mode/billing\nannotations if applicable"]
+    R --> S["Return result text\n(type: 'text')"]
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11360405, +11360421, +11360488, +11360508, +11360561, +11360563, +11360628
+Analysis basis: CC v2.1.133 bundle.js:+11360405, +11360421, +11360444, +11360488, +11360508, +11360561, +11360628
 
 ---
 
 ## Behavioral Spec
 
-### 1. Command Handler — Inline vs. Interactive dispatch
+### Main Handler (`dw7`)
 
 ```
-function commandHandler(rawInput, appContext):
-    trimmedInput = rawInput.trim()                     // +11360405
+async function handleModelCommand(args, context):
+    modelArg = args.trim()                          // bundle.js:+11360405
 
-    if trimmedInput is empty:
-        result = launchInteractiveSelector(appContext)
+    if modelArg in INLINE_ALIAS_LIST:               // bundle.js:+11360421
+        emit telemetry("tengu_model_command_inline") // bundle.js:+11360563
+        // inline alias path continues below
+
+    appState = context.getAppState()                // bundle.js:+11360444
+    allowedModels = getAllowedModels(appState)       // bundle.js:+11360488
+
+    if modelArg not in allowedModels:               // bundle.js:+11360508
+        // fall through to API validation path
+        result = validateModelViaApi(modelArg)      // bundle.js:+11360628
         return result
-
-    if trimmedInput in knownModelList:                 // +11360421
-        return handleKnownModelSwitch(trimmedInput, appContext)
     else:
-        emit telemetry("tengu_model_command_inline")   // +11360563
-        emit telemetry call to featureBad pathway      // +11360561
-        state = appContext.getAppState()               // +11360444
-        return runModelValidationPipeline(trimmedInput, state)
+        return persistAndConfirmModel(modelArg, appState)
 ```
 
 Analysis basis: CC v2.1.133 bundle.js:+11360405
 
 ---
 
-### 2. Interactive Selector (`az8` — interactiveModelSelector)
-
-When no argument is provided, the interactive selector is invoked.
+### Get Allowed Models (`az8`)
 
 ```
-function interactiveModelSelector(appContext):
-    items = buildModelList()                           // calls fh → gA6, fW  (+11327755)
-    selectedModel = presentSelectionUI(items)          // calls A (UI renderer) (+11327886)
-    return selectedModel
+function getAllowedModels(appState):
+    modelList = buildModelList(appState)            // calls fh → gA6
+    filteredList = applyPlatformFilters(modelList)  // calls fh → fW
+    return filteredList
 ```
 
-The selector builds the displayed list through a sub-function (`fh`) that itself calls two helpers: one to retrieve available model identifiers (`gA6`) and one to format display labels (`fW`).
+The model-list builder (`gA6`) normalises model aliases through a normalisation function (`Gq`) that:
+1. Trims and lower-cases the input string (bundle.js:+2120307, +2120318)
+2. Replaces formatting tokens such as `[1m]` (bundle.js:+2120429)
+3. Resolves short aliases: `"sonnet"` → full model ID (bundle.js:+2120444), `"haiku"` (bundle.js:+2120483), `"opus"` (bundle.js:+2120522), `"best"` (bundle.js:+2120559)
+4. Handles the special alias `"opusplan"` → `"Opus in plan mode, else Sonnet"` (bundle.js:+2118961, +2118978)
+5. Applies platform-tier filtering: `"firstParty"` (bundle.js:+2119169), with tier checks for `"max"` (bundle.js:+2890157), `"team"` (bundle.js:+2890228), `"default_claude_max_5x"` (bundle.js:+2890243), `"enterprise"` (bundle.js:+2890338), `"enterprise_usage_based"` (bundle.js:+2890360)
+6. Applies cloud-provider mapping: `"anthropicAws"` (bundle.js:+1981378), `"bedrock"` (bundle.js:+1980750), `"foundry"` (bundle.js:+1980800), `"mantle"` (bundle.js:+1980910), `"vertex"` (bundle.js:+1980958)
 
-Analysis basis: CC v2.1.133 bundle.js:+11360488, +11327755, +11327676, +11327683, +11327886
+Analysis basis: CC v2.1.133 bundle.js:+11360488
 
 ---
 
-### 3. Model Validation Pipeline (`oz8` — modelValidationOrchestrator)
-
-This orchestrator coordinates all validation steps before a model change is committed.
+### Model Validation via API (`rz8`)
 
 ```
-function modelValidationOrchestrator(modelName, appState):
+async function validateModelViaApi(modelName):
+    if modelName is empty:
+        return error("Model name cannot be empty")  // bundle.js:+11323862
 
-    // Step A: Parse and normalise the model string
-    parseResult = parseModelString(modelName)          // v7H, +11325612
+    modelList = buildModelList()                    // bundle.js:+11323896
+    normalised = modelName.toLowerCase()            // bundle.js:+11323986
 
-    // Step B: Check for a "not_allowed" account restriction
-    switchCheck = checkModelSwitchAllowed(modelName)   // uH,  +11325626
-    if switchCheck.status == "not_allowed":            // +11325644
-        return error("not_allowed")
+    if normalised in PROVIDER_PREFIX_LIST:          // bundle.js:+11324005
+        // provider prefix matched; skip API call
 
-    // Step C: Opus 1M availability check
-    if modelIdentifiesAsOpus(modelName) AND          // Aw7, +11325759
-       modelRequestsOneMillionContext(modelName):     // literal "[1m]" +11327538
-        if NOT accountAllowsOpus1M():
-            emit event("opus_1m_unavailable")        // +11325791
-            return error(OPUS_1M_ERROR_MSG)          // +11325829
+    if normalised already in validationCache:       // bundle.js:+11324107
+        return cached result
 
-    // Step D: Sonnet 1M availability check
-    if modelIdentifiesAsSonnet1M(modelName):         // _w7, +11325976
-        if NOT accountAllowsSonnet1M():
-            emit event("sonnet_1m_unavailable")      // +11326008
-            return error(SONNET_1M_ERROR_MSG)        // +11326048
-
-    // Step E: Provider prefix check
-    providerAllowed = checkProviderPrefix(modelName) // Hw7, +11326202
-
-    // Step F: Build confirmation message and apply state
-    confirmResult = applyModelAndBuildConfirmation(modelName, appState)  // wOq, +11326230
-
-    // Step G: Validate via live API probe
-    apiResult = validateModelViaApiProbe(modelName, appState)            // rz8, +11326258
-
-    // Step H: Convert result to text output
-    return convertResultToText(apiResult)                                // vH,  +11326476
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+11325612, +11325626, +11325759, +11325976, +11326202, +11326230, +11326258, +11326476
-
----
-
-### 4. Model String Parser (`v7H` — parseModelString)
-
-```
-function parseModelString(rawModelName):
-    parts = splitOnDelimiter(rawModelName)             // _.map  +2114840
-    trimmedParts = parts.map(trim)                     // M.trim +2114851, H.trim +2114877
-    if any part startsWith("anthropic."):              // L.startsWith +2114903, literal +2114916
-        isAnthropicNamespace = true
-    if rawModelName includes known variant token:      // q.includes +2114931
-        parseExtendedVariant(rawModelName)             // qx6 +2114960
-    metadata = buildModelMetadata(parts)               // pRH +2115010, qc_ +2115019
-    contextSize = resolveContextWindow(metadata)       // w6K +2115074, W8H +2115095
-    return finaliseModelRecord(metadata, contextSize)  // Gq +2115109, J6K +2115265
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+2114763, +2114840, +2114851, +2114877, +2114903, +2114916, +2114931
-
----
-
-### 5. Opus 1M Availability Check (`Aw7` — checkOpus1MAvailability)
-
-```
-function checkOpus1MAvailability(modelName, accountFeatures):
-    normalised = modelName.toLowerCase()               // +11327471
-    isOpus = checkOpusFeatureFlag(normalised)          // yt  +11327494
-    hasExtension = normalised includes "[1m]"          // literal +11327538
-    isInAllowedList = accountFeatures.includes(...)    // A.includes +11327507
-    if isOpus AND hasExtension AND NOT isInAllowedList:
-        return { allowed: false, reason: "opus_1m_unavailable" }
-    return { allowed: true }
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+11327471, +11327494, +11327501, +11327507, +11327518, +11327538
-
----
-
-### 6. Sonnet 1M Availability Check (`_w7` — checkSonnet1MAvailability)
-
-```
-function checkSonnet1MAvailability(modelName, accountFeatures):
-    normalised = modelName.toLowerCase()               // +11327568
-    isSonnet1M = normalised matches "sonnet[1m]"       // literal +11327610
-                 OR normalised matches "sonnet-4-6[1m]"// literal +11327636
-    isInAllowedList = accountFeatures.includes(...)    // A.includes +11327599
-    if isSonnet1M AND NOT isInAllowedList:
-        return { allowed: false, reason: "sonnet_1m_unavailable" }
-    return { allowed: true }
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+11327568, +11327591, +11327599, +11327610, +11327636
-
----
-
-### 7. Provider Prefix Check (`Hw7` — checkProviderPrefix)
-
-```
-function checkProviderPrefix(modelName):
-    normalised = modelName.toLowerCase()               // +11327425
-    if allowedProviderPrefixes.includes(normalised):   // P8H.includes +11327412
-        return { allowed: true }
-    return { allowed: false }
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+11327412, +11327425
-
----
-
-### 8. Apply Model and Build Confirmation (`wOq` — applyModelAndBuildConfirmation)
-
-```
-function applyModelAndBuildConfirmation(modelName, appState):
-    currentState = getAppState()                       // A  +11326512
-    modelRecord  = resolveModelRecord(modelName)       // zXH +11326527
-    appState["model"] = modelRecord                    // literal "model" +11326531
-
-    // Determine fast-mode and billing display suffix
-    isFastMode = evaluateFastMode(modelRecord)         // h8 +11326544
-    billingExtra = evaluateBillingExtra(modelRecord)   // _  +11326564
-
-    label = formatModelLabel(modelRecord)              // hH +11326626
-    boldLabel = label.bold()                           // M6.bold +11326667
-
-    // Build confirmation line helper
-    confirmLine = buildConfirmLine(boldLabel, isFastMode, billingExtra)  // fh +11326675
-
-    suffix = ""
-    if isFastMode:
-        suffix = " · Fast mode ON"                    // literal +11326775
-        billingNote = " · Billed as extra usage"      // literal +11326826
-    else:
-        suffix = " · Fast mode OFF"                   // literal +11326869
-
-    applyStateChange(appState)                        // aq  +11326696
-    persistModelSetting(modelRecord)                  // I7H +11326705
-    triggerUiRefresh()                                // FY  +11326712
-
-    handleLegacyOverride(modelRecord)                 // rzH +11326804
-    resolveAlias(modelRecord)                         // LX  +11326817
-    emitConfirmationEvent(modelRecord)                // eY7 +11326901
-
-    return { confirmationText: boldLabel + suffix }
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+11326512, +11326527, +11326531, +11326544, +11326564, +11326626, +11326667, +11326675, +11326696, +11326704, +11326712, +11326775, +11326804, +11326817, +11326826, +11326869, +11326901
-
----
-
-### 9. Live API Validation Probe (`rz8` — validateModelViaApiProbe)
-
-The command sends a minimal probe request to verify the model string is accepted by the API before committing the change.
-
-```
-function validateModelViaApiProbe(modelName, appState):
-    trimmed = modelName.trim()                         // H.trim  +11323825
-    if trimmed is empty:
-        return error("Model name cannot be empty")     // literal +11323862
-
-    parseResult = parseModelString(trimmed)            // v7H     +11323896
-    normalised  = trimmed.toLowerCase()                // A.toLowerCase +11323986
-
-    if allowedProviderList.includes(normalised):       // P8H.includes  +11324005
-        // already known; skip probe
-        return { valid: true, model: parseResult }
-
-    if probeCache.has(normalised):                     // YOq.has +11324107
-        return probeCache.get(normalised)
-
-    // Construct a minimal "Hi" probe message
-    probeMessages = [
-        { role: "user", content: "Hi" }               // literals +11324237, +11324271
-    ]
-    probeOptions = { cacheControl: "ephemeral" }       // literal +11324296
-
-    apiResponse = callApiForValidation(               // NR      +11324152
-        normalised, probeMessages, probeOptions
+    // Perform live API validation call (NR / globalThis.fetch)
+    response = await apiRequest(                    // bundle.js:+12081910
+        model   = modelName,
+        message = "Hi",                             // bundle.js:+11324271
+        cacheType = "ephemeral"                     // bundle.js:+11324296
     )
 
-    probeCache.set(normalised, apiResponse)            // YOq.set +11324315
-    processValidationResponse(apiResponse)             // sY7     +11324356
+    store result in validationCache                 // bundle.js:+11324315
 
-    if apiResponse is error:
-        emit event("model_validation")                 // literal +11324202
-        return { valid: false, reason: "invalid_model" }
-
-    return { valid: true, model: parseResult }
+    switch response.errorType:
+        case "model_validation":                    // bundle.js:+11324202
+            // check sub-reasons:
+            case auth failure:
+                emit telemetry result "not_allowed" // bundle.js:+11325644
+                return "Authentication failed. Please check your API credentials."
+                                                    // bundle.js:+11324562
+            case network error:
+                return "Network error. Please check your internet connection."
+                                                    // bundle.js:+11324664
+            case not_found_error + "model:" in msg: // bundle.js:+11324783, +11324865
+                return model-not-found message
+            case "invalid_model":                   // bundle.js:+11326302
+                return invalid-model message
+            case "validate_exception":              // bundle.js:+11326410
+                return exception message
+        default:
+            return success → proceed to persistAndConfirmModel
 ```
 
-**Key constants:**
+Known model IDs validated by the API path include (literals found in traversal):
+- `claude-opus-4-0`, `claude-opus-4-1`, `claude-opus-4-5`, `claude-opus-4-6` (bundle.js:+2861525, +2861718, +2861741, +2861764)
+- `claude-sonnet-4-0`, `claude-sonnet-4-5`, `claude-sonnet-4-6` (bundle.js:+2861548, +2861812, +2861837)
+- `claude-haiku-4-5` (bundle.js:+2861862)
+- `claude-3-` prefixed models (bundle.js:+2861507)
 
-- Probe message content: `"Hi"` (bundle.js:+11324271)
-- Cache control header value: `"ephemeral"` (bundle.js:+11324296)
-- Probe message role: `"user"` (bundle.js:+11324237)
-- Error label for API rejection: `"invalid_model"` (bundle.js:+11326302)
-- Error label for thrown exception: `"validate_exception"` (bundle.js:+11326410)
-- Telemetry event for validation failure: `"model_validation"` (bundle.js:+11324202)
-
-Analysis basis: CC v2.1.133 bundle.js:+11323825, +11323862, +11323896, +11323986, +11324005, +11324107, +11324152, +11324202, +11324237, +11324271, +11324296, +11324315, +11324356
+Analysis basis: CC v2.1.133 bundle.js:+11323825
 
 ---
 
-### 10. `tengu_feature_bad` pathway (`uH` — featureBadReporter)
+### Extended-Context (1 M) Availability Checks
 
-When model switching is blocked at the account level, a `tengu_feature_bad` telemetry event is emitted before returning the error to the user.
+Two availability guards are applied before confirming a 1 M-context model:
+
+**Opus 1 M guard (`Aw7`)**
 
 ```
-function featureBadReporter(context, reason):
-    emit telemetry("tengu_feature_bad", { reason })    // +907437
-    return buildErrorResult(context, reason)           // d +907435
+function checkOpus1MAvailability(accountInfo):
+    if account does not support 1M context:
+        emit result code "opus_1m_unavailable"      // bundle.js:+11325791
+        return error(
+            "Opus with 1M context is not available for your account. " +
+            "Learn more: https://code.claude.com/docs/en/model-config#extended-context-with-1m"
+        )                                           // bundle.js:+11325829
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+907435, +907437
+**Sonnet 1 M guard (`_w7`)**
+
+```
+function checkSonnet1MAvailability(accountInfo):
+    if account does not support 1M context:
+        emit result code "sonnet_1m_unavailable"    // bundle.js:+11326008
+        return error(
+            "Sonnet 4.6 with 1M context is not available for your account. " +
+            "Learn more: https://code.claude.com/docs/en/model-config#extended-context-with-1m"
+        )                                           // bundle.js:+11326048
+```
+
+The `[1m]` suffix token (bundle.js:+2120429) and aliases `"sonnet[1m]"` / `"sonnet-4-6[1m]"` (bundle.js:+11327610, +11327636) are recognised and routed through these guards.
+
+Analysis basis: CC v2.1.133 bundle.js:+11325791, +11326008
 
 ---
 
-### 11. Result-to-Text Converter (`vH` — resultToText)
+### Persist and Confirm Model (`wOq`)
 
 ```
-function resultToText(result):
-    return String(result)                              // +134176
+function persistAndConfirmModel(resolvedModel, appState):
+    settingsObj = readSettings()                    // zXH → Lk
+    settingsObj["model"] = resolvedModel            // bundle.js:+11326531
+
+    // Determine display annotations
+    annotation = ""
+    if fastModeActive:
+        annotation += " · Fast mode ON"            // bundle.js:+11326775
+    if billedAsExtraUsage:
+        annotation += " · Billed as extra usage"   // bundle.js:+11326826
+    if fastModeOff:
+        annotation += " · Fast mode OFF"           // bundle.js:+11326869
+
+    displayLine = bold(resolvedModel) + annotation  // bundle.js:+11326667
+
+    // Build full response using formatModelList (eY7)
+    modelRows = formatModelRows(allowedModels)      // eY7 → Qb, M6.dim, M6.bold, WU
+    writeSettings(settingsObj)                      // h8 path
+    return { type: "text", body: displayLine + modelRows }
+                                                    // bundle.js:+11360472
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+134176
+Settings persistence writes to:
+- `projectSettings` → `.claude/settings.json` (bundle.js:+1161331, +1161364, +1161374)
+- `localSettings` → `.claude/settings.local.json` (bundle.js:+1161395, +1161436)
+- `flagSettings` and `policySettings` fields are also consulted (bundle.js:+1034576, +1034598)
+
+Analysis basis: CC v2.1.133 bundle.js:+11326230
 
 ---
 
-### 12. Output type
+### Interactive Model Picker (`oz8`)
 
-Confirmation messages are returned with content type `"text"`.
+```
+async function launchInteractivePicker(context):
+    modelList = buildDisplayableModelList()         // v7H
+    // v7H filters models:
+    //   - strips "anthropic." prefix          bundle.js:+2114916
+    //   - accepts "claude-" prefix entries    bundle.js:+2114536
+    //   - pads display columns to width 40    bundle.js:+14181334
+    
+    userSelection = await renderInteractiveList(
+        items = modelList,
+        default = "default"                         // bundle.js:+11325588
+    )                                               // uH → d (interactive UI)
 
-Analysis basis: CC v2.1.133 bundle.js:+11360472
+    if userSelection is null:
+        return                                      // user cancelled
+
+    return persistAndConfirmModel(userSelection, context.appState)
+```
+
+The display list builder (`v7H`) calls `qx6` for alias expansion (bundle.js:+2114960), `pRH` for prefix checks (bundle.js:+2115010), `qc_` for index lookup (bundle.js:+2115019), and `W8H` / `Gq` for normalisation (bundle.js:+2115095, +2115109).
+
+The `"opusplan"` entry renders as `"Opus Plan"` in the picker UI (bundle.js:+2119269).
+
+Analysis basis: CC v2.1.133 bundle.js:+11325612
+
+---
+
+### Model Switch Telemetry Sub-handler (`sY7` / `tY7`)
+
+```
+function emitModelSwitchTelemetry(newModel, previousModel):
+    eventData = {
+        event: "model_switch",                      // bundle.js:+11325629
+        from: previousModel,
+        to:   newModel
+    }
+    // tY7 checks specific model identifiers:
+    //   opus_4_7  bundle.js:+11325156
+    //   opus_4_6  bundle.js:+11325225
+    //   opus-4-5  bundle.js:+11325270  (opus_4_5  bundle.js:+11325294)
+    //   sonnet_4_6 bundle.js:+11325365
+    //   sonnet-4-5 bundle.js:+11325414  (sonnet_4_5 bundle.js:+11325440)
+    emit(eventData)
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+11324356
 
 ---
 
@@ -357,12 +308,15 @@ Analysis basis: CC v2.1.133 bundle.js:+11360472
 
 | Item | Detail |
 |---|---|
-| Telemetry — inline switch | `tengu_model_command_inline` fired when an unrecognised model name is supplied as an inline argument (bundle.js:+11360563) |
-| Telemetry — feature blocked | `tengu_feature_bad` fired when the account is not permitted to use the requested model (bundle.js:+907437) |
-| appState changes | `appState["model"]` is updated to the resolved model record upon successful validation (bundle.js:+11326531) |
-| Model setting persistence | The resolved model record is written to persistent settings via `persistModelSetting` (bundle.js:+11326705) |
-| UI refresh | A UI refresh is triggered after state is applied (bundle.js:+11326712) |
-| Probe cache | A module-level `Map` (`YOq`) caches API probe results keyed on the lowercased model name to avoid redundant network calls (bundle.js:+11324107, +11324315) |
+| Telemetry — `tengu_model_command_inline` | Fired when the argument matches an inline alias (bundle.js:+11360563) |
+| Telemetry — `tengu_mcp_retry_failed_remote` | Fired by MCP retry subsystem reached during model resolution (bundle.js:+13870729) |
+| Telemetry — `tengu_feature_bad` | Fired on feature-flag check failure inside interactive UI helper (bundle.js:+907437) |
+| Telemetry — `tengu_feature_ok` | Fired on successful feature-flag check (bundle.js:+907381) |
+| Telemetry — `tengu_prompt_cache_1h_config` | Fired when 1-hour prompt-cache configuration is active during API validation (bundle.js:+12045606) |
+| Telemetry — `tengu_api_success` | Fired after a successful API round-trip during model validation (bundle.js:+12083281) |
+| `appState` changes | `model` key updated via `getAppState` → settings write path (bundle.js:+11360444, +11326531) |
+| Settings files written | `.claude/settings.json` and/or `.claude/settings.local.json` depending on scope |
+| Validation cache | Result of API validation stored in `YOq` (Map); `YOq.has` checked before re-querying (bundle.js:+11324107); `YOq.set` stores result (bundle.js:+11324315) |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 
@@ -372,18 +326,17 @@ Analysis basis: CC v2.1.133 bundle.js:+11360472
 
 | Version | Change |
 |---|---|
-| v2.1.133 | Initial analysis. Covers inline argument dispatch, interactive selector, provider-prefix validation, Opus/Sonnet 1M account checks, live API probe with `"Hi"` message, fast-mode and billing suffix rendering. |
+| v2.1.133 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Omitting the argument**: Invoking `/model` with no argument launches the interactive selector rather than printing the current model. There is no "print current model" sub-command at this depth.
-2. **Using an alias that includes `[1m]` on an ineligible account**: The command will surface an account-restriction error with a documentation URL before any API call is made. The error is not a transient failure — it indicates a plan limitation.
-3. **Assuming the command is purely client-side**: The validation pipeline sends a live `"Hi"` probe to the API when the model string is unrecognised and not already cached. This requires an active network connection and valid credentials.
-4. **Expecting instant fallback on API rejection**: The probe result is cached in a module-level `Map`; a rejected model will continue to be rejected for the lifetime of the process without a restart.
-5. **Case sensitivity**: All provider-prefix and variant checks normalise the input to lowercase before comparison. Submitting `Opus` and `opus` are equivalent, but the stored model name may differ from what was entered — always verify via the confirmation message.
-6. **Non-interactive mode assumptions**: The command declares `supportsNonInteractive: true`. In non-interactive contexts the interactive selector path is unavailable; an explicit model argument must be supplied.
+1. **Passing an empty string as the model argument** — the handler explicitly guards against empty model names and returns `"Model name cannot be empty"` (bundle.js:+11323862) rather than performing any lookup.
+2. **Expecting immediate API calls for well-known models** — if the provided name already appears in the allowed-models list (`nKH.includes`), no network request is made; the model is applied directly. Network validation is only triggered for unknown names.
+3. **Using short aliases in non-interactive (scripted) mode** — aliases such as `"sonnet"`, `"haiku"`, `"opus"`, and `"best"` are resolved through the normaliser (`Gq`); however, the `"opusplan"` alias is only fully rendered in the interactive picker and may produce unexpected output in `--non-interactive` invocations.
+4. **Assuming 1 M context is universally available** — the `[1m]` suffix and `"sonnet[1m]"` / `"sonnet-4-6[1m]"` aliases trigger explicit account-eligibility checks; ineligible accounts receive a link to the documentation rather than a model switch.
+5. **Expecting instant settings persistence without API latency** — for models not in the cached allowed list, a live `globalThis.fetch` validation call is made (bundle.js:+12081910); the command is async and the caller should await completion.
 
 ---
 
@@ -393,18 +346,96 @@ Analysis basis: CC v2.1.133 bundle.js:+11360472
 
 | Identifier | Role |
 |---|---|
-| `dw7` | Command handler — entry point; trims input, dispatches to interactive or inline path |
-| `H` | Generic async helper / UI animation scheduler (uses `Math.random` and `setTimeout`) |
-| `A` | App-state accessor / UI renderer used in multiple sub-functions |
-| `az8` | Interactive model selector — launched when no argument is given |
-| `fh` | Model-list builder — constructs the list of selectable models for display |
-| `d` | Error-result builder — constructs structured error return values |
-| `oz8` | Model validation orchestrator — coordinates all validation and state-application steps |
-| `v7H` | Model string parser — splits, trims, and annotates a raw model name string |
-| `uH` | Feature-bad reporter — emits `tengu_feature_bad` and returns a blocked-account error |
-| `Aw7` | Opus 1M availability checker — detects `opus` + `[1m]` and verifies account permission |
-| `_w7` | Sonnet 1M availability checker — detects `sonnet[1m]` / `sonnet-4-6[1m]` and verifies account permission |
-| `Hw7` | Provider-prefix checker — validates that the model name begins with an allowed provider prefix |
-| `wOq` | Apply-model-and-build-confirmation — writes model to appState and constructs the confirmation string with fast-mode/billing suffix |
-| `rz8` | Live API validation probe — sends a minimal `"Hi"` message to confirm the model is accepted; caches results |
-| `vH` | Result-to-text converter — wraps the final result in `String()` for output |
+| `dw7` | Main async handler for `/model` command (Arbor-resolved entry point) |
+| `az8` | Get-allowed-models orchestrator |
+| `fh` | Model-list builder coordinator (calls `gA6` and `fW`) |
+| `gA6` | Core model-list constructor; invokes alias normaliser `Gq` |
+| `Gq` | Model alias/name normaliser (trim, toLowerCase, alias resolution) |
+| `aw` | Helper called by `gA6` (model metadata lookup) |
+| `fW` | Platform filter applicator for model list |
+| `C_` | Model filter sub-step (calls `rY`, `wU`, `V_`) |
+| `kr` | Tier filter: checks `"max"` tier |
+| `k7H` | Tier filter: checks `"team"` / `"default_claude_max_5x"` |
+| `FRH` | Tier filter: checks `"enterprise"` / `"enterprise_usage_based"` |
+| `Ek` | Model-entry formatter (calls `zM`, `DM`) |
+| `LX` | Model-list layout helper |
+| `zM` | Model display-name builder |
+| `Q_` | Provider-type resolver (bedrock, foundry, mantle, vertex) |
+| `DM` | Additional provider resolver |
+| `pV` | Picker-value formatter |
+| `oz8` | Interactive model-picker launcher |
+| `v7H` | Display-list builder for interactive picker |
+| `uH` | Interactive UI renderer (calls `d`) |
+| `Aw7` | Opus 1 M context availability check |
+| `_w7` | Sonnet 1 M context availability check |
+| `Hw7` | Provider-prefix inclusion check |
+| `wOq` | Persist-and-confirm model handler |
+| `zXH` | Settings reader/writer coordinator |
+| `Lk` | Settings file accessor (flagSettings, policySettings) |
+| `h8` | Settings write helper |
+| `hH` | Display helper (calls `d`) |
+| `aq` | Output formatter |
+| `kH` | String coercion utility |
+| `I7H` | Inline annotation builder |
+| `FY` | Fast-mode annotation resolver (opus-4-6, opus-4-7 checks) |
+| `Hx` | Annotation string builder |
+| `rzH` | Billing-annotation resolver (sonnet-4-6 check) |
+| `fX` | Model-string formatter calling `Gq` / `fW` |
+| `B0` | Base model-ID resolver |
+| `eY7` | Full model-list formatter for confirmation output |
+| `Qb` | Settings path joiner |
+| `WU` | Model row display builder |
+| `rz8` | API-validation orchestrator |
+| `NR` | Low-level API request executor (`globalThis.fetch`) |
+| `Jx` | HTTP request builder (headers, auth, user-agent) |
+| `j` | Stream/buffer reader for API responses |
+| `yPH` | Response classifier (claude-3-, claude-opus-4-0, claude-sonnet-4-0) |
+| `G` | Response accumulator |
+| `rT7` | Response finder/parser |
+| `oxA` | Request hash generator (sha256) |
+| `Gd6` | Retry / cache-control handler |
+| `Wd6` | Prompt-cache query helper |
+| `zTH` | Prompt-cache 1 h config checker |
+| `VZ` | Token/auth validator |
+| `v` | Retry back-off scheduler |
+| `r2q` | Request metadata builder |
+| `mP` | Model-name sanitiser |
+| `lF6` | Temperature / claude-3 model classifier |
+| `xP` | Message-map helper |
+| `LMH` | Response structure validator |
+| `TwH` | Telemetry emitter for api_success |
+| `F76` | Cache-control tag writer |
+| `ma` | Cache-control tag reader |
+| `YaH` | Cache-control cache_control field handler |
+| `sY7` | Model-switch telemetry orchestrator |
+| `tY7` | Model-switch telemetry detail emitter |
+| `vH` | String-to-display converter |
+| `iZH` | MCP connection initialiser |
+| `mFq` | MCP update applier |
+| `Og7` | MCP client manager |
+| `J6` | MCP server connection tracker |
+| `qx6` | Model alias expander |
+| `mA` | Alias database accessor |
+| `pRH` | Prefix-check helper |
+| `qc_` | Index-of helper for model list |
+| `w6K` | Model inclusion checker |
+| `W8H` | Provider prefix checker |
+| `J6K` | Model-entry key builder |
+| `_c_` | Model-ID prefix validator |
+| `yt` | Context-limit resolver |
+| `T8H` | Token-limit helper |
+| `qZ9` | Context-window query |
+| `_9H` | Extended context-limit resolver |
+| `K` | Active-task tracker |
+| `k` | Model-display-name formatter |
+| `$` | Query dispatcher |
+| `d` | Core interactive UI primitive |
+| `f` | UI close handler |
+| `M` | MCP manager |
+| `L` | Column-padding utility |
+| `q` | File unlink / includes helper |
+| `H` | Jitter/delay utility (Math.random + setTimeout) |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

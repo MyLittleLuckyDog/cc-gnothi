@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "effort"
 cc_version: 2.1.133
-updated: "2026-05-18"
+updated: "2026-05-31"
 tags: ["effort", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -22,7 +22,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/effort` command sets the effort level that Claude Code uses when invoking the underlying model, controlling the depth of reasoning and implementation thoroughness. It accepts one of six named levels (`low`, `medium`, `high`, `xhigh`, `max`, `auto`) or a raw numeric token budget, normalises the input, validates it, and then persists the chosen level into application state for the current session. When operating over a remote transport (thin-client / CCR), the command applies the setting locally only and appends a caveat to its response, because the server-side effort cannot be altered from the client.
+The `/effort` slash command allows users to set the reasoning/effort level that Claude Code applies when processing tasks. It accepts a named level (`low`, `medium`, `high`, `xhigh`, `max`, or `auto`) or the special token `unset`, validates the input, persists the selection to configuration, and returns a JSX status view reflecting the current setting. When operating over a remote transport that cannot propagate effort to the server, the command applies the setting locally only and annotates the response accordingly.
 
 ---
 
@@ -32,91 +32,66 @@ The `/effort` command sets the effort level that Claude Code uses when invoking 
 |---|---|
 | type | `local-jsx` |
 | name | `effort` |
-| description | Set effort level for model usage |
+| description | `Set effort level for model usage` |
 | argumentHint | `[low\|medium\|high\|xhigh\|max\|auto]` |
+| immediate | `null` |
 | thinClientDispatch | `control-request` |
 | module_id | `fzq` |
+| load_inline | `true` |
+| handler (Arbor) | `Lw7` (AsyncFunction, resolved via `module_id`) |
+| `loc_byte_end` | `11374458` |
+| `arbor_handler.name` | `Lw7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::Lw7` |
+| `arbor_handler.n_hits` | `1` |
 
-Analysis basis: CC v2.1.132 bundle.js:+11374195
+Analysis basis: CC v2.1.132 bundle.js:+11374195 – +11374458
 
 ---
 
 ## Input Branching
 
-The command entry point (command handler function) receives the raw argument string, then routes through three main phases: argument parsing, level resolution, and state application.
+The handler (`Lw7`) first checks whether the raw argument token is present in the supported-levels list, then decides on the action path.
 
 ```mermaid
 flowchart TD
-    A(["/effort [arg]"]) --> B{Argument provided?}
-    B -- No --> C[Display current effort level and available levels]
-    B -- Yes --> D[Normalise: trim + toLowerCase]
-    D --> E{Is arg a named level?\nlow | medium | high | xhigh | max | auto}
-    E -- Yes --> F[Resolve named level to canonical value]
-    E -- No --> G[Attempt parseInt radix-10]
-    G --> H{isNaN result?}
-    H -- Yes --> I[Return error: unrecognised effort value]
-    H -- No --> J[Use numeric token-budget value directly]
-    F --> K{Transport = CCR / thin-client?}
-    J --> K
-    K -- Yes --> L[Apply setting locally\nAppend caveat: server effort unchanged]
-    K -- No --> M[Apply effort to session state\nEmit apply_flag_settings]
-    L --> N[Emit tengu_effort_command telemetry]
-    M --> N
-    N --> O[Render JSX confirmation with level description]
-    I --> P([Return error response])
-    O --> Q([Return success response])
-    C --> Q
+    A(["/effort [arg]"]) --> B{arg supplied?}
+    B -- No --> STATUS[Render current effort status view]
+    B -- Yes --> C{arg in allowed-levels list?}
+    C -- No / invalid --> ERR[Return error: unrecognised level]
+    C -- Yes --> D{remote transport active?}
+    D -- Yes --> LOCAL["Apply locally only\n+ append remote-caveat suffix"]
+    D -- No --> FULL[Apply to session + persist to config]
+    LOCAL --> PERSIST[Write config / session state]
+    FULL --> PERSIST
+    PERSIST --> M1A_PATH[Save global config with lock\n(saveConfigWithLock path)]
+    M1A_PATH --> TELEMETRY[Emit tengu_effort_command]
+    TELEMETRY --> RENDER[Render JSX status view via Lw7]
+    STATUS --> RENDER
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11364893 (command handler), +11365548 (toLowerCase normalisation), +3999140 (parseInt call), +3999159 (isNaN check), +11363853 (CCR caveat string), +11365186 (telemetry emit)
+Analysis basis: CC v2.1.132 bundle.js:+11372586 (allowed-levels membership check), +11363853 (remote-caveat suffix), +11364806 (session-only annotation), +11365186 (`tengu_effort_command` emit)
 
 ---
 
 ## Behavioral Spec
 
-### Argument Parsing and Level Validation
+### 1. Argument Validation
 
 ```
-function parseEffortArgument(rawArg):
-    if rawArg is absent or blank:
-        return { action: "SHOW_STATUS" }
-
-    normalised = rawArg.trim().toLowerCase()
-
-    if isNamedLevel(normalised):          # "low","medium","high","xhigh","max","auto"
-        return { action: "SET_NAMED", level: normalised }
-
-    numeric = parseInt(normalised, 10)    # radix 10
-    if isNaN(numeric):
-        return { action: "ERROR", reason: "unrecognised value" }
-
-    return { action: "SET_NUMERIC", budget: numeric }
+function validateEffortArgument(rawArg):
+    allowedLevels = ["low", "medium", "high", "xhigh", "max", "auto", "unset"]
+    // Membership tested via uKH.includes (allowedLevels array)
+    if rawArg not in allowedLevels:
+        return Error("unrecognised effort level")
+    return rawArg
 ```
 
-Named levels recognised at parse time: `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`, `"auto"`.
-The sentinel value `"unset"` is also present in the level vocabulary as the default/cleared state.
+The allowed-levels array (`uKH`) is checked via `.includes` at handler entry.
+Analysis basis: CC v2.1.132 bundle.js:+11372586
 
-Analysis basis: CC v2.1.132 bundle.js:+3999463 (`"unset"`), +3999491 (`"auto"`), +3999720 (`"max"`), +3999741 (`"high"`), +3999755 (`"xhigh"`), +4000669 (`"low"`), +4000747 (`"medium"`), +3999140 (parseInt), +3999159 (isNaN), +3999151 (radix `10`)
-
----
-
-### Level Validation Against Known-Good Set
-
-```
-function isValidLevel(candidate):
-    KNOWN_LEVELS = ["low", "medium", "high", "xhigh", "max", "auto", "unset"]
-    return KNOWN_LEVELS.includes(candidate)
-```
-
-The inclusion check is delegated to the `wB.includes` helper.
-
-Analysis basis: CC v2.1.132 bundle.js:+3998976 (`wB.includes` call)
-
----
-
-### Level Description Resolution
-
-Each named level maps to a human-readable description shown in the confirmation UI:
+Named levels and their human-readable descriptions (from the UI renderer `$WH`):
 
 | Level | Description |
 |---|---|
@@ -125,103 +100,157 @@ Each named level maps to a human-readable description shown in the confirmation 
 | `high` | Comprehensive implementation with extensive testing and documentation |
 | `xhigh` | Deeper reasoning than high, just below maximum (Opus 4.7 only) |
 | `max` | Maximum capability with deepest reasoning |
-| `auto` | *(resolved dynamically from session context)* |
+| `auto` | Let the model choose effort automatically |
+| `unset` | Remove any previously set effort override |
 
-Analysis basis: CC v2.1.132 bundle.js:+4000681 (`low` description), +4000762 (`medium` description), +4000840 (`high` description), +4000930 (`xhigh` description), +4001011 (`max` description)
+Analysis basis: CC v2.1.132 bundle.js:+4000669, +4000747, +4000840, +4000930, +4001011 (level description strings); +3999463, +3999491 (`unset` / `auto` literals)
 
 ---
 
-### Transport-Aware Application
+### 2. Effort Level Resolution (Model Compatibility Gate)
+
+The internal effort-resolver (`LG`) maps symbolic level names to API-level effort tokens and applies model-compatibility filtering.
 
 ```
-function applyEffortLevel(resolvedLevel, sessionContext):
-    isCCR = isRemoteTransport(sessionContext)   # checks for "ccr" transport
+function resolveEffortForModel(levelName, currentModel):
+    // Check if currentModel starts with "claude-3-" → legacy, effort unsupported
+    if currentModel.startsWith("claude-3-"):
+        return Error("effort control not supported for Claude 3 family")
 
-    if isCCR:
-        applyLocally(resolvedLevel)
-        caveat = " (applied locally — this remote transport can't change server effort)"
-        confirmationSuffix = caveat
+    supportedModels = [
+        "claude-opus-4-0", "claude-opus-4-1",
+        "claude-sonnet-4-0", "claude-sonnet-4-5",
+        "claude-haiku-4-5",
+        "claude-opus-4-7", "claude-opus-4-6",
+        "claude-sonnet-4-6"
+    ]
+
+    // xhigh is gated to opus-4-7 only
+    if levelName == "xhigh":
+        if NOT currentModel.includes("opus-4-7"):
+            return Error("xhigh effort requires claude-opus-4-7 (or equivalent)")
+        return "xhigh_effort"
+
+    if levelName == "max":
+        return "max_effort"
+
+    // For other levels delegate to standard effort-token mapper
+    return standardEffortToken(levelName)
+```
+
+Analysis basis: CC v2.1.132 bundle.js:+3997980 (`Gq` model-check entry), +3998000 (`"claude-3-"` prefix guard), +3998018–+3998195 (supported model list), +3999547 (`"opus-4-7"` xhigh gate), +3998269 (`"max_effort"` token), +3998624 (`"xhigh_effort"` token), +4001350, +4001364 (`"xhigh"`, `"high"` string literals in `Ii6` path)
+
+---
+
+### 3. Remote Transport Caveat
+
+```
+function applyWithTransportCheck(resolvedLevel, sessionContext):
+    isRemote = sessionContext.transport == "ccr"   // "ccr" literal
+    if isRemote:
+        annotation = resolvedLevel + " (applied locally — this remote transport can't change server effort)"
+        applyToLocalSessionOnly(resolvedLevel)
     else:
-        applyLocally(resolvedLevel)
-        confirmationSuffix = " (this session only)"
-
-    emitFlagSettings("apply_flag_settings", resolvedLevel)
-    emitTelemetry("tengu_effort_command")
-    return buildConfirmation(resolvedLevel, confirmationSuffix)
+        applyToSessionAndConfig(resolvedLevel)
+    return annotation ?? resolvedLevel
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11363853 (CCR caveat literal), +11364806 (`"(this session only)"` literal), +3997439 (`"ccr"` transport identifier), +11363976 (`"apply_flag_settings"` event), +11365186 (`tengu_effort_command` telemetry)
+Analysis basis: CC v2.1.132 bundle.js:+3997439 (`"ccr"` transport identifier), +11363853 (remote-caveat suffix string), +11364806 (`" (this session only)"` annotation)
 
 ---
 
-### Pro-Tier Gate for `xhigh` / `max`
+### 4. Configuration Persistence (`saveConfigWithLock` path)
 
-The implementation checks whether the active subscription tier equals `"pro"` before fully enabling `xhigh` or `max` effort. The gate is evaluated inside the level-application helper.
+When the transport is local, the resolved effort value is written to persistent configuration through the locked config-save path (`M1A` → `z8H` → `F9`).
 
 ```
-function checkProGate(level, userProfile):
-    PRO_ONLY_LEVELS = ["max"]          # xhigh gated by model capability (Opus 4.7)
-    if level in PRO_ONLY_LEVELS:
-        if userProfile.tier != "pro":
-            return { allowed: false, reason: "pro tier required" }
-    return { allowed: true }
+function persistEffortToConfig(resolvedLevel):
+    acquireConfigLock()           // lock guarded; emits tengu_config_lock_contention on contention
+    currentConfig = readConfigFromDisk()
+    if currentConfig missing auth that cache has:
+        emit tengu_config_stale_write
+        // refuse write to prevent auth wipe (see GH #3117)
+        return Error("stale write prevented")
+    currentConfig.effort = resolvedLevel
+    writeConfigAtomically(currentConfig)   // temp-file + rename pattern
+    releaseConfigLock()
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+2884611 (`"pro"` literal), +2884604 (tier-check call edge `z8H → F9`)
+Lock contention threshold: 100 ms (bundle.js:+3105303). Lock timeout: 60 000 ms (bundle.js:+60000 at +3106079). Backup file prefix: `".backup."` (bundle.js:+3106195). Config file paths involved: `~/.claude/settings.json` and `~/.claude/settings.local.json` (bundle.js:+1158288, +1158298, +1158360).
+
+Analysis basis: CC v2.1.132 bundle.js:+4001102 (`M1A` → `obK` + `z8H`), +3105398 (`tengu_config_lock_contention`), +3105534 (`tengu_config_stale_write`), +3105877 (`tengu_config_auth_loss_prevented`)
 
 ---
 
-### Status Display (No-Argument Path)
+### 5. Settings Layer Stack
+
+The configuration system (`CA`) loads settings in a layered priority order:
 
 ```
-function renderEffortStatus(currentLevel, availableLevels):
-    rows = []
-    for each level in availableLevels:
-        desc = getLevelDescription(level)
-        marker = (level == currentLevel) ? "current" : "status"
-        rows.push(buildRow(level, desc, marker))
-    return renderTable(rows)
+effectiveSettings = merge(
+    policySettings,    // highest priority
+    flagSettings,
+    userSettings,
+    projectSettings,
+    localSettings      // lowest priority
+)
 ```
 
-The strings `"current"` and `"status"` are used as row-type markers in the JSX table rendered via `r1.createElement`.
-
-Analysis basis: CC v2.1.132 bundle.js:+11372624 (`"current"` literal), +11372639 (`"status"` literal), +11372655 (`r1.createElement` call), +11372586 (`uKH.includes` call for level enumeration)
+The `effort` key written by this command lands in `userSettings` (global config) unless a session-only flag is active.
+Analysis basis: CC v2.1.132 bundle.js:+1159426, +1159448, +1158044, +1158092, +1158114
 
 ---
 
-### Session-Scoped User Settings Persistence
+### 6. JSX Status View Renderer
+
+When called with no argument, or after a successful set, the handler (`Lw7`) renders a JSX component displaying the current and status fields.
 
 ```
-function persistToUserSettings(level):
-    settings = readUserSettings()       # key: "userSettings"
-    settings.effortLevel = level
-    writeUserSettings(settings)
-    scheduleApply(settings, delay=1)    # numeric literal 1 used as apply index
+function renderEffortStatusView(currentLevel):
+    props = {
+        current: currentLevel ?? "unset",
+        status: descriptionFor(currentLevel)
+    }
+    return r1.createElement(EffortStatusComponent, props)
 ```
 
-The `"userSettings"` key is the storage namespace. A flag-application step with an index value of `1` follows the write.
-
-Analysis basis: CC v2.1.132 bundle.js:+4000092 (`"userSettings"` literal), +4001155 (numeric `1` — apply index), +4000042 (`MWH` — settings read helper), +4000089 (`CA` — settings write), +4000150 (`A8` — apply trigger)
+The string keys `"current"` and `"status"` appear as property names in the JSX element creation call.
+Analysis basis: CC v2.1.132 bundle.js:+11372624 (`"current"`), +11372639 (`"status"`), +11372655 (`r1.createElement`)
 
 ---
 
-### Deduplication Guard
+### 7. Telemetry Emission (`tengu_effort_command`)
 
-Before registering a new effort setting, the implementation checks a tracking set to avoid duplicate application of the same level within a session tick:
+After a successful set operation, a telemetry event is fired:
 
 ```
-function deduplicatedApply(level, trackingSet, pendingMap):
-    if trackingSet.has(level):
-        return                          # already applied this tick
-    trackingSet.add(level)
-    if pendingMap.has(level):
-        existing = pendingMap.get(level)
-        mergeApply(existing, level)
-    else:
-        directApply(level)
+function emitEffortTelemetry(levelName):
+    emit("tengu_effort_command", { level: levelName })
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+3085510 (`V5H.has`), +3085533 (`kq6.add`), +3085547 (`mU.has`), +3085564 (`mU.get`), +3085584 (`R6` — apply call)
+This call site is within `gY7` (the post-apply renderer wrapper).
+Analysis basis: CC v2.1.132 bundle.js:+11365186
+
+---
+
+### 8. Numeric Effort Value Parsing (`fa` / `parseInt` path)
+
+The argument parser (`fa`) also handles numeric effort values passed as integers (via `parseInt` with radix 10):
+
+```
+function parseEffortArg(raw):
+    asString = String(raw)
+    if isKnownLevelName(asString):     // aK6 / wB.includes check
+        return { kind: "named", value: asString }
+    parsed = parseInt(asString, 10)    // radix 10
+    if isNaN(parsed):
+        return Error("invalid effort value")
+    if Number.isInteger(parsed):
+        return { kind: "numeric", value: parsed }
+    return Error("non-integer effort value")
+```
+
+Analysis basis: CC v2.1.132 bundle.js:+3999118 (`aK6` / `wB.includes`), +3999140 (`parseInt`), +3999151 (radix `10`), +3999159 (`isNaN`), +4000544 (`Number.isInteger`)
 
 ---
 
@@ -229,15 +258,19 @@ Analysis basis: CC v2.1.132 bundle.js:+3085510 (`V5H.has`), +3085533 (`kq6.add`)
 
 | Item | Detail |
 |---|---|
-| Telemetry — `tengu_effort_command` | Emitted on every successful `SET_NAMED` or `SET_NUMERIC` action (bundle.js:+11365186) |
-| Telemetry — `tengu_slate_finch` | Emitted inside the level-application helper (bundle.js:+4001134) |
-| Flag settings event | `"apply_flag_settings"` dispatched after state write (bundle.js:+11363976) |
-| appState changes | `effortLevel` field updated under the `"userSettings"` namespace (bundle.js:+4000092) |
-| Transport caveat | When transport is `"ccr"`, a caveat suffix is appended to the response; server effort is NOT changed (bundle.js:+11363853) |
-| Session scope | All changes are session-scoped; the suffix `"(this session only)"` is appended in non-CCR flows (bundle.js:+11364806) |
-| thinClientDispatch | `control-request` — ensures the command is handled in the control channel when running as a thin client (bundle.js:+11374195) |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry — primary | `tengu_effort_command` emitted on every successful level change (bundle.js:+11365186) |
+| Telemetry — config lock | `tengu_config_lock_contention` emitted when lock acquisition is slow (bundle.js:+3105398) |
+| Telemetry — stale write | `tengu_config_stale_write` emitted on stale-cache write attempt (bundle.js:+3105534) |
+| Telemetry — auth guard | `tengu_config_auth_loss_prevented` emitted when write is blocked to protect auth (bundle.js:+3105877) |
+| Telemetry — config parse error | `tengu_config_parse_error` emitted on corrupt config read (bundle.js:+3107927) |
+| Telemetry — slate finch | `tengu_slate_finch` emitted inside the `j6` session-creation path (bundle.js:+4001134) |
+| appState changes | `effort` field written to global config (`~/.claude/settings.json`) or session-only state |
+| Config atomicity | Write uses temp-file + `rename` pattern; `fchmod`, `fsync` applied before rename |
+| Config backup | Up to 5 backup files with `.backup.` prefix retained (bundle.js:+3106195, +3106328) |
+| Remote transport | When transport is `"ccr"`, effect is session-local only; server effort unchanged |
+| Hook registration | `apply_flag_settings` hook invoked during config application (bundle.js:+11363976) |
+| Sound | None observed in depth-2 traversal |
+| Randomness | `Math.random` / `setTimeout` appear in the `H` utility path; not directly tied to effort logic |
 
 ---
 
@@ -245,18 +278,18 @@ Analysis basis: CC v2.1.132 bundle.js:+3085510 (`V5H.has`), +3085533 (`kq6.add`)
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis — six named levels (`low`, `medium`, `high`, `xhigh`, `max`, `auto`), numeric budget fallback, CCR-aware local-only application, pro-tier gate for `max` |
+| v2.1.132 | Initial analysis. Supported levels: `low`, `medium`, `high`, `xhigh`, `max`, `auto`, `unset`. `xhigh` gated to claude-opus-4-7. Remote-transport caveat annotation added. |
 
 ---
 
 ## Common Mistakes
 
-1. **Passing a level name with mixed case** — the argument hint shows lowercase; while the implementation normalises via `toLowerCase()`, relying on this is fragile across versions. Always pass lowercase level names.
-2. **Expecting server-side effect over CCR transport** — when Claude Code is running as a thin client over a remote transport, `/effort` only adjusts the local session. The confirmation message explicitly states the server effort is unchanged; do not mistake the success response for a global setting change.
-3. **Using `xhigh` with non-Opus models** — the description for `xhigh` states it is "Opus 4.7 only". Supplying this level with other models will silently fall back to the next available tier rather than producing an error.
-4. **Assuming persistence across sessions** — the `"(this session only)"` suffix is literal. The effort level is not written to a persistent configuration file; it resets on the next Claude Code invocation unless set again.
-5. **Supplying a float instead of an integer for numeric budgets** — the parser calls `parseInt` (not `parseFloat`), so `"1.5"` is parsed as `1`, silently truncating the fractional part.
-6. **Omitting the argument expecting an interactive picker** — unlike some slash commands, `/effort` with no argument renders a status table, not an interactive selection prompt. To change the level you must pass it explicitly.
+1. **Passing `xhigh` with a non-Opus-4.7 model** — The command will reject the level at the model-compatibility gate (`LG`); switch to a supported model or use `high` instead.
+2. **Expecting effort to propagate over a remote (`ccr`) transport** — When using a remote transport, the command applies the setting locally only and appends a caveat; the server-side model receives no effort override.
+3. **Passing a float or non-integer numeric value** — The `Number.isInteger` check will reject non-integer numerics; only whole-number values (or named string levels) are accepted.
+4. **Omitting the argument to change the level** — Invoking `/effort` with no argument renders the current status view rather than modifying anything; this is by design but can surprise users expecting a toggle.
+5. **Assuming `auto` and `unset` are equivalent** — `auto` instructs the model to self-select an effort level, while `unset` removes any override entirely; the downstream API treatment differs.
+6. **Running `/effort` while another Claude instance holds the config lock** — Contention beyond the 100 ms threshold will emit `tengu_config_lock_contention` telemetry and may delay or fail the write; ensure no concurrent Claude process is active.
 
 ---
 
@@ -266,26 +299,72 @@ Analysis basis: CC v2.1.132 bundle.js:+3085510 (`V5H.has`), +3085533 (`kq6.add`)
 
 | Identifier | Role |
 |---|---|
-| `Uz8` | Command handler entry point (top-level `/effort` implementation function) |
-| `A3` | Session context / app-state reader |
-| `ywH` | App-state field accessor (called from session context reader) |
-| `ifH` | Effort level getter — retrieves the current effort value from state |
-| `fa` | Argument parser — normalises raw string to typed effort descriptor |
-| `px` | Level description resolver — maps named levels to description strings |
-| `nfH` | Named-level table builder — constructs the mapping of level → description |
-| `$WH` | Description lookup helper — retrieves description for a single level |
-| `M1A` | Level application orchestrator — writes resolved level to settings and fires events |
-| `obK` | Settings writer — persists the updated userSettings object |
-| `z8H` | Pro-tier gate checker |
-| `j6` | Deduplication + pending-map applier |
-| `Bz8` | Render / response builder — assembles JSX confirmation or status output |
-| `H` | Randomised delay utility (uses `Math.random` + `setTimeout`) |
-| `gY7` | Main flow coordinator — sequences parse → validate → apply → render |
-| `Kzq` | CCR transport detector + caveat injector |
-| `tK6` | User settings read/write/apply helper trio |
-| `d` | Dispatch function — sends internal control messages |
-| `aK6` | Named-level inclusion validator (wraps `wB.includes`) |
-| `FY7` | Non-CCR (standard local) effort application path |
-| `MWH` | User settings reader |
-| `Jv` | CCR transport identifier resolver (returns `"ccr"` string for comparison) |
-| `Lw7` | Status display renderer — builds the no-argument level table via `r1.createElement` |
+| `Lw7` | Main async handler for `/effort` (Arbor-resolved entry point, `module_id` path) |
+| `Uz8` | Top-level effort command orchestrator (calls validator, resolver, renderer, config writer) |
+| `A3` | Session/transport context accessor |
+| `ywH` | Transport type reader (returns `"ccr"` or local) |
+| `ifH` | Effort state accessor / current-value reader |
+| `fa` | Argument parser (named level + numeric fallback via `parseInt`) |
+| `wS1` | Integer validation helper (`Number.isInteger` wrapper) |
+| `aK6` | Named-level membership checker (`wB.includes`) |
+| `px` | Level-description table builder (populates the `$WH` descriptions map) |
+| `nfH` | Effort resolver + model-compatibility gate dispatcher |
+| `LG` | Model-compatibility check and effort-token mapper |
+| `yH` | String utility / model name formatter |
+| `Gq` | Model type classifier (first-party / AWS / foundry / mantle / application-inference-profile) |
+| `_` | Locale-lowercase utility (`.toLowerCase`) |
+| `_S` | Session effort state setter (firstParty path) |
+| `nw` | Session effort state setter (cross-provider path; calls `xb6`, `JaL`, `g_`, `Lx_`) |
+| `Zi6` | `xhigh` / `high` level handler branch |
+| `R6` | Effort-change event emitter (calls `Date.now`, `DPK`) |
+| `Ii6` | Secondary level-handler branch (calls `Gq`) |
+| `rK6` | `max_effort` handler (reads `o8H`, checks `_.includes`, calls `_S` + `nw`) |
+| `oK6` | `xhigh_effort` handler (same structure as `rK6`) |
+| `$WH` | Level-to-description mapping table renderer |
+| `M1A` | Config persistence orchestrator (calls `obK`, `z8H`, `j6`) |
+| `obK` | Pre-save config validator |
+| `z8H` | Config write dispatcher (calls `F9`) |
+| `F9` | Atomic config file writer (calls `wx_`, `Yx_`, `nY`, `E_`) |
+| `nY` | Low-level file write with auth-loss guard |
+| `j6` | Session record creator / updater (calls `hq6`, `Rq6`, `Oo`, `uQ6`, `R6`) |
+| `hq6` | Session pre-creation hook |
+| `Rq6` | Session ID generator |
+| `Oo` | Session object builder (calls `yH`, `Mo`) |
+| `Mo` | Model metadata resolver (calls `Yx`) |
+| `uQ6` | Session cache write (uses `Kt8`, `V5H` sets/maps, calls `Lt8`, `Dt8`) |
+| `Lt8` | Session store writer (calls `Mo`, `rPH`, `hU`, `$bH`, `_t8.randomUUID`, `RH`, `BXK`, `fo.emit`) |
+| `Dt8` | Session persistence helper (calls `U41`, `uA`, `EJ1`, `jyH`) |
+| `Bz8` | Remote-transport caveat annotator (calls `H.toLowerCase`, `gY7`, `aK6`, `FY7`) |
+| `H` | General-purpose utility namespace (includes `Math.random`, `setTimeout`, `.includes`, `.toLowerCase`) |
+| `gY7` | Post-apply renderer and telemetry emitter (calls `Kzq`, `tK6`, `d`, `A3`, `ifH`) |
+| `Kzq` | Pre-render session-state snapshot builder (calls `A3`, `Jv`) |
+| `Jv` | Session value extractor (calls `A3`) |
+| `tK6` | JSX component tree builder for status view (calls `MWH`, `CA`, `A8`) |
+| `MWH` | Status view wrapper component |
+| `CA` | Settings loader / project-context builder |
+| `EO` | Settings file enumerator |
+| `F6` | File existence checker |
+| `G7_` | Project-settings directory walker |
+| `wE` | Base-path resolver (calls `bp`) |
+| `D8` | ENOENT-safe file reader |
+| `k` | Debug-level logger |
+| `Wh8` | Settings cache writer (`xN6.set` + `Date.now`) |
+| `E6H` | Settings file path builder |
+| `QyH` | Atomic file writer (temp + rename with `fchmod`, `fsync`) |
+| `RH` | JSON serialiser (`JSON.stringify` wrapper) |
+| `C2` | Cache-clear utility (`s06.clear`, `j28.clear`) |
+| `NN6` | Settings append/write helper (mkdir, readFile, appendFile, writeFile) |
+| `xb` | `.claude` directory path joiner |
+| `_A` | Settings merge helper |
+| `fH` | Error logger (`EQ.logError`, `kyH.push`) |
+| `ub` | Settings-load finaliser (calls `Kp`, `_2L`, `$q`, `ZdA`; emits `loadSettingsFromDisk_end`) |
+| `A8` | Conversation/checkpoint manager (calls `Nt8`, `B2`, `H`, `FbH`, `CJ1`, `gbH`, `k`, `k5H`, `uq6`, `d`, `vt8`) |
+| `Nt8` | Checkpoint writer with backup rotation |
+| `FbH` | Conversation serialiser |
+| `CJ1` | Entry-iterator (`Object.entries` wrapper) |
+| `gbH` | Timestamp stamper (`Date.now`) |
+| `k5H` | Config reader with access-guard |
+| `uq6` | Conversation cache accessor |
+| `d` | React/JSX rendering dispatcher |
+| `vt8` | Checkpoint temp-file writer |
+| `FY7` | Full effort-apply flow for non-remote path (calls `MWH`, `Jv`, `Kzq`, `tK6`, `d`, `A3`, `ifH`, `M1A`) |

@@ -2,6 +2,7 @@
 type: feature-spec
 feature: "rename"
 cc_version: "2.1.133"
+updated: "2026-05-31"
 tags: ["rename", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -20,9 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/rename` command sets or generates a title for the current Claude Code conversation session. When called with an explicit name argument it applies that name immediately; when called without an argument it attempts to auto-generate a name from the conversation history using an AI-powered structured-output call. The command is registered as `local-jsx` and executes immediately on entry.
-
----
+The `/rename` command sets the display name of the current conversation session. When invoked with an explicit name argument it applies that name immediately; when invoked without an argument it uses an AI-generated name derived from the conversation history. The command is blocked in swarm teammate sessions, where names are controlled by the team leader.
 
 ## Registration
 
@@ -30,11 +29,20 @@ The `/rename` command sets or generates a title for the current Claude Code conv
 |---|---|
 | type | `local-jsx` |
 | name | `rename` |
-| description | Rename the current conversation |
+| description | `Rename the current conversation` |
 | argumentHint | `[name]` |
 | immediate | `true` |
-| aliases | `name` |
+| aliases | `["name"]` |
 | module_id | `Lqq` |
+| load_inline | `true` |
+| loc_byte | `10776649` |
+| loc_byte_end | `10776848` |
+| loc_line | `6517` |
+| arbor_handler.name | `u57` |
+| arbor_handler.fqn | `claude-2.1.133::u57` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
 Analysis basis: CC v2.1.133 bundle.js:+10776649
 
@@ -42,194 +50,169 @@ Analysis basis: CC v2.1.133 bundle.js:+10776649
 
 ## Input Branching
 
-The top-level handler (`commandEntryPoint`) receives the raw user input string and branches based on whether the argument is present, whether the session is a swarm teammate, and whether there is existing conversation context.
+Four distinct execution paths exist depending on swarm status, argument presence, and conversation context availability. A Mermaid flowchart is used.
 
 ```mermaid
 flowchart TD
-    A(["/rename called"]) --> B{Is session a\nswarm teammate?}
-    B -- Yes --> C["Return error:\n'Cannot rename: This session is a swarm\nteammate. Teammate names are set\nby the team leader.'"]
+    A(["/rename [name] invoked"]) --> B{Is session a\nswarm teammate?}
+    B -- Yes --> C["Return error:\n'Cannot rename: This session is a swarm\nteammate. Teammate names are set by\nthe team leader.'"]
     B -- No --> D{Argument\nprovided?}
-    D -- "Yes (trimmed non-empty)" --> E["Apply name directly\nas custom-title"]
-    D -- "No (empty / omitted)" --> F{Conversation\ncontext exists?}
-    F -- No --> G["Return error:\n'Could not generate a name:\nno conversation context yet.\nUsage: /rename <name>'"]
-    F -- Yes --> H["Call AI title-generation\n(tool: rename_generate_name,\nschema: json_schema → name)"]
-    H --> I["Apply returned name\nas ai-title"]
-    E --> J["Persist title,\nemit tengu_session_renamed"]
-    I --> J
-    J --> K([Done])
+    D -- Yes: explicit name --> E["Trim whitespace from argument\nApply provided name directly"]
+    D -- No: empty argument --> F{Conversation context\navailable?}
+    F -- No context yet --> G["Return error:\n'Could not generate a name: no\nconversation context yet.\nUsage: /rename <name>'"]
+    F -- Context present --> H["Call AI name-generation\n(tool: rename_generate_name)\nwith conversation history summary"]
+    E --> I["Persist name via conversationStorage\nEmit tengu_session_renamed event\nUpdate appState title"]
+    H --> I
+    I --> J([Done])
+    C --> J
+    G --> J
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+10775794, +10775814, +10775919, +10775953, +10776015, +10776122
+Analysis basis: CC v2.1.133 bundle.js:+10775814, +10776015, +10775794, +10775919
 
 ---
 
 ## Behavioral Spec
 
-### Swarm-Teammate Guard
+### Top-level Handler (`u57`)
 
-When the command is invoked, the handler first calls the session-context accessor to retrieve the current store state. If the session is flagged as a swarm teammate the command aborts immediately and surfaces the literal error message to the user, without touching any title state.
+The Arbor-resolved handler for this command is the async function `u57`. It is reached via the `module_id` resolution path through module `Lqq`.
 
 ```
-function swarmGuard(sessionContext):
-    if sessionContext.isSwarmTeammate == true:
-        return errorMessage(
+async function renameCommandHandler(args, context):
+    // Step 1 – retrieve current session state
+    sessionState = getSessionStore()                    // via sessionStoreAccessor → asyncLocalStorageGetStore
+
+    // Step 2 – swarm teammate guard
+    if sessionState.isSwarmTeammate:
+        return errorResult(
             "Cannot rename: This session is a swarm teammate. " +
             "Teammate names are set by the team leader."
         )
-    return CONTINUE
+
+    // Step 3 – branch on whether an explicit name was supplied
+    trimmedArg = args.trim()
+
+    if trimmedArg is non-empty:
+        newName = trimmedArg
+    else:
+        // Step 4 – attempt AI-generated name
+        newName = await generateNameFromContext(context)
+        if newName is null:
+            return errorResult(
+                "Could not generate a name: no conversation context yet. " +
+                "Usage: /rename <name>"
+            )
+
+    // Step 5 – persist and broadcast
+    await persistConversationName(newName)
+    return successResult(newName)
 ```
+
+Analysis basis: CC v2.1.133 bundle.js:+10776346, +10776362, +10776404
+
+---
+
+### Swarm Teammate Guard (`fO8` / inner handler)
+
+Executed immediately after session state is fetched. If the session is identified as a swarm teammate the handler returns early with the fixed error string and never touches the name storage layer.
 
 Analysis basis: CC v2.1.133 bundle.js:+10775814
 
 ---
 
-### Argument Parsing
+### AI Name Generation (`qO8` / name-builder)
 
-The raw argument string is trimmed of leading/trailing whitespace. A non-empty result is treated as the explicit new name; an empty result triggers auto-generation mode.
-
-```
-function parseArgument(rawInput):
-    trimmed = rawInput.trim()
-    if trimmed.length > 0:
-        return { mode: "explicit", name: trimmed }
-    else:
-        return { mode: "auto-generate" }
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+10775919
-
----
-
-### Conversation Context Extraction
-
-Before auto-generation can proceed the handler collects the existing message history by calling the conversation-context builder. It filters messages, assembles role-typed entries (`user`, `assistant`) with their text content, and strips internal meta-messages.
+When no explicit argument is provided the command synthesises a conversation title using a structured AI call.
 
 ```
-function buildConversationContext(messages):
-    result = []
-    for each message in messages:
-        if message.isMeta == true:
-            skip
-        if message.origin == "human":
-            role = "user"
-        else:
-            role = "assistant"
-        textParts = collectTextParts(message)
-        result.push({ role: role, content: textParts.join("") })
-    if result.length == 0:
-        return null          // triggers "no conversation context" error
-    return result
-```
+async function generateNameFromContext(conversationHistory):
+    // Build a summary payload from message history
+    messages = []
+    for msg in conversationHistory:
+        if msg.role in ["user", "assistant"] and not msg.isMeta:
+            if msg.origin == "human" and msg.type == "text":
+                messages.push(summariseMessage(msg))
 
-Relevant string literals observed: `"user"`, `"assistant"`, `"isMeta"`, `"origin"`, `"human"`, `"type"`, `"text"`.
+    if messages is empty:
+        return null                        // triggers "no context yet" error
 
-Analysis basis: CC v2.1.133 bundle.js:+10772702, +10772719, +10772743, +10772778, +10772818, +10772936, +10772957
-
----
-
-### Auto-Generate Name via AI
-
-When no argument is supplied and conversation context is available, the handler issues a structured AI request using the tool name `rename_generate_name` and a `json_schema` response format whose single required property is `name` (string). The response is then extracted and used as the generated title.
-
-```
-function autoGenerateName(conversationContext):
-    if conversationContext == null:
-        return error("Could not generate a name: no conversation context yet. " +
-                     "Usage: /rename <name>")
-
-    request = {
-        tool: "rename_generate_name",
-        responseFormat: {
-            type: "json_schema",
-            schema: { properties: { name: { type: "string" } } }
-        },
-        messages: conversationContext
+    // Invoke model with tool schema requesting a single JSON name field
+    toolSchema = {
+        type: "json_schema",
+        name: "rename_generate_name"       // tool name literal at +10775218
     }
-    response = await callAI(request)
+
+    response = await runAgentQuery(
+        messages  = messages,
+        toolSchema = toolSchema
+    )
+
     generatedName = response.name
     return generatedName
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+10775074, +10775154, +10775218, +10776015
+Key literals observed in the name-builder path:
+- Tool schema type: `"json_schema"` (bundle.js:+10775074)
+- Tool schema name: `"rename_generate_name"` (bundle.js:+10775218)
+- Message role filters: `"user"`, `"assistant"` (bundle.js:+10772702, +10772719)
+- Message metadata filter key: `"isMeta"` (bundle.js:+10772743)
+- Origin filter value: `"human"` (bundle.js:+10772818)
+- Content type filter: `"text"` (bundle.js:+10772957)
+
+Analysis basis: CC v2.1.133 bundle.js:+10772882, +10772900, +10772998, +10773030
 
 ---
 
-### Applying the Title
+### Conversation Persistence (`unH` / storage writer)
 
-Once a name is determined (explicit or generated), the handler calls the session-title persistence layer. Two distinct title-type strings exist: `"custom-title"` is written for explicitly supplied names; `"ai-title"` is written for AI-generated names. After writing, the function emits the `NP6` event bus signal and fires telemetry.
+After a valid name is determined (either explicit or AI-generated), the persistence layer is invoked.
 
 ```
-function applyTitle(titleType, name, sessionId):
-    // titleType is either "custom-title" or "ai-title"
-    writeSessionTitle(sessionId, titleType, name)
-    eventBus.emit("session_renamed", { sessionId, name, source: titleType })
-    emitTelemetry("tengu_session_renamed")
+async function persistConversationName(name):
+    // Delegates to lower-level conversation file writer
+    await conversationStorageUpdate(name)           // unH → wv path
+    await conversationFileWrite(name)               // wv → Ff8 path (SHA-1 keyed file, utf8)
+    emitEvent("tengu_session_renamed")              // zm → NP6.emit
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11830546, +11830625, +11830638, +11830710
+The file write path (`Ff8`) performs:
+1. Computes a SHA-1 hex digest (first 6 chars) as the storage key (bundle.js:+9379332, +9379361, +9379376).
+2. Reads existing file if present (`d9H.readFile`, bundle.js:+9379417); creates a fresh UUID if absent (`bw6.randomUUID`, bundle.js:+9379513).
+3. Writes updated content via `d9H.writeFile` after ensuring the directory exists via `d9H.mkdir` (bundle.js:+9379827, +9379874).
+4. Encoding used: `"utf8"` (bundle.js:+9379442).
+5. Error code `"ENOENT"` is handled gracefully (bundle.js:+9379552).
+
+Analysis basis: CC v2.1.133 bundle.js:+10774712, +10774753, +10774770
 
 ---
 
-### Agent-Name Path
+### Title-type Tagging (`zm` / log writer)
 
-A parallel code path (`agentNameSetter`) writes an `"agent-name"` record and fires a separate telemetry event. This path is reached when the session being renamed is an agent session rather than a plain conversation session.
+When the session name is written to the persistent log, the source of the title is tagged:
 
-```
-function setAgentName(agentId, name):
-    writeAgentTitle(agentId, "agent-name", name)
-    eventBus.emit("agent_name_set", { agentId, name })
-    emitTelemetry("tengu_agent_name_set")
-```
+- `"custom-title"` — applied when the name was provided explicitly by the user (bundle.js:+11830546).
+- `"ai-title"` — applied when the name was produced by the AI generation path (bundle.js:+11830710).
 
-Analysis basis: CC v2.1.133 bundle.js:+11832776, +11832861, +11832874
+This tag travels alongside the `tengu_session_renamed` telemetry event and is written via `wVH` (append-file writer).
+
+Analysis basis: CC v2.1.133 bundle.js:+11830525, +11830534, +11830598, +11830625
 
 ---
 
-### Standalone Agent Context
+### AppState / UI Update (`IZH` / state dispatcher)
 
-After the primary rename action completes, the handler calls `setStandaloneAgentContext`, updating any standalone-agent state that references the session name.
-
-Analysis basis: CC v2.1.133 bundle.js:+10776154
-
----
-
-### File System Context (dfH / Context-Loader)
-
-The call graph shows the command reaching a file-system context-loading subsystem (`contextFileLoader`). This subsystem resolves working-directory paths, stat-checks files, reads UTF-8 content, manages a file-cache (`QfH`), and enforces a cache limit of **1 000 entries** (bundle.js:+3882301). File reads use encoding `"utf-8"` (bundle.js:+3881837). Path depth is truncated at **8 levels** (bundle.js:+3880802). This subsystem feeds conversation context used by the auto-generate path.
+After the file write succeeds, the session title is pushed into the reactive application state so the UI re-renders with the new name.
 
 ```
-function loadContextFiles(workingDir, filePaths):
-    resolvedPaths = filePaths.slice(0, MAX_DEPTH)   // MAX_DEPTH = 8
-    stats = await Promise.all(resolvedPaths.map(p => fs.stat(p)))
-    results = []
-    for each (path, stat) in zip(resolvedPaths, stats):
-        cached = fileCache.get(path)
-        if cached and cached.mtime == stat.mtime:
-            results.push(cached.content)
-            continue
-        content = await fs.readFile(path, "utf-8")
-        fileCache.set(path, { mtime: stat.mtime, content })
-        if fileCache.size > 1000:
-            fileCache.clear()
-        results.push(content)
-    return results
+function dispatchTitleUpdate(name, titleType):
+    currentState = reactiveStateStore.get()
+    newState = Object.assign({}, currentState, { title: name, titleType: titleType })
+    reactiveStateStore.set(newState)
+    // Optional: emit NP6 event for downstream listeners
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+3881424, +3881437, +3881823, +3881837, +3882089, +3882144, +3882201, +3882301
-
----
-
-### Error Logging
-
-Any unhandled exception during the rename flow is passed to `yQ.logError`, and an `"error"`-level log entry is written to the session log ring-buffer (`cyH`).
-
-```
-function onRenameError(err):
-    logRingBuffer.push({ level: "error", message: err.message })
-    logger.logError(err)
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+10775504, +912861, +912821
+Analysis basis: CC v2.1.133 bundle.js:+8975741, +8975779, +8975926
 
 ---
 
@@ -237,14 +220,13 @@ Analysis basis: CC v2.1.133 bundle.js:+10775504, +912861, +912821
 
 | Item | Detail |
 |---|---|
-| Telemetry — session renamed | `tengu_session_renamed` fired after every successful rename (custom or AI-generated) — bundle.js:+11830638 |
-| Telemetry — agent name set | `tengu_agent_name_set` fired when an agent-session name is applied — bundle.js:+11832874 |
-| Telemetry — MCP retry failed | `tengu_mcp_retry_failed_remote` may fire during the AI call if the underlying MCP remote connection retries exhausted — bundle.js:+13870729 |
-| Title record type | Either `"custom-title"` (explicit arg) or `"ai-title"` (generated) written to session store — bundle.js:+11830546, +11830710 |
-| Agent-name record | `"agent-name"` record written separately for agent sessions — bundle.js:+11832776 |
-| Event bus | `NP6.emit` triggered on session rename; `qxA.emit` triggered on agent-name set — bundle.js:+11830625, +11832861 |
-| Standalone-agent context | `setStandaloneAgentContext` called to propagate new name — bundle.js:+10776154 |
-| File cache | `QfH` (Map) populated/cleared during context loading; cleared when size exceeds 1 000 — bundle.js:+3882089, +3882306 |
+| Telemetry — `tengu_session_renamed` | Fired on every successful rename (explicit or AI-generated). loc: bundle.js:+11830638 |
+| Telemetry — `tengu_agent_name_set` | Fired when the agent-name field is updated as a side-effect of rename. loc: bundle.js:+11832874 |
+| Telemetry — (API pipeline events) | If the AI name-generation path is taken, the full query pipeline fires: `tengu_off_switch_query`, `tengu_api_before_normalize`, `tengu_api_after_normalize`, and streaming-related events as applicable. |
+| Conversation storage | SHA-1 keyed JSONL/text file under the CC data directory is updated with new name and `titleType` tag. |
+| AppState changes | Session title field in reactive store is updated immediately; UI header re-renders. |
+| Title-type tag | `"custom-title"` for user-supplied names; `"ai-title"` for AI-generated names. |
+| Swarm guard | No storage or state changes occur if the session is a swarm teammate; an error string is returned instead. |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 
@@ -254,17 +236,21 @@ Analysis basis: CC v2.1.133 bundle.js:+10775504, +912861, +912821
 
 | Version | Change |
 |---|---|
-| v2.1.133 | Initial analysis — explicit rename, AI auto-generation, swarm-teammate guard, agent-name path |
+| v2.1.133 | Initial analysis. `immediate: true` flag; alias `name`; AI name-generation via `rename_generate_name` JSON-schema tool; swarm teammate guard with hardcoded error string. |
 
 ---
 
 ## Common Mistakes
 
-1. **Calling `/rename` without arguments in a fresh session** — If no messages have been exchanged yet, auto-generation cannot proceed and returns the error `"Could not generate a name: no conversation context yet. Usage: /rename <name>"`. Always supply an explicit name when starting a new session.
-2. **Attempting to rename a swarm teammate session** — Sessions acting as swarm teammates reject the command entirely; the rename must be issued from the team-leader session instead.
-3. **Expecting the alias `/name` to behave differently** — The alias `name` is identical to `rename` in every respect; there is no behavioral difference.
-4. **Assuming the title is written synchronously** — The AI auto-generation path is asynchronous (`Promise.resolve`, `await`). UI updates may lag behind the command returning in rapid-fire test scenarios.
-5. **Conflating `custom-title` and `ai-title` records** — These are distinct record types in the session store. External tooling that reads session metadata must handle both keys to reliably retrieve the current display name.
+1. **Calling `/rename` with no argument before any messages exist** — the command requires at least one non-meta user or assistant message in history to generate an AI title. If the conversation is empty the command returns the error `"Could not generate a name: no conversation context yet. Usage: /rename <name>"` (bundle.js:+10776015). Supply an explicit name instead.
+
+2. **Attempting to rename inside a swarm teammate session** — teammate names are controlled exclusively by the swarm team leader. Running `/rename` in a teammate session returns a hard error and makes no changes (bundle.js:+10775814).
+
+3. **Assuming the alias `/name` behaves differently** — `/name` is registered as a full alias and follows the identical code path; there is no behavioral difference.
+
+4. **Expecting synchronous completion in the AI-generation path** — when no argument is supplied, the command is asynchronous and invokes a model query. In slow-network or high-load conditions this path may take several seconds before the title is updated.
+
+5. **Expecting the title to be persistent across reinstalls without data migration** — the title is stored in a SHA-1-keyed file in the CC data directory. Deleting or moving the data directory will lose custom titles.
 
 ---
 
@@ -274,39 +260,112 @@ Analysis basis: CC v2.1.133 bundle.js:+10775504, +912861, +912821
 
 | Identifier | Role |
 |---|---|
-| `KO8` | Session-context reader — reads current session state from store |
-| `v2` | Store-accessor helper used by session-context reader |
-| `fO8` | Primary rename command handler — orchestrates all sub-steps |
-| `m7` | Session-store getter — retrieves active session object |
-| `pP` | Store accessor wrapper called by session-store getter |
-| `H` | General utility object / namespace (trim, map, includes, random, setTimeout) |
-| `unH` | Conversation-context builder — assembles filtered message list |
-| `qO8` | Message-list formatter — role-types and joins message parts |
-| `wv` | AI structured-output request dispatcher |
-| `dq` | Request serializer / transport helper |
-| `NL` | Message filter — removes meta/system entries |
-| `k` | String-normalization utility (trim, toUpperCase, includes checks) |
-| `vH` | String coercion wrapper (calls native `String()`) |
-| `v6` | Async/await runtime helper |
-| `IZH` | Title-persistence coordinator — routes to custom-title or ai-title writer |
-| `il` | Title-type selector helper |
-| `ef` | Custom-title writer — writes `"custom-title"` record |
-| `zm` | AI-title writer — writes `"ai-title"` record and emits `NP6` event |
-| `rt` | AI-title fallback writer — alternate path for `"ai-title"` |
-| `ly` | Post-write cleanup helper |
-| `dl` | Promise-chain helper in title-persistence coordinator |
-| `M` | MCP/remote-call orchestrator reached during AI generation |
-| `Qt` | Response-extraction helper in title-persistence coordinator |
-| `R9H` | Agent-name writer — writes `"agent-name"` record and emits `qxA` event |
-| `oM` | Error-record constructor |
-| `EU` | Timestamp utility (wraps `Date.now`) |
-| `A` | App-state / context object (push, setStandaloneAgentContext, toUpperCase) |
-| `dfH` | Context-file loader — resolves paths, stats, caches, reads UTF-8 files |
+| `u57` | Top-level rename command handler (AsyncFunction; Arbor-resolved) |
+| `fO8` | Inner rename execution function; performs swarm guard, arg trim, and name application |
+| `KO8` | Session-state accessor called at entry of handler |
+| `v2` | Async local storage / context store getter |
+| `m7` | Session store retrieval helper |
+| `pP` | Calls `Qg8.getStore` — reads the async local storage slot |
+| `unH` | Conversation name persistence orchestrator |
+| `qO8` | Name-builder / message-history summariser for AI generation |
+| `wv` | Conversation file write coordinator |
+| `Ff8` | Low-level conversation file write (SHA-1 key, readFile/writeFile) |
+| `dq` | Shared conversation data accessor / queue helper |
+| `HVH` | Agent query runner wrapper (wraps `i2q`) |
+| `NZA` | Conversation state normaliser used before query |
+| `i2q` | Core agent query execution loop (streaming + non-streaming) |
+| `KX` | HTTP client constructor helper |
+| `URH` | Underlying HTTP transport builder |
+| `GW` | Response handler / post-query side-effect dispatcher |
+| `NL` | Message history filter helper |
+| `IZH` | Reactive app-state dispatcher (pushes title into UI store) |
+| `zm` | Session log / title-tag appender (writes `custom-title` / `ai-title`) |
+| `wVH` | Low-level append-file writer with mkdir guard |
+| `RK` | State persistence helper called from log writer |
+| `rt` | Alternate log-write path (reuses `wVH` + `HN`) |
+| `HN` | Log-line formatter |
+| `ef` | Log entry constructor helper |
+| `R9H` | Session rename event emitter (fires `tengu_session_renamed` via `qxA.emit`) |
+| `EU` | Conversation metadata read/write helper |
+| `nA6` | File read-then-write helper used by `EU` |
+| `M` | MCP server / session manager (reached during context load) |
+| `iZH` | MCP connection registry and tool enumeration |
+| `mFq` | MCP update applier |
+| `Og7` | MCP remote-server reconnect/refresh orchestrator |
+| `dfH` | Agent context builder (working directory, file listing) |
 | `xL` | Working-directory path resolver |
-| `vW` | Basename extractor for file paths |
-| `r9` | File-read-and-cache worker — stat → cache-check → readFile → cache-set |
-| `lP` | Cache-entry invalidator (`QfH.delete`) |
-| `Pf` | File-permission / existence checker |
-| `D8` | ENOENT error classifier |
-| `fH` | Log-ring-buffer writer and error logger |
-| `u57` | Top-level command entry-point component (JSX render function) |
+| `vW` | Basename extractor for context display |
+| `r9` | Workspace file stat/cache helper |
+| `lP` | File-cache invalidation helper |
+| `Pf` | Atomic file write helper (random bytes + rename) |
+| `iY` | Atomic write implementation (randomBytes → writeFile → rename) |
+| `D8` | Error classifier helper |
+| `fH` | Error logging / reporting helper |
+| `HA` | Error coercer (Error + String normalisation) |
+| `yq` | Structured error formatter |
+| `J9_` | Inner error key formatter |
+| `NJL` | Error history ring-buffer manager |
+| `vtq` | Transcript/log file writer with rotation logic |
+| `uNH` | Buffered write scheduler (setTimeout / setImmediate based) |
+| `aHH` | Transcript flush helper |
+| `AiA` | File rename/unlink helper (`.txt` extension handling) |
+| `Vtq` | Append-to-log-file helper (mkdir + appendFile) |
+| `dG8` | Write-error handler |
+| `_iA` | Log-file path builder |
+| `y1` | Active-write-set tracker (add/delete on `d08`) |
+| `vH` | String coercion utility |
+| `v6` | Void / no-op sentinel or unit value |
+| `il` | Inline JSX renderer helper |
+| `ly` | Lazy-load helper |
+| `dl` | Deferred-load helper |
+| `k` | Terminal output formatter / ANSI renderer |
+| `Uf` | ANSI strip / plain-text converter |
+| `rnA` | ANSI sequence mapper |
+| `LkH` | Terminal write wrapper |
+| `UnA` | Raw `H.write` (stdout) wrapper |
+| `Ztq` | Terminal control-sequence emitter |
+| `xcA` | Cursor positioning helper |
+| `F6` | Path utilities / format helper |
+| `SH` | `JSON.stringify` wrapper |
+| `p6` | `JSON.parse` wrapper |
+| `kH` | `String()` coercion wrapper |
+| `AA` | Array / collection factory |
+| `J6` | React rendering / JSX component emitter |
+| `Po` | JSX element constructor |
+| `_d6` | Component-instance deduplication cache |
+| `R6` | Component scheduler / update batcher |
+| `K8` | MCP debug logger |
+| `T7` | MCP error logger |
+| `so4` | MCP session initialiser |
+| `gZA` | MCP OAuth flow handler |
+| `QZA` | MCP OAuth callback handler |
+| `Yl9` | MCP capabilities/config file writer |
+| `BZA` | MCP server config reader |
+| `kJA` | MCP server include-list checker |
+| `G98` | Tool permission context builder |
+| `XG` | Message normalisation / content-block processor |
+| `wr4` | Image/attachment content mapper |
+| `N6` | Content-block join helper |
+| `rd9` | Conversation record deserialiser |
+| `Bf8` | Conversation record constructor |
+| `$8` | UUID-tagged object factory |
+| `XDq` | Timestamp/session-id factory |
+| `Bq6` | JSX text node builder |
+| `gq6` | JSX fragment builder |
+| `DlH` | MCP diagnostic log writer |
+| `XM8` | MCP state serialiser |
+| `hI` | MCP connection cleanup helper |
+| `$l9` | MCP metric aggregator |
+| `_J6` | Integer parser (parseInt wrapper) |
+| `fIA` | Integer parser variant |
+| `oM` | IPC/RPC channel manager |
+| `RwH` | IPC message router |
+| `Qt` | Promise-queue / concurrency limiter |
+| `T98` | Tool permission set checker |
+| `r8` | HTTP retry / timeout wrapper |
+| `nA6` | (see above — EU sub-helper) |
+| `EU` | Conversation metadata read/write helper |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

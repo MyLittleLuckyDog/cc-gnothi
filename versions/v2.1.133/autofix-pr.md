@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "autofix-pr"
 cc_version: 2.1.133
-updated: "2026-05-18"
+updated: "2026-05-31"
 tags: ["autofix-pr", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -22,7 +22,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/autofix-pr` command instructs Claude Code to continuously monitor the pull request associated with the current branch, detect any failing checks, linting errors, or review-blocking issues, and attempt to resolve them automatically. It operates as a local JSX-rendered slash command and is surfaced directly in the Claude Code interactive CLI. The core mechanism combines PR status polling with an agentic repair loop that applies code changes and re-pushes until all checks pass or a terminal condition is reached.
+`/autofix-pr` is a local-JSX slash command that monitors the current pull request for issues (such as failing CI checks, linting errors, or review feedback) and autonomously attempts to resolve them. The command operates in-process via an inline `load` handler resolved directly from the registration block. Because the call graph is empty at depth ≤ 2 (see note below), full behavioral detail beyond what the registration object exposes cannot be confirmed without a deeper traversal.
 
 ---
 
@@ -33,8 +33,18 @@ The `/autofix-pr` command instructs Claude Code to continuously monitor the pull
 | type | `local-jsx` |
 | name | `autofix-pr` |
 | description | `Monitor and autofix any issues with the current PR` |
-| argumentHint | `null` (no argument expected) |
+| argumentHint | *(null — no argument hint declared)* |
+| isHidden | *(null — command is visible in the slash-command menu)* |
+| load\_inline | `true` — handler is inlined directly in the registration object |
+| handler (arbor) | `load` method resolved via `direct` path (`claude-2.1.132::load`) |
+| loc\_byte span | `+9781195` … `+9781478` |
 | loc\_line | 5470 |
+| `loc_byte_end` | `9781478` |
+| `arbor_handler.name` | `load` |
+| `arbor_handler.kind` | `Method` |
+| `arbor_handler.resolution_path` | `direct` |
+| `arbor_handler.fqn` | `claude-2.1.132::load` |
+| `arbor_handler.n_hits` | `3` |
 
 Analysis basis: CC v2.1.132 bundle.js:+9781195
 
@@ -42,92 +52,59 @@ Analysis basis: CC v2.1.132 bundle.js:+9781195
 
 ## Input Branching
 
-The AST traversal at depth ≤ 2 did not resolve any entry-function edges for this command's implementation module (see `"note": "no entry functions found for module 'undefined'"`). As a result, internal branching logic cannot be stated as verified fact from the extracted data.
+Because `callGraph` returned empty at depth ≤ 2, no branching paths could be extracted from static traversal. The registration type is `local-jsx` with an inline `load` handler, which means the command renders a JSX component rather than dispatching to a separate module function. The branching logic lives inside the inlined method body that the depth-2 BFS did not traverse.
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-The following flowchart represents the **structurally expected** behavior for a command of this registration type (`local-jsx`) combined with its declared purpose. Every node that cannot be directly cited from the AST data is marked `[inferred]`.
+The following flowchart represents the minimal verified control flow derived from registration metadata alone:
 
 ```mermaid
 flowchart TD
-    A([User invokes /autofix-pr]) --> B{Git repo detected?}
-    B -- No --> C[Display error: not inside a git repository\n[inferred]]
-    B -- Yes --> D{Remote PR exists for current branch?}
-    D -- No --> E[Display error: no open PR found for branch\n[inferred]]
-    D -- Yes --> F[Fetch current PR status and check results\n[inferred]]
-    F --> G{All checks passing?}
-    G -- Yes --> H[Report: PR is already healthy — nothing to fix\n[inferred]]
-    G -- No --> I[Enumerate failing checks / lint errors / review blocks\n[inferred]]
-    I --> J[Enter agentic repair loop\n[inferred]]
-    J --> K[Apply targeted code edits\n[inferred]]
-    K --> L[Stage and commit changes\n[inferred]]
-    L --> M[Push to remote branch\n[inferred]]
-    M --> N{Re-check PR status}
-    N -- Still failing --> O{Retry limit reached?\n[inferred]}
-    O -- No --> J
-    O -- Yes --> P[Report: could not fully autofix — show remaining issues\n[inferred]]
-    N -- All passing --> Q[Report: PR fully fixed and passing\n[inferred]]
+    A([User invokes /autofix-pr]) --> B{load_inline resolved?}
+    B -- yes --> C[Execute inline load handler\n'claude-2.1.132::load']
+    B -- no --> D[Command fails to register]
+    C --> E[Render local-JSX component\nMonitor current PR for issues]
+    E --> F{Issues detected?}
+    F -- yes --> G[Attempt autofix\n<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->]
+    F -- no --> H[Report PR is clean]
+    G --> I[Present results to user]
+    H --> I
 ```
 
-> **Note:** All nodes marked `[inferred]` are structural expectations derived from the command description and `local-jsx` type contract. They are **not** confirmed by the depth-2 AST extraction.
+> **Note:** Paths `F → G` and beyond are inferred from the command description string (`"Monitor and autofix any issues with the current PR"`). They are not confirmed by static callGraph data. See *Common Mistakes* §3.
 
 ---
 
 ## Behavioral Spec
 
-Because the AST traversal returned an empty `callGraph`, empty `literals`, and empty `telemetry` array, no sub-feature pseudocode can be stated as bundle-verified behavior at this time.
+### Handler Resolution
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-### Command Entry Point (Registration Contract)
-
-The following pseudocode describes what is verifiably known: the command is registered as a `local-jsx` type, accepts no argument (`argumentHint` is null), and is presented to the user with its description string.
+The `load` method is declared as an inline ObjectMethod on the registration object itself (resolution path: `direct`). The runtime resolves it without following a `module_id` or a `load_ident` indirection.
 
 ```
-function registerAutofixPrCommand():
-    register({
-        type:        "local-jsx",
-        name:        "autofix-pr",
-        description: "Monitor and autofix any issues with the current PR",
-        argumentHint: null
-    })
+function resolveHandler(registrationObject):
+    // Arbor confirmed handler at registration byte span +9781195..+9781478
+    handler = registrationObject.load   // direct resolution, n_hits = 3
+    return handler
 ```
 
 Analysis basis: CC v2.1.132 bundle.js:+9781195
 
-### PR Monitoring and Repair Loop (Inferred Structure)
+### Command Dispatch
 
 ```
-// [inferred — not confirmed by depth-2 traversal]
-function autofixPr(context):
-    repo = detectGitRepository(context)
-    if repo is absent:
-        return displayError("not inside a git repository")
-
-    pr = fetchOpenPullRequest(repo.currentBranch)
-    if pr is absent:
-        return displayError("no open PR found for current branch")
-
-    issues = collectFailingChecks(pr)
-    if issues is empty:
-        return displaySuccess("PR is already healthy")
-
-    attempt = 0
-    while issues is not empty:
-        attempt += 1
-        if attempt exceeds retryLimit:
-            return displayPartialFailure(issues)
-
-        edits = generateRepairEdits(issues)
-        applyEdits(edits)
-        stageAndCommit(edits)
-        pushToRemote(repo)
-        issues = collectFailingChecks(refreshPullRequest(pr))
-
-    return displaySuccess("PR fully fixed and all checks passing")
+function dispatchAutofixPr(userInput, appState):
+    handler = resolveHandler(AUTOFIX_PR_REGISTRATION)
+    component = handler.call(userInput, appState)
+    // Returns a local-JSX renderable; UI mounts it in the command panel
+    renderCommandPanel(component)
 ```
 
-<!-- TODO: retryLimit value not found in depth-2 traversal; needs --depth 4 -->
+Analysis basis: CC v2.1.132 bundle.js:+9781195
+
+### PR Monitoring and Autofix Logic
+
+<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+
+The description string establishes that the command's purpose is to (a) monitor the current PR and (b) apply fixes to detected issues. The concrete implementation — what signals it monitors (CI status, linting, test failures, review comments), how it determines fixability, and how it commits or proposes changes — is located in the inlined JSX component body that was not reachable at traversal depth ≤ 2.
 
 ---
 
@@ -135,12 +112,14 @@ function autofixPr(context):
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected in depth-2 traversal <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | *(none found — `telemetry` array is empty at depth ≤ 2)* |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Git side effects | Expected: commits pushed to remote branch `[inferred]` |
-| File system side effects | Expected: source files modified in working tree `[inferred]` |
+| Render target | Local-JSX panel (inferred from `type: "local-jsx"`) |
+| Inline load | `load_inline: true` — no dynamic import; handler is synchronously available at registration time |
+
+Analysis basis: CC v2.1.132 bundle.js:+9781195
 
 ---
 
@@ -148,17 +127,19 @@ function autofixPr(context):
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis — registration confirmed at bundle.js:+9781195; implementation module unresolved at depth-2 traversal |
+| v2.1.132 | Initial analysis — registration confirmed; call graph empty at depth ≤ 2 |
 
 ---
 
 ## Common Mistakes
 
-1. **Invoking the command outside a git repository.** The command's purpose requires an active git context with a remote. Running it in a plain directory will produce an error before any PR monitoring can begin.
-2. **Invoking without an open PR on the current branch.** If the current branch has no associated open pull request on the configured remote, the command has nothing to monitor. Create or push the PR first.
-3. **Passing an argument.** The `argumentHint` field is `null`, indicating the command takes no inline argument. Any text typed after `/autofix-pr` may be silently ignored or cause unexpected behavior depending on the CLI argument parser.
-4. **Expecting fully silent operation.** As a `local-jsx` command, the command renders output directly in the interactive CLI session. It is not designed for unattended background execution without a live terminal.
-5. **Assuming idempotent commits.** Each repair iteration may produce one or more commits on the branch. Repeated invocations on a partially-fixed PR will layer additional commits rather than amending the previous repair commit.
+1. **Assuming the command operates on any branch.** The description explicitly says "the current PR" — the command targets whatever PR is associated with the active working directory's checked-out branch. Invoking it in a repository with no open PR will likely result in an error or no-op (exact behavior <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->).
+
+2. **Expecting a prompt-type or agent-loop invocation.** This command is registered as `local-jsx`, not `prompt`. It renders a JSX UI component rather than sending a prompt body to the agent loop. Do not expect it to behave identically to prompt-based commands.
+
+3. **Relying on the autofix sub-steps described in public documentation without verifying against bundle data.** The call graph at depth ≤ 2 is empty; any claim about specific fix strategies (e.g., re-running linters, amending commits, pushing fixup commits) is unverified at this analysis depth and may change across minor versions.
+
+4. **Treating `n_hits: 3` on the Arbor handler as indicating three separate handlers.** The `n_hits` count reflects how many times Arbor encountered the `load` symbol name within the resolution path, not the number of independent handler functions.
 
 ---
 
@@ -168,4 +149,10 @@ function autofixPr(context):
 
 | Identifier | Role |
 |---|---|
-| *(none)* | The depth-2 AST traversal returned an empty `identifiers` array for this command. No obfuscated identifiers were resolved. <!-- TODO: needs --depth 4 --> |
+| `load` | Inline ObjectMethod handler for `/autofix-pr`; resolved via Arbor `direct` path at `claude-2.1.132::load` (byte span +9781195..+9781478) |
+
+> No additional obfuscated identifiers were found — the `identifiers` array returned empty at depth ≤ 2 traversal.
+
+---
+
+**Extraction note:** The AST extraction log records `"no entry functions found (no module_id / load_ident / handler_method / arbor_handler on registration)"` — this reflects the BFS pipeline's view before Arbor's `direct` resolution of the `load` method was applied. Arbor did resolve a handler (`claude-2.1.132::load`, n\_hits = 3); all behavioral claims above are grounded in that resolution and the registration metadata. Call-graph depth ≥ 3 data was not available for this analysis pass.

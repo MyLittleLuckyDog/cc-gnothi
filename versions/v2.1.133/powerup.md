@@ -2,8 +2,8 @@
 type: feature-spec
 feature: "powerup"
 cc_version: 2.1.133
+updated: "2026-05-31"
 tags: ["powerup", "commands", "slash-commands"]
-updated: "2026-05-18"
 source: "bundle-analysis"
 bundle_verified: true
 inherited_from: 2.1.132
@@ -22,7 +22,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-`/powerup` is a local JSX slash command that delivers quick interactive lessons to help users discover Claude Code features. When invoked, it renders a JSX component that injects a system-role message into the conversation and triggers a randomised timing mechanism to orchestrate lesson delivery.
+`/powerup` is a local-jsx slash command that delivers quick interactive lessons to help users discover Claude Code features. When invoked, it renders a JSX component in the terminal UI and triggers a timed animation or display sequence driven by a randomized delay, surfacing feature highlights in a lightweight, self-contained presentation.
 
 ---
 
@@ -33,7 +33,16 @@ license: "AGPL-3.0-only"
 | type | `local-jsx` |
 | name | `powerup` |
 | description | `Discover Claude Code features through quick interactive lessons` |
-| module\_id | `f9q` |
+| module_id | `f9q` |
+| load_inline | `true` |
+| handler | `e47` (AsyncFunction; resolved via `module_id` path) |
+| loc_byte span | `10750140` – `10750320` |
+| `loc_byte_end` | `10750320` |
+| `arbor_handler.name` | `e47` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::e47` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.132 bundle.js:+10750140
 
@@ -41,91 +50,90 @@ Analysis basis: CC v2.1.132 bundle.js:+10750140
 
 ## Input Branching
 
-The command takes no user-supplied arguments. All branching is driven by internal state after the component mounts.
+The command accepts no user-supplied arguments in the depth-2 traversal data. Its execution path is linear: invoke the handler, render the JSX component, then schedule a timed side-effect.
 
 ```mermaid
 flowchart TD
-    A[User types /powerup] --> B[CLI resolves command as local-jsx]
-    B --> C[Render JSX component — commandRenderer]
-    C --> D[Inject system-role message into conversation]
-    D --> E[Call lessonScheduler]
-    E --> F{Math.random result}
-    F -->|value mapped to index 0| G[Schedule lesson slot 0 via setTimeout]
-    F -->|value mapped to index 1| H[Schedule lesson slot 1 via setTimeout]
-    G --> I[Deliver interactive lesson content]
-    H --> I
+    A["/powerup invoked"] --> B["Handler: asyncPowerupHandler (e47)"]
+    B --> C["createElement: build JSX lesson component"]
+    B --> D["Inject 'system' role message"]
+    C --> E["renderAnimation (H)"]
+    E --> F{"Math.random() * 2"}
+    F -->|"result < 1"| G["Short delay branch\n(setTimeout, lower bound)"]
+    F -->|"result >= 1"| H_node["Longer delay branch\n(setTimeout, upper bound)"]
+    G --> I["Display feature lesson UI"]
+    H_node --> I
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+10750014, +10750049, +12264283, +12264285, +12264299, +12264322
+Analysis basis: CC v2.1.132 bundle.js:+10750014 (createElement call), +10750049 (renderAnimation call), +10750062 (system literal), +12264283 (random multiplier), +12264299 (threshold), +12264285 (Math.random), +12264322 (setTimeout)
 
 ---
 
 ## Behavioral Spec
 
-### Command Renderer
+### Handler Entry Point
+
+The primary handler (`asyncPowerupHandler`) is an `AsyncFunction` resolved from module `f9q` via the `module_id` resolution path. It is loaded inline (no separate dynamic import boundary at invocation time).
 
 ```
-function commandRenderer(props):
-    element = createElement(lessonComponent, props)
-    return element
+async function asyncPowerupHandler(context):
+    lessonComponent = createElement(LessonView, props)
+    scheduleAnimation(lessonComponent)
+    emit system-role message to conversation context
+    return lessonComponent
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+10750014
+Analysis basis: CC v2.1.132 bundle.js:+10750014, +10750049, +10750062
 
----
+### JSX Component Rendering
 
-### System Message Injection
-
-When the JSX component mounts, it injects a message with role `"system"` into the active conversation context. This message is used to prime the model with context relevant to the interactive lesson that is about to be delivered.
+`asyncPowerupHandler` calls the framework's `createElement` function (aliased as `FkA.createElement`) to construct a JSX tree representing the interactive lesson view. This is a **local-jsx** command, meaning the rendered output is displayed directly in the CLI UI rather than forwarded to the agent as a prompt string.
 
 ```
-function injectSystemMessage(conversationContext):
-    message = buildMessage(role = "system", content = lessonPrompt)
-    conversationContext.prepend(message)
-    return conversationContext
+function buildLessonComponent(props):
+    return createElement(LessonView, {
+        role: "system",
+        ...props
+    })
 ```
+
+Analysis basis: CC v2.1.132 bundle.js:+10750014 (createElement), +10750062 ("system" role literal)
+
+### System-Role Message Injection
+
+A string literal `"system"` is passed as the role designator at invocation time. This indicates that the lesson display message is injected into the conversation context under the `system` role rather than as a user or assistant turn.
 
 Analysis basis: CC v2.1.132 bundle.js:+10750062
 
----
+### Randomized Animation / Display Timing
 
-### Lesson Scheduler
+The helper function (`renderAnimation`) introduces a randomized timing delay before the lesson content becomes fully visible. The mechanism:
 
-The lesson scheduler selects one of two lesson slots using a uniform random draw and schedules delivery via `setTimeout`. The two discrete slot indices (0 and 1) correspond to distinct lesson content paths.
+1. Generate a floating-point value via `Math.random()`.
+2. Multiply by the constant `2` to produce a value in the range `[0, 2)`.
+3. Compare against the threshold `1`:
+   - Values in `[0, 1)` resolve to a shorter display delay.
+   - Values in `[1, 2)` resolve to a longer display delay.
+4. Pass the selected delay to `setTimeout` to schedule the reveal.
 
 ```
-function lessonScheduler():
-    slotCount = 2                          // total available slots
-    slotIndex = floor(Math.random() * slotCount)   // 0 or 1
+function renderAnimation(component):
+    raw = Math.random()          // uniform [0, 1)
+    scaled = raw * 2             // scale constant: 2  (bundle.js:+12264283)
+    threshold = 1                // split point       (bundle.js:+12264299)
 
-    if slotIndex == 0:
-        delayMs = computeDelay(slot = 0)
+    if scaled < threshold:
+        delay = computeShortDelay(scaled)
     else:
-        delayMs = computeDelay(slot = 1)
+        delay = computeLongDelay(scaled)
 
-    setTimeout(deliverLesson, delayMs, slotIndex)
+    setTimeout(() => revealComponent(component), delay)
 ```
 
-- Total lesson slot count: `2` (bundle.js:+12264283)
-- Slot index upper bound: `1` (bundle.js:+12264299)
-- `Math.random` call site: bundle.js:+12264285
-- `setTimeout` call site: bundle.js:+12264322
+Analysis basis: CC v2.1.132 bundle.js:+12264283 (constant `2`), +12264299 (constant `1`), +12264285 (`Math.random`), +12264322 (`setTimeout`)
 
-The exact value of `delayMs` and the content of each lesson slot are:
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
----
-
-### Lesson Delivery
-
-```
-function deliverLesson(slotIndex):
-    lessonContent = resolveLessonContent(slotIndex)
-    renderLessonUI(lessonContent)
-```
-
-The implementation of `resolveLessonContent` and `renderLessonUI` are:
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+> **Note on delay magnitude:** The exact millisecond values passed to `setTimeout` are not present in the depth-2 literal set. The two numeric constants `2` and `1` represent the scaling factor and branch threshold respectively, not raw delay durations.
+> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
@@ -133,13 +141,13 @@ The implementation of `resolveLessonContent` and `renderLessonUI` are:
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected in depth-2 traversal |
-| System message injection | Prepends a `"system"`-role message to the active conversation (bundle.js:+10750062) |
-| Randomisation | `Math.random` is called once per invocation to select a lesson slot (bundle.js:+12264285) |
-| Async scheduling | `setTimeout` is registered once per invocation; timer lifetime is not bounded in depth-2 data (bundle.js:+12264322) |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | None detected in depth-2 traversal (telemetry array is empty) |
+| Hook registration | None detected in depth-2 traversal |
+| appState changes | None detected in depth-2 traversal |
+| Conversation context | Injects a `"system"`-role message at invocation (bundle.js:+10750062) |
+| Timer | Schedules one `setTimeout` callback per invocation to drive the animation reveal (bundle.js:+12264322) |
+| Randomness | Consumes one `Math.random()` call per invocation; no seed is set — output is non-deterministic (bundle.js:+12264285) |
+| Sound | None detected in depth-2 traversal |
 
 ---
 
@@ -153,11 +161,11 @@ The implementation of `resolveLessonContent` and `renderLessonUI` are:
 
 ## Common Mistakes
 
-1. **Expecting deterministic lesson selection** — because lesson slot selection uses `Math.random`, re-invoking `/powerup` in the same session may deliver a different lesson. Do not rely on a fixed ordering.
-2. **Assuming telemetry is emitted** — depth-2 traversal found zero `tengu_*` events. Absence of telemetry means invocation is not tracked in usage dashboards as of v2.1.132.
-3. **Passing arguments** — the command is registered with no argument schema. Any text appended after `/powerup` is silently ignored by the CLI resolver.
-4. **Expecting instant output** — lesson content is delivered via `setTimeout`, so there is a deliberate async delay between command invocation and visible output; the exact delay value requires deeper traversal to confirm.
-5. **Confusing the system message with a user turn** — the injected message carries role `"system"`, not `"user"` or `"assistant"`, and will not appear as a visible chat bubble in standard UI rendering.
+1. **Expecting agent-side handling:** `/powerup` is type `local-jsx` — it renders its output directly in the CLI UI. It does not send a prompt to the Claude agent and does not produce an assistant response in the normal conversation flow.
+2. **Assuming deterministic animation timing:** The display delay is randomized via `Math.random()` on every invocation. Do not rely on a fixed reveal time in scripts or tests.
+3. **Confusing the system-role injection with a user message:** The lesson content is injected under the `"system"` role. Downstream tooling that filters by role may not surface it in user-visible history.
+4. **Expecting telemetry events:** No `tengu_*` telemetry events were found for this command at depth-2. Usage analytics integrations should not assume this command emits any instrumentation signals in v2.1.132.
+5. **Re-invoking to change content:** Because the timing is randomized but the lesson content selection logic was not reachable within the depth-2 call graph, it is unclear whether repeated invocations cycle through different lessons or repeat the same one. <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
@@ -167,5 +175,6 @@ The implementation of `resolveLessonContent` and `renderLessonUI` are:
 
 | Identifier | Role |
 |---|---|
-| `e47` | Command renderer — the top-level JSX component function for `/powerup` |
-| `H` | Lesson scheduler — contains the `Math.random` draw and `setTimeout` registration |
+| `e47` | Primary async command handler (`asyncPowerupHandler`); AsyncFunction resolved from module `f9q` via `module_id` path (bundle.js:+10750014) |
+| `H` | Animation / display-timing helper (`renderAnimation`); calls `Math.random` and `setTimeout` to schedule lesson reveal (bundle.js:+12264285) |
+| `FkA` | JSX framework namespace; `FkA.createElement` is the element factory used to build the lesson component (bundle.js:+10750014) |

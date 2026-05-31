@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "plan"
 cc_version: "2.1.133"
-updated: "2026-05-18"
+updated: "2026-05-31"
 tags: ["plan", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/plan` command activates "plan mode" for the current Claude Code session, or opens the existing session plan in an external editor when the `open` sub-command is given. When invoked without arguments, it sends a `set_permission_mode` control request to the active session; when invoked with the literal argument `open`, it suspends the terminal UI and launches an external editor so the user can view or edit the current plan document directly.
+The `/plan` command enables **plan mode** for the current Claude Code session or displays the current session plan if one already exists. When invoked without arguments or with a description, it sends a `set_permission_mode` control request to the agent runtime and renders a JSX confirmation in the terminal. When invoked with the special argument `open`, it opens the existing plan document in an external editor via a subprocess.
 
 ---
 
@@ -31,9 +31,18 @@ The `/plan` command activates "plan mode" for the current Claude Code session, o
 |---|---|
 | type | `local-jsx` |
 | name | `plan` |
-| description | Enable plan mode or view the current session plan |
+| description | `Enable plan mode or view the current session plan` |
 | argumentHint | `[open\|<description>]` |
 | module_id | `Wfq` |
+| load_inline | `true` |
+| loc_byte | `11121166` |
+| loc_byte_end | `11121365` |
+| loc_line | `6869` |
+| arbor_handler.name | `Kz7` |
+| arbor_handler.fqn | `claude-2.1.133::Kz7` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
 Analysis basis: CC v2.1.133 bundle.js:+11121166
 
@@ -41,230 +50,226 @@ Analysis basis: CC v2.1.133 bundle.js:+11121166
 
 ## Input Branching
 
-The command handler (`Kz7`) evaluates the trimmed argument string and routes to one of several distinct code paths.
+The handler has four distinct branches driven by the argument string and session state, so a flowchart is used.
 
 ```mermaid
 flowchart TD
-    A(["/plan invoked"]) --> B["Trim raw argument\nbundle.js:+11120547"]
-    B --> C{Argument value?}
+    A(["/plan invoked"]) --> B{Argument present?}
+    B -- "No argument" --> C{Already in plan mode?}
+    B -- "Argument = 'open'" --> O{Plan document exists?}
+    B -- "Other string (description)" --> E[Trim argument\nSend set_permission_mode control request\nRender 'Enabled plan mode' confirmation]
 
-    C -->|arg == 'open'| D["Open-plan path\nbundle.js:+11120566"]
-    C -->|empty / no arg| E{Already in plan mode?}
-    C -->|any other text| F["Description path\n(send description as plan context)"]
+    C -- "No" --> D[Send set_permission_mode control request\nRender 'Enabled plan mode' confirmation]
+    C -- "Yes, plan exists" --> F[Render current plan content as JSX]
+    C -- "Yes, no plan written yet" --> G[Render 'Already in plan mode. No plan written yet.']
 
-    E -->|Yes| G["Print 'Already in plan mode.'\nbundle.js:+11120345"]
-    E -->|No| H["Send set_permission_mode control request\nbundle.js:+11120249,+11120279"]
+    O -- "Yes" --> P[Launch external editor via spawnSync\nopen plan document]
+    O -- "No" --> Q[Render 'Already in plan mode. No plan written yet.']
 
-    H --> I["Print 'Enabled plan mode'\nbundle.js:+11120317"]
-
-    D --> J{Plan document exists?}
-    J -->|No| K["Print 'Already in plan mode. No plan written yet.'\nbundle.js:+11120725"]
-    J -->|Yes| L["Suspend Ink renderer\nbundle.js:+10338623,+10338653"]
-
-    L --> M["Spawn external editor (spawnSync)\nbundle.js:+10338745"]
-    M --> N["Resume Ink renderer / stdin\nbundle.js:+10339125,+10339154,+10339170"]
-    N --> O["Re-render output via JSX element\nbundle.js:+11120944"]
-
-    F --> P["Send plan context via sendControlRequest\nbundle.js:+11120249"]
+    D --> Z([Return JSX result])
+    E --> Z
+    F --> Z
+    G --> Z
+    P --> Z
+    Q --> Z
 ```
+
+Analysis basis: CC v2.1.133 bundle.js:+11120041 (handler entry `Kz7`), +11120566 (`"open"` literal), +11120317 (`"Enabled plan mode"` literal), +11120345 (`"Already in plan mode."` literal), +11120725 (`"Already in plan mode. No plan written yet."` literal)
 
 ---
 
 ## Behavioral Spec
 
-### 1. Argument Normalization
+### Handler Entry — `planCommandHandler` (`Kz7`)
+
+The handler is an `AsyncFunction` resolved via `module_id` → `Wfq`.
 
 ```
-function normalizeArgument(rawInput):
-    trimmed = rawInput.trim()          // bundle.js:+11120547
-    return trimmed
+async function planCommandHandler(args, context):
+    rawArg = getArgumentString(args)          // Kz7 → q at +11120041
+    sessionMode = getSessionMode(context)     // Kz7 → oM at +11120074
+    permissionState = getPermissionState()    // Kz7 → Pi at +11120113
+    planContent = getPlanContent()            // Kz7 → L  at +11120126
+
+    trimmedArg = rawArg.trim()               // +11120547
+
+    if trimmedArg == "open":                 // +11120566
+        return handleOpenPlan(context)       // Kz7 → km at +11120826
+
+    if trimmedArg != "":
+        return enablePlanMode(trimmedArg, context)
+
+    if alreadyInPlanMode(sessionMode):
+        if planContent exists:
+            return renderCurrentPlan(planContent)  // Kz7 → YG at +11120683
+        else:
+            return renderMessage("Already in plan mode. No plan written yet.")
+                                                   // +11120725
+    else:
+        return enablePlanMode("", context)
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11120547
+Analysis basis: CC v2.1.133 bundle.js:+11120041
 
 ---
 
-### 2. Plan-Mode Activation (no argument)
+### Enable Plan Mode — `enablePlanMode` (via `sendControlRequest`)
 
-When no argument is provided the handler checks whether the session is already in plan mode. If it is not, it calls `sendControlRequest` with the action type `"set_permission_mode"` and the target scope `"session"`.
+When plan mode is not yet active, the handler dispatches a `set_permission_mode` control request through the session manager.
 
 ```
-function activatePlanMode(sessionState):
-    if sessionState.isPlanMode:
-        renderMessage("Already in plan mode.")    // bundle.js:+11120345
+function enablePlanMode(description, context):
+    payload = {
+        type: "set_permission_mode",          // literal at +11120279
+        description: description
+    }
+    result = context.M.sendControlRequest(payload)  // +11120249
+    if result == success:
+        render JSX message "Enabled plan mode"      // +11120317
+    else:
+        propagate error
+```
+
+The `sendControlRequest` call (identifier `M`) dispatches through `iZH`, which coordinates MCP server state, session storage, and permission-rule management.
+
+Analysis basis: CC v2.1.133 bundle.js:+11120249, +11120279, +11120317
+
+---
+
+### Already-In-Plan-Mode Path — `renderCurrentPlan` / `renderAlreadyMessage`
+
+When the session is already in plan mode:
+
+```
+function renderPlanModeStatus(planContent):
+    if planContent is non-empty:
+        planText = formatPlanContent(planContent)  // Kz7 → YG at +11120683
+        return JSX view of plan text
+    else:
+        return JSX text "Already in plan mode. No plan written yet."
+                                                   // +11120725
+
+function formatPlanContent(content):
+    // YG delegates to m3H which reads plan state via q.get
+    // and joins path segments via Yu.join
+    return formattedPlanString
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+11120683, +11120725
+
+---
+
+### Open Plan in External Editor — `openPlanInEditor` (`km`)
+
+When the argument is exactly `"open"`:
+
+```
+async function openPlanInEditor(context):
+    planPath = resolvePlanPath(context)          // km → Mq7 at +10338611
+    if planPath not found:
+        raise Error                              // +10338464
+
+    // Suspend terminal rendering before handing off to editor
+    context.terminal.enterAlternateScreen()      // +10338623
+    context.terminal.pause()                     // +10338653
+    context.terminal.suspendStdin()              // +10338663
+
+    editorArgs = resolveEditorCommand()          // km → jJ at +10338845
+    editorArgs = editorArgs.split(delimiter)     // +10338702
+    editorArgs = editorArgs.concat([planPath])   // via f.slice at +10338727
+
+    result = BHq.spawnSync(editor, args, {
+        stdio: "inherit"                         // literal at +10338777
+    })                                           // +10338745
+
+    // Read any changes the editor may have written
+    updatedContent = A.readFileSync(planPath)    // +10339047
+
+    // Restore terminal
+    context.terminal.exitAlternateScreen()       // +10339125
+    context.terminal.resumeStdin()               // +10339154
+    context.terminal.resume()                    // +10339170
+
+    return JSX confirmation or updated plan view
+```
+
+The editor resolution helper (`jJ`) lower-cases the editor name, resolves the basename, and handles IDE-specific paths (literal `"IDE"` at +5039804).
+
+Analysis basis: CC v2.1.133 bundle.js:+11120826, +10338623, +10338745, +10339125
+
+---
+
+### Permission-Mode Control Infrastructure — `sendControlRequest` (`M` → `iZH`)
+
+`sendControlRequest` (identifier `M`) routes through `iZH`, which manages the full MCP server and session-control lifecycle. Relevant sub-operations reachable within depth 2:
+
+```
+function sendControlRequest(payload):
+    // iZH coordinates:
+    // 1. Serialize and dispatch the control message (zt + SEH)
+    // 2. Apply permission rule updates (Wf: allow/deny/ask rules)
+    // 3. Persist session state (Yl9 → l9H.writeFile)
+    // 4. Hash and track config state (GJ → BX9.createHash with "sha256"/"hex")
+    // 5. Debug-log via K8 / yQ.logMCPDebug
+    // 6. Handle server reconnection if required (gZA → eF)
+    for each server entry in Object.entries(serverMap):
+        dispatchToServer(entry, payload)   // zt at +7478628
+    persist()                              // Yl9 at +9475772
+    return result
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+11120249, +9474779, +9475772
+
+---
+
+### Permission-Rule Management — `applyPermissionRules` (`Wf`)
+
+Called from `iZH` when processing `set_permission_mode`. Manages allow, deny, and ask rule sets:
+
+```
+function applyPermissionRules(update):
+    if update.type == "bypassPermissions":
+        // Guard: reject if bypassPermissions mode unavailable
+        log("Ignoring permission update: setMode 'bypassPermissions' rejected…")
+        // literal at +3891876
         return
 
-    sendControlRequest({
-        action : "set_permission_mode",           // bundle.js:+11120279
-        scope  : "session"                        // bundle.js:+11120234
-    })
-    renderMessage("Enabled plan mode")            // bundle.js:+11120317
+    switch update.mode:
+        case "setMode":             // +3891788
+            applyMode(update)
+        case "addRules":            // +3892152
+            merge rules into allowRules / denyRules / askRules
+        case "replaceRules":        // +3892500
+            replace rule sets entirely
+        case "removeRules":         // +3893157
+            remove matching entries
+        case "addDirectories":      // +3892811
+            add directories to allowList
+        case "removeDirectories":   // +3893541
+            remove directories from allowList
+
+    // Rule categories: "allow"/"alwaysAllowRules", "deny"/"alwaysDenyRules",
+    //                  "alwaysAskRules"  (+3892337, +3892345, +3892377,
+    //                                    +3892384, +3892402)
+    persistUpdatedRules()
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11120249, +11120279, +11120234, +11120317, +11120345
+Analysis basis: CC v2.1.133 bundle.js:+3891788, +3891810, +3891876, +3892152, +3892337
 
 ---
 
-### 3. Permission-Mode Control Request Dispatch
+### JSX Rendering — `renderPlanJSX` (`Kz7` → `UG.createElement`)
 
-The control-request pathway (`sendControlRequest` → `permissionModeDispatcher`) internally enumerates active MCP server entries, applies permission-mode rules, and may emit a telemetry event `tengu_mcp_retry_failed_remote` when a remote MCP server fails during retry.
-
-```
-function permissionModeDispatcher(servers, mode):
-    for each (key, server) in Object.entries(servers):     // bundle.js:+13871290
-        if server.status == "disabled":                    // bundle.js:+9474877
-            continue
-        clients = server.getClients()                      // bundle.js:+13871337
-        applyPermissionMode(clients, mode)
-
-    if allRemoteServersRecovered():
-        log("[MCP] Retry: all remote servers recovered, stopping")
-        // bundle.js:+13871486
-        stopRetry()
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+13870586, +13871290, +13871337, +13871486
-
----
-
-### 4. Permission-Rule Application (`setMode` / `addRules` / `replaceRules` / `removeRules`)
-
-The permission sub-system (`permissionRuleApplicator`) handles the following named operations discovered in literals. The `bypassPermissions` mode is explicitly guarded: if the session was not launched with bypass permissions enabled, the update is silently ignored with a debug log.
+The command is registered as `local-jsx`, so its return value is a React/Ink JSX element rendered inline in the terminal.
 
 ```
-function permissionRuleApplicator(operation, payload):
-    if operation == "setMode":                                   // bundle.js:+3891788
-        if payload.mode == "bypassPermissions":                  // bundle.js:+3891810
-            if not session.bypassPermissionsAvailable:
-                debugLog(
-                  "Ignoring permission update: setMode 'bypassPermissions' " +
-                  "rejected — mode is not available ..."
-                )                                                // bundle.js:+3891876
-                return
-
-    if operation == "addRules":                                  // bundle.js:+3892152
-        applyRuleSet("allow",        payload.alwaysAllowRules)   // bundle.js:+3892337,+3892345
-        applyRuleSet("deny",         payload.alwaysDenyRules)    // bundle.js:+3892377,+3892384
-        applyRuleSet("alwaysAsk",    payload.alwaysAskRules)     // bundle.js:+3892402
-        addDirectories(payload.addDirectories)                   // bundle.js:+3892811
-
-    if operation == "replaceRules":                              // bundle.js:+3892500
-        replaceExistingRuleSet(payload)
-
-    if operation == "removeRules":                               // bundle.js:+3893157
-        removeMatchingRules(payload)
-        removeDirectories(payload.removeDirectories)             // bundle.js:+3893541
+function renderPlanJSX(message):
+    return UG.createElement(PlanView, { message })  // +11120944
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+3891788, +3891810, +3891876, +3892152, +3892337, +3892345, +3892377, +3892384, +3892402, +3892500, +3892811, +3893157, +3893541
+The `YJ9` / `kgH` call chain handles Ink rendering internals (terminal output stream, ANSI stripping via `Bun.stripANSI` at +3582221).
 
----
-
-### 5. Open Sub-Command — External Editor Launch
-
-When the argument is exactly `"open"`, the handler enters the editor-launch path. It first checks that the plan file exists (using `statSync`), then suspends the Ink terminal renderer, spawns an external editor process, and finally resumes the renderer.
-
-```
-function openPlanInEditor(planFilePath, editorCommand):
-    try:
-        fs.statSync(planFilePath)                        // bundle.js:+10338563
-    catch ENOENT:                                        // bundle.js:+134316
-        renderMessage("Already in plan mode. No plan written yet.")
-        // bundle.js:+11120725
-        return
-
-    inkInstance = getInkInstance()
-    if not inkInstance:
-        throw Error("Ink instance not found - cannot pause rendering")
-        // bundle.js:+10338470
-
-    inkInstance.enterAlternateScreen()                   // bundle.js:+10338623
-    inkInstance.pause()                                  // bundle.js:+10338653
-    inkInstance.suspendStdin()                           // bundle.js:+10338663
-
-    editorArgs = editorCommand.split(...)                // bundle.js:+10338702
-    args       = editorArgs.slice(...)                   // bundle.js:+10338727
-
-    result = child_process.spawnSync(
-        editorArgs[0],
-        args + [planFilePath],
-        { stdio: "inherit" }                             // bundle.js:+10338777
-    )                                                    // bundle.js:+10338745
-
-    planContent = fs.readFileSync(planFilePath, "utf-8") // bundle.js:+10339047, +5019821
-
-    inkInstance.exitAlternateScreen()                    // bundle.js:+10339125
-    inkInstance.resumeStdin()                            // bundle.js:+10339154
-    inkInstance.resume()                                 // bundle.js:+10339170
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+10338563, +10338623, +10338653, +10338663, +10338702, +10338745, +10338777, +10339047, +10339125, +10339154, +10339170, +11120566, +11120725
-
----
-
-### 6. Editor Resolution
-
-The editor to launch is resolved by `editorResolver` (`jJ`), which checks `$VISUAL` / `$EDITOR` environment variables, falls back to platform detection, and additionally detects whether the session is running inside an IDE integration (detected via the literal string `"IDE"`).
-
-```
-function resolveEditor():
-    name = detectEditorName()                    // bundle.js:+5039859 (toLowerCase)
-    if isIDESession():                           // bundle.js:+5039804
-        return ideEditor()
-    base = path.basename(name)                   // bundle.js:+5039917
-    return resolveEditorPath(base)               // bundle.js:+5039991
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+11120919, +5039804, +5039859, +5039917, +5039991
-
----
-
-### 7. Output Rendering
-
-After each code path completes, a JSX element is created via `UG.createElement` and rendered to the terminal. ANSI escape sequences are stripped from any captured output using `Bun.stripANSI` before display.
-
-```
-function renderPlanOutput(content):
-    clean = Bun.stripANSI(content)          // bundle.js:+3582221
-    element = UG.createElement(PlanView, { content: clean })
-    // bundle.js:+11120944
-    renderToTerminal(element)
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+11120944, +3582221
-
----
-
-### 8. MCP Connection State During Plan Activation
-
-When `sendControlRequest` is called during plan-mode activation, the MCP subsystem evaluates each configured server's transport type against the set `{ "stdio", "sse", "http", "sse-ide", "ws-ide", "claudeai-proxy" }`. Servers in `"needs-auth"` state are skipped with a log message.
-
-```
-function evaluateMcpServerForControlRequest(server):
-    transport = server.transport
-    validTransports = ["stdio", "sse", "http", "sse-ide", "ws-ide", "claudeai-proxy"]
-    // bundle.js:+9474979, +9475013, +9475045, +9475078, +9475114, +9475386
-
-    if server.authState == "needs-auth":
-        log("Skipping connection (cached needs-auth)")   // bundle.js:+9475506
-        return skip
-
-    if server.status == "connected":                     // bundle.js:+9475674
-        processServer(server)
-    else if server.status == "failed":                   // bundle.js:+9476241
-        scheduleRetry(server)
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+9474979, +9475013, +9475045, +9475078, +9475114, +9475386, +9475506, +9475572, +9475674, +9476241
-
----
-
-### 9. Session Context Log Format
-
-The logging subsystem (`sessionLogger`) uses a two-space padding constant and a numeric pad-width of `40` when formatting session log lines.
-
-- Padding string: `"  "` (two spaces) — Analysis basis: CC v2.1.133 bundle.js:+14179363
-- Pad width: `40` characters — Analysis basis: CC v2.1.133 bundle.js:+14181334
+Analysis basis: CC v2.1.133 bundle.js:+11120944, +7372119, +3582221
 
 ---
 
@@ -272,16 +277,16 @@ The logging subsystem (`sessionLogger`) uses a two-space padding constant and a 
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_mcp_retry_failed_remote` — emitted when all remote MCP servers recover during retry (bundle.js:+13870729) |
-| Plan mode flag | Session-scoped; set via `set_permission_mode` control request (bundle.js:+11120279) |
-| Terminal renderer | Ink renderer is paused (`pause`, `enterAlternateScreen`, `suspendStdin`) and resumed (`exitAlternateScreen`, `resumeStdin`, `resume`) during editor launch (bundle.js:+10338623–+10339170) |
-| External process | `child_process.spawnSync` with `stdio: "inherit"` — blocks the process until the editor exits (bundle.js:+10338745, +10338777) |
-| File I/O | `fs.statSync` to check plan file existence; `fs.readFileSync` with encoding `"utf-8"` to read plan content after editor closes (bundle.js:+10338563, +10339047) |
-| File deletion | `unlinkSync` is reachable in the call graph (bundle.js:+14137065); exact trigger condition not determinable at depth-2 traversal <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Permission rules | `alwaysAllowRules`, `alwaysDenyRules`, `alwaysAskRules` collections may be mutated during plan-mode activation (bundle.js:+3892337–3892402) |
-| ANSI stripping | `Bun.stripANSI` applied to all rendered output (bundle.js:+3582221) |
+| Telemetry | No `tengu_*` events are emitted directly from the `/plan` handler (`Kz7`). Events found in the depth-2 call graph belong to shared infrastructure traversed by `M.sendControlRequest` and `iZH` (see list below). |
+| Telemetry — shared infra (depth ≤ 2) | `tengu_auto_mode_config` (+2861933), `tengu_mcp_oauth_flow_start` (+9406234), `tengu_mcp_oauth_flow_success` (+9410609), `tengu_mcp_oauth_flow_error` (+9411696), `tengu_bg_spare_enable` (+14156457), `tengu_bg_spare_spawn` (+14156817), `tengu_daemon_config_reload` (+14170592), `tengu_config_auth_loss_prevented` (+3108610), `tengu_daemon_control` (+14191366), `tengu_daemon_yield` (+14174626), `tengu_config_parse_error` (+3113854), `tengu_mcp_retry_failed_remote` (+13870729) |
+| Permission-mode state | Sets session permission mode to plan mode via `set_permission_mode` control message; modifies in-memory rule sets (allow/deny/ask) through `Wf`. |
+| Session persistence | Plan content written to disk via `Yl9` → `l9H.writeFile`; MCP needs-auth cache written via `JM8` → `wM8.join` (filename: `"mcp-needs-auth-cache.json"` at +9468948). |
+| Config hash | SHA-256 hash of config state computed via `GJ` → `BX9.createHash` (`"sha256"`, `"hex"`, +7458734, +7458761). |
+| Terminal side effects | When argument is `"open"`: alternate screen entered, stdin suspended, external editor spawned synchronously (`BHq.spawnSync`), then terminal fully restored. |
+| File I/O | `open` path: `A.readFileSync` reads updated plan file after editor exits (+10339047). Rename/unlink of `.txt`-suffixed temp files possible via `AiA` → `$V.rename` / `$V.unlink` (+161577, +161617). |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| appState changes | `bypassPermissions` mode guard active; mode transitions recorded via `setMode` control message. |
 
 ---
 
@@ -289,21 +294,17 @@ The logging subsystem (`sessionLogger`) uses a two-space padding constant and a 
 
 | Version | Change |
 |---|---|
-| v2.1.133 | Initial analysis |
+| v2.1.133 | Initial analysis. Handler `Kz7` registered as `local-jsx` under module `Wfq`. Four-branch input logic: no-arg/already-in-mode/description/open. |
 
 ---
 
 ## Common Mistakes
 
-1. **Passing `open` when no plan exists yet** — If the session is already in plan mode but no plan document has been written, `/plan open` prints `"Already in plan mode. No plan written yet."` and exits without launching an editor (bundle.js:+11120725). You must first interact with the session so that a plan document is generated before using `open`.
-
-2. **Expecting `bypassPermissions` mode to activate via `/plan`** — The `bypassPermissions` mode is silently rejected unless the session was originally launched with bypass permissions enabled. No error is shown to the user; the update is discarded with only a `debug`-level internal log (bundle.js:+3891876).
-
-3. **Assuming `/plan` works in IDE-embedded sessions the same way** — The editor-resolution path detects `"IDE"` sessions (bundle.js:+5039804) and may select a different editor binary or skip external editor launch entirely; the behavior may differ from a standard terminal session.
-
-4. **Running `/plan open` while MCP servers are in `needs-auth` state** — Servers flagged `needs-auth` are skipped during the control-request dispatch cycle (bundle.js:+9475506). If all servers are in this state, the control request may not be delivered.
-
-5. **Expecting synchronous UI during editor session** — The Ink renderer is fully paused for the duration of the external editor process. No Claude Code UI updates, streaming responses, or notifications are rendered until the editor exits.
+1. **Passing `open` when plan mode is not active.** The `"open"` branch does not first enable plan mode — it attempts to open a plan file that does not yet exist and will produce an error. Enable plan mode first (run `/plan` with no argument or a description), then use `/plan open`.
+2. **Expecting immediate tool-call blocking.** Plan mode changes the permission model for the session, but the change is communicated asynchronously via `sendControlRequest`; there is no synchronous lock that prevents tool calls between the invocation and the acknowledgment.
+3. **Editing the plan file externally while Claude Code is running.** The `open` path suspends the Ink renderer and spawns an editor synchronously; typing in another terminal window while the editor is open may corrupt terminal state because stdin is suspended.
+4. **Assuming `/plan open` re-renders the plan inline.** The `open` branch launches an external editor process; it does not display the plan content inside the Claude Code UI. To view the plan inline, run `/plan` with no arguments while already in plan mode.
+5. **Passing a description argument when already in plan mode.** The handler does not check for existing plan mode before processing a non-`open` argument string — it will re-send `set_permission_mode`, which may reset or duplicate permission rules accumulated during the session.
 
 ---
 
@@ -313,43 +314,140 @@ The logging subsystem (`sessionLogger`) uses a two-space padding constant and a 
 
 | Identifier | Role |
 |---|---|
-| `Kz7` | Plan command handler (main entry point) |
-| `q` | File-unlink utility (wraps `unlinkSync`) |
-| `oM` | Internal sub-command router |
-| `RwH` | Route handler helper |
-| `Pi` | Argument parser / pre-processor |
-| `L` | Session log formatter (uses `padEnd`) |
-| `K` | Async task tracker (add / delete / finally set) |
-| `f` | Stream / channel abstraction (close operations) |
-| `Wf` | Permission-rule applicator (`setMode`, `addRules`, `replaceRules`, `removeRules`) |
-| `k` | Permission-mode validator / classifier |
-| `n4` | Rule normalization helper |
-| `SH` | JSON serializer wrapper |
-| `_` | Settings / state store (get/set/delete, toLowerCase) |
-| `$ZH` | MCP server enumeration and dispatch coordinator |
-| `fVA` | MCP connection factory |
-| `pN` | MCP connection pool manager |
-| `o9H` | MCP server-entry iterator |
-| `_g` | MCP server-state aggregator |
-| `M` | Control-request sender (`sendControlRequest`) |
-| `iZH` | Per-server control-request dispatcher |
-| `mFq` | MCP update applicator (`applyMcpUpdate`, `cleanup`) |
-| `$` | MCP client selector (wraps `XDq`) |
-| `J6` | MCP retry scheduler |
-| `Og7` | MCP retry-recovery coordinator |
-| `H` | Jitter/delay helper (uses `Math.random`, `setTimeout`) |
-| `SUH` | Plan-mode sub-command switcher |
-| `sLH` | Plan sub-command label resolver |
-| `v6` | Plan state accessor |
-| `UW` | `open` sub-command handler |
-| `YG` | Plan file path resolver |
-| `F6` | File-system utility facade |
-| `D8` | ENOENT error handler |
-| `fH` | Log-error emitter |
-| `km` | External editor launcher (spawnSync orchestrator) |
-| `A` | Node.js `fs` / `child_process` facade |
-| `Mq7` | Ink instance locator |
-| `jJ` | Editor binary resolver |
-| `YJ9` | Post-editor output renderer |
-| `kgH` | Ink stream listener / JSX bridge |
-| `v5` | ANSI-strip output post-processor |
+| `Kz7` | Main `/plan` command handler (`AsyncFunction`, arbor-resolved via `module_id` → `Wfq`) |
+| `q` | Argument string extractor (reads raw CLI argument; also calls `Ydq.unlinkSync` in cleanup path) |
+| `oM` | Session mode reader (delegates to `RwH`) |
+| `RwH` | Session mode backing store / getter |
+| `Pi` | Permission state accessor |
+| `L` | Plan content reader (delegates to `K.map`; pads output via `f.padEnd`) |
+| `K` | Plan content collection manager (`q.add`, `q.delete`, `f.finally`) |
+| `Wf` | Permission-rule application engine (allow/deny/ask/addDirectories/removeDirectories/setMode) |
+| `k` | Shared logging / policy-check utility (used by many subsystems) |
+| `Ztq` | Policy settings aggregator (reads `aT`, `Ttq`, `xcA`) |
+| `xcA` | Policy flag resolver (`doq`, `coq`) |
+| `SH` | JSON serializer wrapper (`JSON.stringify`) |
+| `Uf` | String redaction/sanitization helper (replaces sensitive fragments with `"[REDACTED]"`) |
+| `rnA` | Rule-name mapper (`jtq.map`) |
+| `LkH` | Rule write helper (`UnA` → `H.write`) |
+| `vtq` | Session file I/O coordinator (read/write/rotate plan file; delegates to `uNH`, `aHH`, `AiA`, `Vtq`, `LiA`) |
+| `uNH` | Debounced write scheduler (`clearTimeout`, `setTimeout`, `setImmediate`) |
+| `aHH` | Path-building helper for plan storage (`tnA`, `iwH.join`, `n8`, `v6`) |
+| `dG8` | Plan content formatter (delegates to `w8`) |
+| `_iA` | Path resolver for plan directory (`iwH.join`, `v6`) |
+| `AiA` | Atomic file-rename helper (`$V.stat`, `$V.rename`, `$V.unlink`; `.txt` temp suffix) |
+| `Vtq` | Append-and-rotate writer (`$V.mkdir`, `$V.appendFile`) |
+| `y1` | Active-set tracker (`Qoq`, `d08.add`, `d08.delete`, `Object.assign`) |
+| `n4` | Text normalizer / escape handler (`HWL` → `H.replaceAll`) |
+| `HWL` | Backslash / parenthesis escape processor |
+| `$ZH` | Context-info builder passed to `sendControlRequest` (calls `fVA`, `o9H`, `_g`, `k`) |
+| `fVA` | Policy-settings fetcher (`ip`, `iy`, `nS8`) |
+| `ip` | Permission-settings reader (`h8`, `k`) |
+| `h8` | Settings object accessor (`OcA`, `j5_`, `zcA`) |
+| `iy` | Auth/mode resolver (`_VA`, `TbH`, `mq`) |
+| `_VA` | Mode-disable check (`L_`) |
+| `TbH` | Auto-mode telemetry emitter (`tengu_auto_mode_config`; resolves `B9`, `J6`, `Q_`, `kr`) |
+| `mq` | Mode-query helper (`PU`, `Gq`, `fX`) |
+| `nS8` | Nested settings reader (delegates to `h8`) |
+| `pN` | Context property extractor |
+| `o9H` | Server-entries mapper (`Object.entries`, `Wf`, `L.map`) |
+| `_g` | Tool-list builder (allowed-tools from CLI arg `"--allowed-tools"`, session config; delegates to `o$`, `eIA`, `yi9`, `hi9`) |
+| `o$` | Tool-entry formatter (`_WL`, `YE`, `qWL`, `AWL`, `H.substring`) |
+| `AWL` | Tool-name escape helper (`H.replaceAll`) |
+| `eIA` | Tool-entry accumulator (`Ei9`, `tIA`, `_.push`, `q.match`) |
+| `Ei9` | Tool-type constants holder (`Vi9`, `Ni9`, `ki9`) |
+| `tIA` | Path-relative resolver (`KZ.includes`, `ZO`, `Zi9.relative`, `N6`) |
+| `yi9` | Tool-membership checker (`GV.includes`) |
+| `hi9` | Session-tool-state getter/setter (`yi9`, `_.get`, `_.set`, `f.push`, `Wf`) |
+| `M` | Session control-request dispatcher (`iZH`, `mFq`, `K.get`, `K.values`, `J6`, `Og7`) |
+| `iZH` | MCP session manager — full lifecycle (connect, persist, rule-apply, reconnect) |
+| `zt` | Per-server dispatch router (`kF`, `SEH`, `e$H`, `Ot`, `XO6`, `Object.assign`) |
+| `SEH` | Server-entry handler (applies enterprise/mcp/user/project/local configs; error tags: `"mcp-config-invalid"`, `"mcpb-*"`) |
+| `Ot` | SDK-type server handler (`Object.entries`, `ngH`, `_.push`) |
+| `XO6` | SSE/HTTP server handler (`W98`, `G98`, `FX9`, `HOH`, `q.has/set/get`) |
+| `$I` | Message formatter/dispatcher (`dM`, `CJA`) |
+| `dM` | Output formatter (`OxH`, `R6`, `I9`) |
+| `AA` | Async accumulator (`A`) |
+| `AJ6` | Server-list filter |
+| `so4` | Needs-auth cache reader (`KIA` → `l9H.readFile`; `Date.now`) |
+| `KIA` | Cache-file reader (`l9H.readFile`, `JM8`, `p6`) |
+| `G98` | Config hasher (`Vl`, `W98`, `GJ`; SHA-256) |
+| `Vl` | Config value accessor (`kH`) |
+| `W98` | Config key normalizer (`dK`) |
+| `GJ` | Hash builder (`SH`, `BX9.createHash`) |
+| `K8` | MCP debug logger (`cyH.push`, `yQ.logMCPDebug`) |
+| `gZA` | MCP connection orchestrator (`qo4`, `lp`, `Ho4`, `_e`, `KlH`, `AM8`, `eF`, `Fb`, `D`, `yI`, `T7`, `vH`, `Lo4`, `_o4`) |
+| `_e` | MCP transport runner (OAuth, HTTP server, token exchange, step-up auth) |
+| `KlH` | In-flight request tracker (`of8.set/get/delete`) |
+| `AM8` | Needs-auth cache deleter (`l9H.unlink`, `JM8`) |
+| `eF` | Reconnection handler (`CV`, `hI`, `sv`, `K8`, `DlH`, `Z8`, `Yl9`, `BZA`, `kJA`, `Promise.all`, `Dm`, `n9H`, `Dc`, `AK`, `hH`, `uH`, `T7`, `vH`) |
+| `T7` | MCP error logger (`cyH.push`, `yQ.logMCPError`) |
+| `vH` | Error-to-string converter (`String`) |
+| `_o4` | SSH/URL transport selector (`DA.isSSH`, `kH`, `RA`) |
+| `QZA` | OAuth authenticate-tool builder (`lp`, `Ao4`, `LlH`, `flH`, `K`, `vH`) |
+| `LlH` | Active-request map reader (`rf8.get`) |
+| `flH` | Pending-request map reader (`of8.get`) |
+| `Yl9` | Plan/session file writer (`l9H.writeFile`, `KIA`, `JM8`, `SH`) |
+| `JM8` | Cache-file path builder (`wM8.join`, `n8`) |
+| `BZA` | Auth-token clearer (`GJ`, `dK`, `Bw6`) |
+| `dK` | Config key builder (`l41`) |
+| `Bw6` | Token store updater (`dK`, `_.read`, `GJ`, `_.update`, `K8`) |
+| `kJA` | Tool-capability checker (`e6`, `_.includes`) |
+| `e6` | Tool schema loader (`fe8`, `t2`, `H`, `fxH`, `jX1`, `MxH`, `k`, `m5H`, `lq6`, `d`, `Ke8`) |
+| `J` | Process kill helper (`_.values`, `v.kill`) |
+| `v` | Background worker manager (`rU`, `Date.now`, `Math.min`, `Z`, `I`, `bRq`) |
+| `S` | Output stream writer (`z.write`, `d`) |
+| `z` | Terminal output buffer (`hH`, `uH`, `bS`, `cC`) |
+| `GMH` | Async-iterable/stream utility (type checks, event listeners, `AggregateError`) |
+| `_J6` | Radix-10 int parser (`parseInt`) |
+| `fIA` | Radix-20 int parser (`parseInt`) |
+| `mFq` | MCP update applier (`H.applyMcpUpdate`, `XM8`, `_.cleanup`, `hI`, `jD`) |
+| `XM8` | Update serializer (`SH`) |
+| `hI` | Connection cleanup coordinator (`DlH`, `L.cleanup`) |
+| `DlH` | Deep cleanup helper (`SH`) |
+| `XDq` | Daemon status writer (`yr`, `Date.now`, `iY`, `Sj6`, `SH`) |
+| `yr` | Timestamp formatter (`y7H`) |
+| `iY` | Atomic file writer (`Xa8.randomBytes`, `Lo.writeFile`, `Lo.rename`, `w8`) |
+| `Sj6` | Daemon status path builder (`JDq.join`, `n8`; filename `"daemon.status.json"`) |
+| `J6` | Session event emitter / process tracker (`Bq6`, `gq6`, `Po`, `_d6`, `pq6.add`, `R6`) |
+| `Po` | Process lookup (`kH`, `jo`) |
+| `jo` | Process object accessor (`Ex`) |
+| `_d6` | Process-registration deduplicator (`Ut8.has/add`, `b5H.get`, `pt8`, `ct8`) |
+| `pt8` | New-process tracker (`jo`, `ePH`, `pU`, `ybH`, `ut8.randomUUID`, `SH`, `O2K`, `Xo.emit`) |
+| `ct8` | Process-state initializer (`I71`, `mA`, `LX1`, `CyH`) |
+| `R6` | File-watch session manager (`F6`, `t2`, `He8`, `m5H`, `Date.now`, `u2K`) |
+| `m5H` | Config-file reader (reads/creates config dirs; error codes `"ENOENT"`, `"EEXIST"`) |
+| `u2K` | File-watcher lifecycle (`Yd6.watchFile/unwatchFile`, `F6`, `I9`, `He8`, `kd`, `y1`) |
+| `Og7` | MCP server-retry manager (`Object.entries`, `_.filter`, `A.getClients`, `T98`, `r8`, `iZH`, `mFq`) |
+| `T98` | Server-type membership checker (`RT4.has`, `CT4.has`) |
+| `r8` | Timeout-backed request sender (`L`, `Error`, `q`, `setTimeout`, `clearTimeout`, `K.unref`) |
+| `O` | Output drain helper (`d8`) |
+| `SUH` | Plan-path factory (`sLH`, `v6`) |
+| `sLH` | Plan storage-root getter |
+| `v6` | Config-directory resolver |
+| `UW` | Plan-view renderer (reads plan via `YG`, handles error/fallback via `D8`, `fH`) |
+| `YG` | Plan-content formatter (`m3H`, `v6`, `Yu.join`, `$O`) |
+| `m3H` | Plan-state reader (`v6`, `sLH`, `q.get`, `$O`, `it8`, `_xH`, `Ld6`, `Yu.join`, `F6`, `q.set`) |
+| `it8` | Step splitter (`H.split`) |
+| `_xH` | Step-item formatter (`Qq6`) |
+| `Ld6` | Step-list formatter (`Qq6`) |
+| `D8` | Error display helper (`w8`) |
+| `w8` | Low-level error formatter |
+| `fH` | Structured error logger (`HA`, `kH`, `yq`, `NJL`, `cyH.push`, `yQ.logError`) |
+| `HA` | Error/string coercer (`Error`, `String`) |
+| `yq` | Error-queue reader (`J9_`) |
+| `J9_` | Error-queue accessor (`kH`) |
+| `NJL` | Rolling error-log manager (`AN6.shift`, `AN6.push`) |
+| `km` | External-editor launcher (resolves editor, suspends terminal, `BHq.spawnSync`, restores terminal) |
+| `Mq7` | Plan-file path resolver (`cNA`) |
+| `cNA` | Filename normalizer (`A$8.basename`, `s9`, `_q7.find`, `A.includes`) |
+| `s9` | String index/slice helper |
+| `jJ` | Editor-command resolver (lower-cases name, resolves basename, handles `"IDE"` path) |
+| `YJ9` | Ink render wrapper (`kgH`, `v5`) |
+| `kgH` | Ink stream handler (`L.on`, `f.toString`, `bx`, `Ht.createElement`) |
+| `bx` | JSX element creator shim (`$Z1`, `KI1`) |
+| `KI1` | React element factory (`LI1.createElement`) |
+| `v5` | ANSI stripper wrapper (`Bun.stripANSI`) |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

@@ -2,7 +2,6 @@
 type: feature-spec
 feature: "ultrareview"
 cc_version: "2.1.133"
-updated: "2026-05-18"
 tags: ["ultrareview", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +20,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-`/ultrareview` launches a deep, automated code-review session that runs as a remote Claude Code session on claude.ai. When invoked without arguments, it bundles the local repository and ships it to a remote worker; when invoked with a GitHub PR number, it directs the remote worker to fetch that PR instead. The command enforces a multi-stage preflight sequence (policy, auth, git state, repo size, billing, and API capability checks) before spawning the remote session, and presents an estimated cost of $10–$20 and a runtime of approximately 10–20 minutes to the user.
+`/ultrareview` is a first-party slash command that launches a remote bug-hunting session on Claude Code for the web. It bundles the local Git repository (or targets a specific pull-request number), uploads the code to Anthropic's cloud infrastructure, and runs an automated review agent that finds and verifies bugs in the branch. Estimated cost is `$10–$20` USD per run with a runtime of approximately `~10–20 min`.
 
 ---
 
@@ -31,9 +30,17 @@ license: "AGPL-3.0-only"
 |---|---|
 | type | `local-jsx` |
 | name | `ultrareview` |
-| description | `null` |
-| module\_id | `l4q` |
-| loc\_line | 6672 |
+| description | ` ... · Est. cost ... USD · Finds and verifies bugs in your branch. Runs in Claude Code on the web. See ...` |
+| loc_byte | `10976457` |
+| loc_byte_end | `10976716` |
+| loc_line | `6672` |
+| module_id | `l4q` |
+| load_inline | `true` |
+| arbor_handler.name | `E$7` |
+| arbor_handler.fqn | `claude-2.1.133::E$7` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `1` |
 
 Analysis basis: CC v2.1.133 bundle.js:+10976457
 
@@ -41,344 +48,407 @@ Analysis basis: CC v2.1.133 bundle.js:+10976457
 
 ## Input Branching
 
-The command entry point (`commandEntryPoint`) checks a series of preconditions before deciding how to proceed. The flowchart below captures every branch found during depth-2 traversal.
+The command execution involves more than three distinct decision branches (policy check, authentication check, repo-size check, PR-mode vs. bundle-mode, preflight API call, overage check, confirmation flow, and remote session launch). A flowchart is used below.
 
 ```mermaid
 flowchart TD
-    A["/ultrareview [arg]"] --> B{Remote sessions allowed?\ncheck allow_remote_sessions policy}
-    B -- No --> C[Emit error:\n'Remote sessions are disabled by your\norganization policy. Contact admin.'\nAbort]
-    B -- Yes --> D{Essential-traffic-only\nmode active?}
-    D -- Yes --> E[Emit blocked error:\n'Ultrareview runs in Claude Code on\nthe web and is unavailable when\nessential-traffic-only mode is active.'\nAbort]
-    D -- No --> F{OAuth token present?\ncheck for 'zdr' account type}
-    F -- No --> G[Emit no_oauth_token error:\n'Ultrareview requires a Claude.ai\naccount. Run /login to authenticate.'\nAbort]
-    F -- Yes --> H{Inside git work-tree?\ngit rev-parse --is-inside-work-tree}
-    H -- No --> I[Emit not_in_git_repo error\nAbort]
-    H -- Yes --> J{Git remote origin URL\nexists?\ngit config --get remote.origin.url}
-    J -- No --> K[Emit no_git_remote error:\n'No git remote URL found'\nAbort]
-    J -- Yes --> L{GitHub remote?\ncheck for 'github.com' in URL}
-    L -- No --> M[Emit error:\n'Ultrareview failed to launch.\nCheck that this is a GitHub repo.'\nAbort]
-    L -- Yes --> N{Argument supplied?}
-    N -- Yes, PR number --> O[Mode: PR review\nFetch remote PR diff via GitHub]
-    N -- No --> P{Repo size ≤ 5,000,000 bytes?}
-    P -- No --> Q[Emit repo-too-large error:\n'Repo is too large to bundle.\nPush a PR and use /ultrareview PR# instead.'\nAbort]
-    P -- Yes --> R[Mode: local bundle]
-    O --> S[Preflight API call:\napi_ultrareview_preflight\ntimeout 5000 ms]
-    R --> S
-    S -- schema_mismatch --> T[Emit schema_mismatch error\nAbort]
-    S -- request_failed --> U[Emit request_failed error\nAbort]
-    S -- server response 'server' --> V{Org eligible?}
-    V -- No --> W[Emit:\n'Ultrareview is unavailable\nfor your organization.'\nAbort]
-    V -- Yes --> X{Billing overage?\ncheck subscription tier}
-    X -- Blocked --> Y[Emit tengu_review_overage_blocked\nShow overage dialog\nAbort]
-    X -- needs-confirm --> Z[Show confirm dialog\nEstimated cost $10-$20\nEst. time ~10-20 min]
-    Z -- User cancels --> AA[Emit: 'Ultrareview cancelled.'\nAbort]
-    Z -- User confirms --> AB[Launch remote session\nteleport to claude.ai remote worker]
-    X -- proceed --> AB
-    AB -- Teleport fails --> AC[Emit tengu_review_remote_teleport_failed\nEmit error message\nAbort]
-    AB -- Teleport succeeds --> AD[Emit tengu_review_remote_launched\nPost acknowledgement message to user\nSession runs remotely]
+    A(["/ultrareview [PR#]"]) --> B{allow_remote_sessions\npolicy enabled?}
+    B -- No --> ERR1["Error: Remote sessions disabled\nby organization policy"]
+    B -- Yes --> C{essential-traffic-only\nmode active?}
+    C -- Yes --> ERR2["Error: Ultrareview unavailable\nin essential-traffic-only mode"]
+    C -- No --> D{OAuth token\npresent? i.e. logged in?}
+    D -- No --> ERR3["Error: Requires Claude.ai account\nRun /login"]
+    D -- Yes --> E{Auth type is\nAPI-key only?}
+    E -- Yes --> ERR4["Error: API key auth not sufficient\nRun /login"]
+    E -- No --> F{Repo size >\n5 000 000 bytes?}
+    F -- Yes --> ERR5["Error: Repo too large\nUse /ultrareview <PR#>"]
+    F -- No --> G[Call preflight API\napi_ultrareview_preflight\ntimeout: 5 000 ms]
+    G --> H{Preflight result?}
+    H -- "schema_mismatch" --> ERR6["Preflight schema mismatch error"]
+    H -- "request_failed" --> ERR7["Preflight request failed error"]
+    H -- "blocked / policy_blocked" --> ERR8["Ultrareview unavailable\nfor your organization"]
+    H -- "proceed" --> I{Overage check:\nuser within spend limit?}
+    H -- "needs-confirm" --> CONF["Show cost confirmation dialog\n($10–$20 / ~10–20 min)"]
+    CONF --> I
+    I -- Blocked --> ERR9["tengu_review_overage_blocked\nShow overage dialog"]
+    I -- Allowed --> J{PR number\nprovided?}
+    J -- Yes --> K[PR mode:\nresolve PR diff via GitHub API]
+    J -- No --> L[Bundle mode:\ncreate git bundle,\nupload to cloud storage]
+    K --> M[teleportToRemote:\nlaunch remote session]
+    L --> M
+    M --> N{Session launch\nsucceeded?}
+    N -- No --> ERR10["tengu_review_remote_teleport_failed\nError: Ultrareview failed to launch"]
+    N -- Yes --> O["tengu_review_remote_launched\nMonitor session\n(timeout: 1 800 000 ms / 30 min)"]
+    O --> P{Session status?}
+    P -- "completed" --> Q["Stream result to user\nAcknowledge briefly per prompt instruction"]
+    P -- "error" --> ERR11["remote session returned an error"]
+    P -- "timeout (>30 min)" --> ERR12["remote session exceeded 30 minutes"]
+    P -- "no output" --> ERR13["no review output —\norchestrator may have exited early"]
 ```
-
-Analysis basis: CC v2.1.133 bundle.js:+10974244, +10974279, +10974428, +10974508, +10974689, +10974993, +10975100
 
 ---
 
 ## Behavioral Spec
 
-### Precondition: Remote Session Policy Check
+### 1. Entry Point — Main Handler (`asyncUltrareviewHandler`)
+
+The Arbor-resolved handler `E$7` is an `AsyncFunction` reached via `module_id → l4q`. It orchestrates the entire command lifecycle.
+
+Analysis basis: CC v2.1.133 bundle.js:+10974244
 
 ```
-function checkRemoteSessionPolicy(appState):
-    if appState.policy["allow_remote_sessions"] is falsy:
-        display error: "Remote sessions are disabled by your organization's policy. Contact your organization admin to enable them."
-        abort command
+async function asyncUltrareviewHandler(commandArgs, appState):
+
+    // Step 1 — policy gate
+    if not organizationPolicyAllows("allow_remote_sessions"):
+        emit telemetry("tengu_review_remote_precondition_failed")
+        return error("Remote sessions are disabled by your organization's policy. ...")
+
+    // Step 2 — wait a small randomised jitter before continuing
+    //           (Math.random * 2, then setTimeout)
+    await randomJitterDelay()
+
+    // Step 3 — run precondition suite
+    result = await checkRemotePreconditions(appState)
+    if result is not OK:
+        return result.errorMessage
+
+    // Step 4 — run bughunter launch flow
+    launchResult = await launchBughunterSession(commandArgs, appState)
+    if launchResult.failed:
+        return error("Ultrareview failed to launch the remote session. ...")
+
+    // Step 5 — post-launch: render output, acknowledge per system instruction
+    renderBriefAcknowledgement(launchResult)
+
+    // Step 6 — handle cancellation
+    if cancelled:
+        return "Ultrareview cancelled."
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+10974247, +10974279
+Analysis basis: CC v2.1.133 bundle.js:+10974244 – +10975186
 
 ---
 
-### Precondition: Essential-Traffic-Only Mode Check
+### 2. Remote Precondition Check (`checkRemotePreconditions`)
+
+Called from the main handler; identified via call edge `E$7 → UhA`.
+
+Analysis basis: CC v2.1.133 bundle.js:+10936269
 
 ```
-function checkEssentialTrafficMode(networkMode):
-    if networkMode == "essential-traffic":
-        return status "blocked"
-    // "Ultrareview runs in Claude Code on the web and is unavailable
-    //  when essential-traffic-only mode is active."
+async function checkRemotePreconditions(appState):
+
+    // 2a — essential-traffic-only guard
+    trafficMode = getTrafficMode()   // calls N6 / LA
+    if trafficMode == "blocked":
+        return blocked("Ultrareview runs in Claude Code on the web and is unavailable
+                        when essential-traffic-only mode is active.")
+
+    // 2b — authentication guard
+    authToken = getOAuthToken()      // calls N6
+    if not authToken or authType == "zdr":
+        return blocked("Ultrareview requires a Claude.ai account. Run /login ...")
+
+    // 2c — no_oauth_token guard
+    if tokenMissing:
+        return { status: "no_oauth_token" }
+
+    // 2d — organisation UUID guard (calls Rz → SV)
+    orgUUID = resolveOrganisationUUID()
+    if not orgUUID:
+        return error("Unable to get organization UUID")
+
+    // 2e — repo size guard (calls yG9 → kG9)
+    //   git count-objects -v, parsed; threshold 5 000 000 bytes (1024 bytes/kb)
+    repoBytes = measureRepoSize()
+    if repoBytes > 5_000_000:
+        return error("Repo is too large to bundle. Push a PR and use
+                     `/ultrareview <PR#>` instead.")
+
+    // 2f — branch / merge-base resolution
+    currentBranch  = getCurrentBranch()   // git branch --abbrev-ref HEAD
+    defaultBranch  = getDefaultBranch()   // git symbolic-ref --short refs/remotes/origin/HEAD
+                                          //   fallbacks: "main", "master"
+    mergeBase      = getMergeBase()       // git merge-base <defaultBranch> <currentBranch>
+
+    // 2g — diff shortstat (git diff --shortstat)
+    diffStat = getDiffShortstat(mergeBase)
+
+    // 2h — preflight API call (timeout 5 000 ms)
+    preflightResult = await callPreflightAPI({
+        endpoint: "api_ultrareview_preflight",
+        headers: {
+            "x-organization-uuid": orgUUID,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json"
+        },
+        timeout: 5000
+    })
+
+    match preflightResult.status:
+        "schema_mismatch" → return error(schema_mismatch_msg)
+        "request_failed"  → return error(request_failed_msg)
+        "blocked"         → return error("Ultrareview is unavailable for your organization.")
+        "needs-confirm"   → show confirmation dialog with cost "$10–$20" / "~10–20 min"
+        "proceed"         → continue
+
+    return OK
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+10934970, +10934997, +911558
+Analysis basis: CC v2.1.133 bundle.js:+10936434, +10936580, +10937315, +10937865, +10937886, +10937920, +10938435, +10935596
 
 ---
 
-### Precondition: OAuth Authentication Check
+### 3. Overage / Spend-Limit Check (`overageCheck`)
+
+Called from the main handler after preconditions pass; identified via call edge `E$7 → d` and `E$7 → FL8`.
+
+Analysis basis: CC v2.1.133 bundle.js:+10974544, +10974689
 
 ```
-function checkOAuthToken(session):
-    accountType = session.accountType
-    if accountType != "zdr":  // internal account-type constant
-        return "no_oauth_token"
-        // "Ultrareview requires a Claude.ai account. Run /login to authenticate."
+function overageCheck(appState):
+    if userIsOverSpendLimit(appState):
+        emit telemetry("tengu_review_overage_blocked")
+        showOverageBlockedDialog()
+        return BLOCKED
+    if overageDialogShown:
+        emit telemetry("tengu_review_overage_dialog_shown")
+    return ALLOWED
 ```
-
-Analysis basis: CC v2.1.133 bundle.js:+10935128, +10935199, +10935294
 
 ---
 
-### Git Environment Validation
+### 4. Bughunter Launch Flow (`launchBughunterSession`)
+
+Identified via call edges `E$7 → BhA → T4q` and `E$7 → G$7 → FhA`.
+
+Analysis basis: CC v2.1.133 bundle.js:+10938827, +10973813
 
 ```
-function validateGitEnvironment(workingDirectory):
-    // Step 1: verify inside a git work-tree
-    result1 = git("rev-parse", "--is-inside-work-tree")
-    if result1 fails:
-        return error "not_in_git_repo"
+async function launchBughunterSession(commandArgs, appState):
 
-    // Step 2: retrieve remote origin URL (cached in remoteUrlCache)
-    if remoteUrlCache.has(workingDirectory):
-        originUrl = remoteUrlCache.get(workingDirectory)
+    // 4a — determine source mode
+    prNumber = parsePRNumber(commandArgs)   // calls T4q → p6 (JSON.parse)
+
+    if prNumber is present:
+        sourceMode = "pr"
+        sourceRef  = prNumber
     else:
-        result2 = git("config", "--get", "remote.origin.url")
-        if result2 is empty:
-            return error "no_git_remote"
-            // "No git remote URL found"
-        originUrl = result2.trim()
-        remoteUrlCache.set(workingDirectory, originUrl)
+        // 4b — bundle mode; check size again at bundle level
+        bundleResult = await buildAndUploadBundle()  // calls nXA (teleport_git_bundle_upload)
+        if bundleResult.status == "too_large":
+            return error("Repo is too large. Push a PR and use `/ultrareview <PR#>` instead.")
+        sourceMode = bundleResult.mode   // "bundle", "explicit_env_bundle", "git_repository", etc.
 
-    // Step 3: confirm GitHub host
-    if "github.com" not in originUrl:
-        return error "not_github"
+    // 4c — cost / timing constants
+    estimatedCost    = "$10-$20"
+    estimatedRuntime = "~10–20 min"
+    budgetMin        = 5      // credits
+    budgetMax        = 20     // credits
+    timeoutMin       = 600    // seconds lower bound
+    timeoutMax       = 1800   // seconds upper bound (= 30 min)
 
-    return originUrl
+    // 4d — resolve cloud environment (calls _l, oBH → teleport_environments_list)
+    //   auto-creates "Default" anthropic_cloud env if none exists (timeout 15 000 ms)
+    environment = await resolveOrCreateCloudEnvironment()
+    if not environment:
+        return error("No environments available for session creation")
+
+    // 4e — generate session title (calls wN4 → teleport_generate_title)
+    title = await generateTaskTitle(prNumber or diffSummary)
+
+    // 4f — check GitHub App installation (calls IGH → checkGithubAppInstalled)
+    githubAppOK = await checkGithubAppInstalled(orgUUID, accessToken)
+    emit telemetry(githubAppOK ? "github_preflight_ok" : "github_preflight_failed")
+
+    // 4g — create remote session (calls l1H → SG9 → rXA.randomUUID)
+    session = await createRemoteSession({
+        title:       title,
+        environment: environment,
+        sourceMode:  sourceMode,
+        task:        "ultrareview",
+        permissionMode: "set"
+    })
+    if not session.id:
+        return error("Server returned a malformed session response (no session id)")
+
+    emit telemetry("tengu_review_remote_launched")
+
+    // 4h — monitor session (calls bG9; poll loop, timeout 1 800 000 ms)
+    return await monitorRemoteSession(session.id, timeoutMs=1_800_000)
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+6449301, +6449313, +1000636, +1000644, +1000662, +1000759, +1000768, +1000776, +1000905, +10936997
+Analysis basis: CC v2.1.133 bundle.js:+10934896, +10934951, +10935140, +10935352, +10940955, +7824158, +7829054, +7825505, +7827285, +7836827, +7841211
 
 ---
 
-### Repository Size Guard (local-bundle mode)
+### 5. Git Bundle Upload (`uploadGitBundle`)
+
+Identified via call edge `FhA → l1H → nXA`; telemetry event `tengu_ccr_bundle_upload`.
+
+Analysis basis: CC v2.1.133 bundle.js:+7808742
 
 ```
-function checkRepoSize(repoPath):
-    // Constraints discovered in depth-2 traversal:
-    //   file-count ceiling : 100 files   (bundle.js:+7806194)
-    //   depth ceiling      : 3 levels    (bundle.js:+7806186)
-    //   byte-size ceiling  : 5,000,000 B (bundle.js:+7806213)
-    bundleSize = computeBundleSize(repoPath, maxDepth=3, maxFiles=100)
-    if bundleSize > 5000000:
-        return error:
-          "Repo is too large to bundle. Push a PR and use `/ultrareview <PR#>` instead."
+async function uploadGitBundle(repoPath):
+
+    // Verify in a git repo
+    if not isInsideWorkTree():
+        return { status: "not_in_git_repo" }
+
+    // Ensure repo has at least one commit
+    commitCount = gitForEachRef("--count=1", "refs/")
+    if commitCount == 0:
+        return error("Repository has no commits yet")
+
+    // Seed stash refs for efficient incremental uploads
+    stashRef = git("stash", "create")   // refs/seed/stash
+    rootRef  = git("update-ref", "-d", "refs/seed/root")
+
+    // Create bundle (name pattern: "ccr-seed.bundle" / "_source_seed.bundle")
+    bundleFile = createGitBundle(repoPath)
+
+    // Upload; check HTTP 200 for success
+    uploadResult = await httpUpload(bundleFile)
+
+    emit telemetry("tengu_ccr_bundle_upload", {
+        status: uploadResult.status,   // "success" | "failed" | "upload_failed"
+        mode:   bundleMode             // "head" | "fallback_head" | "squashed" | "fallback_squashed"
+    })
+
+    // Cleanup seed refs
+    cleanupSeedRefs()
+
+    return uploadResult
 ```
 
-Maximum bundle size: 5,000,000 bytes (Analysis basis: CC v2.1.133 bundle.js:+7806213)
-Maximum file count: 100 files (Analysis basis: CC v2.1.133 bundle.js:+7806194)
-Maximum traversal depth: 3 levels (Analysis basis: CC v2.1.133 bundle.js:+7806186)
+Analysis basis: CC v2.1.133 bundle.js:+7808771, +7809064, +7809910, +7810507
 
 ---
 
-### Branch Resolution (local-bundle mode)
+### 6. Remote Session Monitor (`monitorRemoteSession`)
+
+Identified via call edge `FhA → kQH → bG9`.
+
+Analysis basis: CC v2.1.133 bundle.js:+7836827, +7837006
 
 ```
-function resolveBaseBranch(workingDirectory):
-    // Step 1: get current HEAD branch
-    currentBranch = git("rev-parse", "--abbrev-ref", "HEAD").trim()
-    // "--verify" "--quiet" flags also used
+async function monitorRemoteSession(sessionId, timeoutMs=1_800_000):
 
-    // Step 2: resolve default remote branch
-    defaultBranch = git("symbolic-ref", "--short", "refs/remotes/origin/HEAD").trim()
-    if defaultBranch is empty:
-        // Probe known defaults in order
-        for candidate in ["main", "master"]:
-            if git("show-ref", candidate) succeeds:
-                defaultBranch = candidate
-                break
+    startTime = Date.now()
 
-    // Step 3: compute merge-base
-    mergeBase = git("merge-base", currentBranch, defaultBranch)
+    loop:
+        elapsed = Date.now() - startTime
+        if elapsed > timeoutMs:
+            return error("remote session exceeded 30 minutes")
 
-    // Step 4: compute diff stat
-    diffStat = git("diff", "--shortstat", mergeBase)
+        sessionState = await pollSessionState(sessionId)
 
-    return { currentBranch, defaultBranch, mergeBase, diffStat }
+        match sessionState.status:
+            "pending"   → continue polling
+            "running"   → continue polling
+            "starting"  → continue polling
+            "idle"      → continue polling
+            "hook_started"   → emit progress event
+            "hook_progress"  → emit progress event
+            "hook_response"  → emit progress event
+            "SessionStart"   → emit progress event
+            "completed" → return sessionState.result
+            "archived"  → return sessionState.result
+            "error"     → return error("remote session returned an error")
+
+        if result is empty:
+            return error("no review output — orchestrator may have exited early")
+
+        await setTimeout(pollIntervalMs)
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+1008503, +1008518, +1008675, +1008690, +1008700, +1008813, +1008820, +1008882, +10937519, +10937530, +10937920, +10938435, +10938442
+Analysis basis: CC v2.1.133 bundle.js:+7838664, +7839695, +7838569, +7838644, +7840647, +7840688, +7840725, +7841187
 
 ---
 
-### Preflight API Call
+### 7. Post-Launch Output Rendering (`renderPostLaunch`)
+
+Identified via call edges `E$7 → G$7 → FhA` and `G$7 → W$7`.
+
+Analysis basis: CC v2.1.133 bundle.js:+10973813, +10973852
 
 ```
-function ultrareviewPreflight(orgUuid, payload):
-    headers = {
-        "x-organization-uuid": orgUuid
-    }
-    response = POST("/api/ultrareview/preflight", payload, headers, timeout=5000)
+function renderPostLaunch(launchResult, sessionURL):
 
-    switch response.status:
-        case "schema_mismatch":
-            return error "schema_mismatch"
-        case "request_failed":
-            return error "request_failed"
-        case "server":
-            if not response.orgEligible:
-                return error "Ultrareview is unavailable for your organization."
-            return response.proceedStatus  // one of: "proceed", "needs-confirm", "blocked"
+    // Display brief acknowledgement per system prompt instruction:
+    // "The output above is already visible to the user.
+    //  Briefly acknowledge it without repeating the target, URL, or billing note.
+    //  Findings will arrive via task-notification."
+    // (≤30-char fragment cited; full text © Anthropic PBC)
+
+    // Construct admin-settings link  ("/admin-settings/")
+    adminLink = buildAdminSettingsURL()
+
+    // Map session results → JSX messages (W$7 → H.map)
+    messageList = sessionResult.map(item => renderSessionItem(item))
+
+    return messageList
 ```
 
-Preflight timeout: 5,000 ms (Analysis basis: CC v2.1.133 bundle.js:+10935472)
-Telemetry event on call: `api_ultrareview_preflight` (Analysis basis: CC v2.1.133 bundle.js:+10935596)
+Analysis basis: CC v2.1.133 bundle.js:+10973907, +10974668, +10973850
 
 ---
 
-### Billing / Overage Handling
+### 8. Telemetry Mode / Traffic Gate (`checkTrafficMode`)
+
+Identified via call edges `LL → pr9 → yVA → Wm` and literals at +9780061–+9780354.
+
+Analysis basis: CC v2.1.133 bundle.js:+9783583
 
 ```
-function handleBillingOutcome(preflightResult, subscriptionInfo):
-    // Subscription tiers considered for eligibility:
-    //   "stripe_subscription", "stripe_subscription_contracted",
-    //   "apple_subscription", "google_play_subscription"
-    // Plans that unlock full access: "max", "pro"
-    // Org roles that may act: "admin", "billing", "owner", "primary_owner"
+function checkTrafficMode(appConfig):
 
-    switch preflightResult:
-        case "blocked":
-            emit telemetry: tengu_review_overage_blocked
-            show overage-blocked dialog with link to /admin-settings/
-            abort
+    // Wm checks these sub-properties
+    sourceType = appConfig.sourceType    // literal "firstParty" at +9780068
+    priority   = appConfig.priority      // literal 1 at +9780088; 0 at +9780162
 
-        case "needs-confirm":
-            emit telemetry: tengu_review_overage_dialog_shown
-            show confirmation dialog:
-                estimated cost  : "$10-$20"
-                estimated time  : "~10-20 min"
-            if user declines:
-                display "Ultrareview cancelled."
-                abort
-            // fall through to launch
+    if orgTier in ["enterprise", "team"]:  // literals at +9780354, +9780389
+        return ALLOWED
 
-        case "proceed":
-            // no confirmation required; proceed directly to launch
+    telemetryMode = resolveTelemetryMode()   // yq → J9_ → kH
+    // modes: "essential-traffic" (+911386), "no-telemetry" (+911445),
+    //        "default" (+911519), "yes" (+25237), "on" (+25243)
+
+    if telemetryMode == "essential-traffic":
+        return BLOCKED
+
+    emit telemetry("tengu_slate_kestrel")
+    return ALLOWED
 ```
 
-Estimated cost string: `"$10-$20"` (Analysis basis: CC v2.1.133 bundle.js:+10934523)
-Estimated time string: `"~10–20 min"` (Analysis basis: CC v2.1.133 bundle.js:+10934615)
+Analysis basis: CC v2.1.133 bundle.js:+9780061, +9780094, +9780123, +9780193, +9780265, +9780354, +9780389
 
 ---
 
-### Remote Session Teleport and Launch
+## Constants and Limits
 
-```
-function launchRemoteSession(payload, mode):
-    // mode is either "pr" (PR number supplied) or local-bundle
-
-    // Build session parameters including:
-    //   - git branch info
-    //   - diff stat
-    //   - bundle or PR reference
-    //   - org UUID header ("x-organization-uuid")
-    //   - "ultrareview" tag in payload
-
-    result = teleportToRemoteWorker(payload)
-
-    if result.failed:
-        emit telemetry: tengu_review_remote_teleport_failed
-        display error:
-          "Ultrareview failed to launch the remote session.
-           Check that this is a GitHub repo and try again."
-        abort
-
-    emit telemetry: tengu_review_remote_launched
-
-    // Post inline acknowledgement to conversation:
-    //   "The output above is already visible to the user.
-    //    Briefly acknowledge it without repeating the target,
-    //    URL, or billing note. Findings will arrive via task-notification."
-    postSystemMessage(acknowledgementInstruction, role="system")
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+10941716, +10942200, +10974094, +10973907, +10940955
-
----
-
-### Progress Display Formatting
-
-```
-function formatProgressBar(fractionComplete, columns):
-    // Bar width derived from terminal column count (padEnd with "  " separator)
-    // Thresholds observed:
-    //   column widths: 5, 20, 22, 25, 27, 40 chars
-    //   poll intervals: 600 ms (fast), 1800 ms (slow)
-    filledCells = Math.floor(fractionComplete * barWidth)
-    if not Number.isFinite(fractionComplete):
-        filledCells = 0
-    bar = repeat("█", filledCells).padEnd(barWidth)
-    return formatString(bar, String(Math.floor(fractionComplete * 100)) + "%")
-```
-
-Poll interval (fast phase): 600 ms (Analysis basis: CC v2.1.133 bundle.js:+10940565)
-Poll interval (slow phase): 1,800 ms (Analysis basis: CC v2.1.133 bundle.js:+10940569)
-Column thresholds: 5, 20, 22, 25, 27, 40 (Analysis basis: CC v2.1.133 bundle.js:+10940436, +10940438, +10940502, +10940638, +10940641, +14181334)
-
----
-
-### Randomised Delay Helper
-
-```
-function randomisedDelay():
-    // Generates a value in [0, 2) via Math.random(), then
-    // schedules a one-shot callback with setTimeout.
-    // Used to stagger concurrent preflight requests.
-    jitter = Math.random() * 2   // constant 2 from bundle
-    setTimeout(callback, jitter * baseDelay)
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+12285767, +12285769, +12285806
-
----
-
-### Bughunter / Review Config Emission
-
-```
-function emitBughunterConfig(reviewSettings):
-    // Fires telemetry snapshot of current review configuration
-    // before the session is handed off to the remote worker.
-    emit telemetry: tengu_review_bughunter_config
-    // Includes: branch name, PR mode flag, org UUID, payload size
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+10934406
-
----
-
-### Traffic-Shaping Gate (firstParty / enterprise / team)
-
-```
-function trafficShapingGate(session):
-    // Evaluated inside the network-mode checker (slateKestrel)
-    tier = session.tier
-    if tier == "firstParty":
-        allowedTrafficWeight = 1   // full
-    else:
-        allowedTrafficWeight = 0   // throttled / blocked
-    // "enterprise" and "team" tiers have conditional paths
-    // Fires tengu_slate_kestrel telemetry on evaluation
-    emit telemetry: tengu_slate_kestrel
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+9780068, +9780088, +9780162, +9780354, +9780389, +9780268
-
----
-
-### Cancellation Handler
-
-```
-function handleCancellation():
-    display "Ultrareview cancelled."
-    // No remote session is opened; all local state is cleaned up.
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+10975186, +10975164
+| Constant | Value | Source |
+|---|---|---|
+| Estimated cost range | `$10–$20` USD | bundle.js:+10934523 |
+| Estimated runtime | `~10–20 min` | bundle.js:+10934615 |
+| Budget minimum (credits) | `5` | bundle.js:+10940436 |
+| Budget maximum (credits) | `20` | bundle.js:+10940438 |
+| Timeout lower bound | `600` seconds | bundle.js:+10940565 |
+| Timeout upper bound | `1 800` seconds (30 min) | bundle.js:+10940569 |
+| Session poll hard timeout | `1 800 000` ms | bundle.js:+7838125 |
+| Preflight API timeout | `5 000` ms | bundle.js:+10935472 |
+| Repo size limit (bundle mode) | `5 000 000` bytes | bundle.js:+7806213 |
+| Environment list timeout | `15 000` ms | bundle.js:+6447948 |
+| Jitter multiplier | `2` (Math.random × 2) | bundle.js:+12285767 |
+| Git object size unit | `1 024` bytes/kb | bundle.js:+7805987 |
+| Remote session HTTP 200 OK | `200` | bundle.js:+7809435 |
+| Remote session HTTP 201 Created | `201` | bundle.js:+7825075 |
+| GitHub App check HTTP 400 | `400` | bundle.js:+6450219 |
+| BYOC beta header value | `ccr-byoc-2025-07-29` | bundle.js:+7823762 |
+| Default cloud env working dir | `/home/user` | bundle.js:+6448560 |
+| Default cloud env Python version | `3.11` | bundle.js:+6448639 |
+| Default cloud env Node version | `20` | bundle.js:+6448668 |
 
 ---
 
@@ -386,20 +456,33 @@ Analysis basis: CC v2.1.133 bundle.js:+10975186, +10975164
 
 | Item | Detail |
 |---|---|
-| Telemetry: `tengu_slate_kestrel` | Fired during traffic-shaping / network-mode gate evaluation (bundle.js:+9780268) |
-| Telemetry: `tengu_review_remote_precondition_failed` | Fired when any preflight precondition is not met (bundle.js:+10936284) |
-| Telemetry: `tengu_daemon_control` | Fired during daemon lifecycle operations associated with the remote session (bundle.js:+14191366) |
-| Telemetry: `tengu_review_overage_blocked` | Fired when billing overage check blocks the command (bundle.js:+10974546) |
-| Telemetry: `tengu_review_overage_dialog_shown` | Fired when the `needs-confirm` billing dialog is presented (bundle.js:+10974881) |
-| Telemetry: `tengu_review_bughunter_config` | Fired with a snapshot of review configuration before remote launch (bundle.js:+10934406) |
-| Telemetry: `tengu_review_remote_teleport_failed` | Fired when remote session teleport fails (bundle.js:+10941716) |
-| Telemetry: `tengu_review_remote_launched` | Fired on successful remote session launch (bundle.js:+10942200) |
-| Hook registration | `daemon_stop` and `daemon_stop_failed` hooks registered to manage remote-worker lifecycle (bundle.js:+14191291, +14191328) |
-| Remote URL cache | `remoteUrlCache` (Map) is populated on first git-remote lookup and re-used on subsequent calls within the same session (bundle.js:+1000644, +1000662, +1001042) |
-| appState changes | `allow_remote_sessions` policy flag is read from `appState`; no write-back observed at depth ≤ 2 |
-| Conversation message | A system-role acknowledgement message is injected into the conversation thread after successful launch (bundle.js:+10973907, +10974400) |
-| Admin settings navigation | When billing is `blocked`, the UI may surface a link to `/admin-settings/` (bundle.js:+10974668) |
+| Telemetry: `tengu_slate_kestrel` | Emitted during traffic-mode gate check (bundle.js:+9780268) |
+| Telemetry: `tengu_review_remote_precondition_failed` | Emitted when org policy blocks remote sessions (bundle.js:+10936284) |
+| Telemetry: `tengu_review_bughunter_config` | Emitted when bughunter config is resolved (bundle.js:+10934406) |
+| Telemetry: `tengu_review_overage_blocked` | Emitted when user is over spend limit (bundle.js:+10974546) |
+| Telemetry: `tengu_review_overage_dialog_shown` | Emitted when overage dialog is displayed (bundle.js:+10974881) |
+| Telemetry: `tengu_ccr_bundle_max_bytes` | Emitted during repo-size measurement (bundle.js:+7805687) |
+| Telemetry: `tengu_ccr_bundle_seed_enabled` | Emitted when seed-bundle mode is active (bundle.js:+6451936) |
+| Telemetry: `tengu_ccr_bundle_upload` | Emitted after bundle upload attempt (bundle.js:+7809064) |
+| Telemetry: `tengu_teleport_bundle_mode` | Records which bundle mode was selected (bundle.js:+7824158) |
+| Telemetry: `tengu_teleport_source_decision` | Records source-type decision (bundle.js:+7829054) |
+| Telemetry: `tengu_ccr_session_link` | Emitted when session link is available (bundle.js:+7818576) |
+| Telemetry: `tengu_review_remote_teleport_failed` | Emitted when remote session launch fails (bundle.js:+10941716) |
+| Telemetry: `tengu_review_remote_launched` | Emitted on successful remote session launch (bundle.js:+10942200) |
+| Telemetry: `tengu_bg_spare_enable` | Background spare-agent enable event (bundle.js:+14156457) |
+| Telemetry: `tengu_bg_spare_spawn` | Background spare-agent spawn event (bundle.js:+14156817) |
+| Telemetry: `tengu_daemon_control` | Emitted during daemon stop/control lifecycle (bundle.js:+14191366) |
+| Telemetry: `tengu_daemon_config_reload` | Emitted when daemon config is reloaded (bundle.js:+14170592) |
+| Telemetry: `tengu_feature_ok` / `tengu_feature_bad` / `tengu_feature_sad` | Feature health signals throughout execution (bundle.js:+907381, +907437, +907507) |
+| appState changes | Remote session status stored; daemon status written to `daemon.status.json` (bundle.js:+11406987) |
+| File I/O | Git bundle written to temp path (`ccr-seed.bundle`, `_source_seed.bundle`); uploaded then deleted (bundle.js:+7809910, +7810213) |
+| File I/O | Session state persisted via atomic write (`Lo.writeFile` → `Lo.rename`, using `randomBytes` hex name) (bundle.js:+2867005, +2867052, +2867105) |
+| Network | Preflight API call to Anthropic backend with `x-organization-uuid` header (bundle.js:+10935439) |
+| Network | Bundle upload to cloud storage (bundle.js:+7809064) |
+| Network | Session creation POST, expected HTTP 201 (bundle.js:+7825075) |
+| Daemon | Daemon stop sequence via `daemon_stop` / `daemon_stop_failed` (bundle.js:+14191291, +14191328) |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Hook registration | Hooks registered on remote session events: `hook_started`, `hook_progress`, `hook_response` (bundle.js:+7839779, +7839259, +7839288) |
 
 ---
 
@@ -407,25 +490,27 @@ Analysis basis: CC v2.1.133 bundle.js:+10975186, +10975164
 
 | Version | Change |
 |---|---|
-| v2.1.133 | Initial analysis — command registered as `local-jsx`, module `l4q`; full preflight pipeline documented |
+| v2.1.133 | Initial analysis. `AsyncFunction` handler `E$7` in module `l4q`. Repo-size limit 5 MB. 30-min session timeout. BYOC beta header `ccr-byoc-2025-07-29`. |
 
 ---
 
 ## Common Mistakes
 
-1. **Running outside a git repository.** The command performs `git rev-parse --is-inside-work-tree` as its first git check. Invoking `/ultrareview` in a plain directory will immediately abort with `not_in_git_repo`.
+1. **Running without a Claude.ai account.** `/ultrareview` requires OAuth authentication (not an API key). API-key-only users receive an explicit error directing them to `/login` (bundle.js:+6442794).
 
-2. **No GitHub remote configured.** Even if a git repository is present, the remote origin URL must contain `github.com`. Non-GitHub remotes (GitLab, Bitbucket, self-hosted) are not accepted and will produce a `no_git_remote` or "not a GitHub repo" abort.
+2. **Running on an oversized local repo without a PR number.** Repos exceeding 5 000 000 bytes (~5 MB of Git objects) cannot be bundled. Users must push a PR first and invoke `/ultrareview <PR#>` (bundle.js:+10937389, +10941821).
 
-3. **Running without a Claude.ai account (OAuth token).** The command requires an authenticated claude.ai session (account type `zdr`). Using Claude Code with an API-key-only setup will trigger the `no_oauth_token` error; run `/login` first.
+3. **Invoking in essential-traffic-only mode.** Organizations that restrict network traffic to essential routes only will see the command blocked immediately, before any API call is made (bundle.js:+10934997).
 
-4. **Invoking in essential-traffic-only network mode.** When the network policy restricts traffic to essential services only, `/ultrareview` is categorically unavailable and will show a `blocked` message.
+4. **Invoking when the org policy `allow_remote_sessions` is off.** The org admin must enable remote sessions in admin settings (`/admin-settings/`) before this command can function (bundle.js:+10974247, +10974668).
 
-5. **Expecting the review to complete in-terminal.** The actual review runs as a remote session on claude.ai; the local CLI only displays a progress indicator and receives a task notification when findings are ready. The local conversation is not the execution environment.
+5. **No GitHub remote configured.** Bundle-mode teleport requires a GitHub remote (`git remote add origin REPO_URL`). Without one, the command errors with a clear message (bundle.js:+7833211).
 
-6. **Large monorepos without a PR.** Repositories whose bundled representation exceeds 5,000,000 bytes cannot be sent inline. For large codebases, push a PR and invoke `/ultrareview <PR#>` to let the remote worker fetch only the diff.
+6. **Empty repository.** A repo with no commits cannot be bundled. The fix is `git add . && git commit -m "initial"` (bundle.js:+7828491).
 
-7. **Ignoring the cost confirmation.** The command shows an estimated cost of $10–$20 when the billing state is `needs-confirm`. Dismissing or misreading the dialog will cancel the session; an explicit confirmation is required to proceed.
+7. **GitHub App not installed.** Even with a GitHub remote, the Anthropic GitHub App must be installed on the repository. Setup is prompted at `https://claude.ai/code` (bundle.js:+7828396).
+
+8. **Ignoring the cost confirmation dialog.** The preflight can return `needs-confirm`, which shows a `$10–$20` cost prompt. Dismissing without confirming cancels the run silently.
 
 ---
 
@@ -435,40 +520,129 @@ Analysis basis: CC v2.1.133 bundle.js:+10975186, +10975164
 
 | Identifier | Role |
 |---|---|
-| `E$7` | Command entry point / top-level slash-command handler |
-| `LL` | Network-mode / traffic-shaping gate evaluator |
-| `pr9` | Traffic-gate inner policy check helper |
-| `Wm` | Session-tier classifier (firstParty / enterprise / team branching) |
-| `yq` | Essential-traffic mode resolver |
-| `H` | Randomised-delay / jitter helper (uses `Math.random` + `setTimeout`) |
-| `UhA` | Remote precondition orchestrator (git + size + branch checks) |
-| `A68` | Git work-tree verifier (`rev-parse --is-inside-work-tree`) |
-| `d` | Generic async dispatcher / promise utility |
-| `N6` | Shell command executor (wraps git CLI calls) |
-| `qk` | Remote-URL resolver with cache (`whH` Map) |
-| `yG9` | Repository size / file-count guard |
-| `Y8` | Git branch utilities helper |
-| `z` | Daemon lifecycle manager (stop / stop-failed hooks) |
-| `LZ` | Default-branch resolver (`symbolic-ref` / `show-ref` logic) |
-| `cw` | Current-branch resolver (`--abbrev-ref HEAD`) |
-| `L` | Progress-bar formatter (pad / map) |
-| `K` | Async task set manager (add / delete via `q`) |
-| `$` | Remote session teleport dispatcher |
-| `BhA` | Billing / overage dialog controller |
-| `T4q` | Preflight API call handler |
-| `sIH` | Bughunter-config telemetry emitter |
-| `FL8` | String conversion / display helper |
-| `kH` | String coercion wrapper |
-| `XZ` | UI component: inline status renderer |
-| `Z5H` | Subscription-type classifier |
-| `ab` | User role / plan eligibility checker |
-| `C_` | Subscription tier resolver (stripe / apple / google) |
-| `U9` | Plan-level resolver ("max" / "pro") |
-| `R6` | Org-role resolver (admin / billing / owner / primary\_owner) |
-| `Zn` | Review session coordinator (calls `onH`) |
-| `onH` | Core session launcher / teleport initiator |
-| `G$7` | Post-launch message formatter and dispatcher |
-| `FhA` | Main review orchestration loop (progress polling, status updates) |
-| `_` | String normaliser (toLowerCase) |
-| `W$7` | Argument-list mapper for command parameters |
-| `phA` | Cancellation handler |
+| `E$7` | Main async handler for `/ultrareview` (Arbor-resolved entry point) |
+| `LL` | Traffic/telemetry mode gate checker |
+| `pr9` | Telemetry mode resolver (inner) |
+| `yVA` | Policy/source-type evaluator |
+| `Wm` | Source-type sub-property checker (firstParty, priority, org tier) |
+| `ur9` | File-based config reader (readFileSync, utf-8) |
+| `yq` | Telemetry string normaliser |
+| `J9_` | Telemetry string mapper |
+| `kH` | String coercion utility |
+| `H` | Jitter delay helper (Math.random + setTimeout) |
+| `UhA` | Remote preconditions suite orchestrator |
+| `A68` | Git repo presence verifier (rev-parse --is-inside-work-tree) |
+| `N6` | App-state/context accessor |
+| `zN6` | AsyncLocalStorage store reader |
+| `LA` | Secondary context accessor |
+| `GA` | Git subprocess runner (general) |
+| `sJH` | Git child-process spawner with callbacks |
+| `Y` | System resource / memory monitor |
+| `qPL` | String output formatter |
+| `fH` | Error logging helper |
+| `d` | Generic state/value helper |
+| `qk` | Git remote URL resolver (remote.origin.url) |
+| `dp` | Cached remote-URL fetcher |
+| `Wh8` | H4H cache getter (remoteUrl key) |
+| `L` | Padded text formatter |
+| `K` | Async task-set tracker (add/delete/finally) |
+| `k` | Credential/token formatter (redacts secrets) |
+| `Ztq` | Token parsing helper |
+| `SH` | JSON.stringify wrapper |
+| `Uf` | Credential redactor (`[REDACTED]`) |
+| `LkH` | Token unpacker |
+| `vtq` | File-content context bundler (Buffer.byteLength, dirname) |
+| `JhH` | URL credential scrubber (`://***@`) |
+| `eJH` | Git URL parser / protocol extractor (https, http) |
+| `H4_` | URL component splitter |
+| `s9` | String slice helper (indexOf + slice) |
+| `yG9` | Repo-size measurer (git count-objects -v) |
+| `kG9` | Git object-count parser (1024 bytes/kb) |
+| `NG9` | Repo-size limit enforcer (5 000 000 byte threshold) |
+| `J6` | Background-session state-machine controller |
+| `Y8` | Git-state reader |
+| `z` | Daemon lifecycle controller (daemon_stop) |
+| `hH` | Daemon-stop success reporter |
+| `uH` | Daemon-stop failure reporter |
+| `bS` | Daemon shutdown sequencer |
+| `jo` | Exit-code handler |
+| `ePH` | Shutdown callback dispatcher |
+| `mt8` | Session-event emitter (randomUUID) |
+| `cC` | Process-exit coordinator (Promise.race, Promise.all) |
+| `dU` | C5H shutdown caller |
+| `iU` | clearTimeout / cleanup runner |
+| `r8` | Timed abort helper (setTimeout + clearTimeout) |
+| `LZ` | Default-branch resolver (symbolic-ref, "main"/"master" fallbacks) |
+| `Gh8` | H4H cache getter (defaultBranch key) |
+| `cw` | Current-branch resolver (git branch --abbrev-ref HEAD) |
+| `jh8` | H4H cache getter (branch key) |
+| `$` | Atomic file-write helper (randomBytes + writeFile + rename) |
+| `XDq` | Daemon status file writer (daemon.status.json) |
+| `yr` | Status persistence helper |
+| `iY` | Atomic file operations (writeFile, rename, copyFile, unlink) |
+| `Sj6` | Path joiner for daemon status (JDq.join) |
+| `BhA` | Bughunter session launch flow (T4q + sIH) |
+| `T4q` | PR-number parser and branch-diff resolver |
+| `p6` | JSON.parse wrapper |
+| `Rz` | OAuth session validator / API-auth gate |
+| `A7` | Access-token fetcher |
+| `SV` | Organisation UUID resolver |
+| `q_` | API environment (prod/staging/local) resolver |
+| `q1_` | Environment URL builder |
+| `PwL` | OAuth URL validator |
+| `R5` | API error classifier (zAH) |
+| `zAH` | HTTP error code mapper |
+| `Z8` | State value setter |
+| `sIH` | Session notification hook registrar |
+| `onH` | Background-task event emitter |
+| `FL8` | Overage/spend-limit checker |
+| `XZ` | Overage dialog renderer |
+| `Z5H` | Subscription-type resolver |
+| `F7` | Auth-credential builder |
+| `rY` | HTTP client factory (ANTHROPIC_API_KEY, apiKeyHelper) |
+| `R6` | API request dispatcher (Date.now timing) |
+| `C_` | Auth-config builder |
+| `wU` | Boolean flag coercer |
+| `ab` | User role / plan gate (max, pro, admin, billing, owner) |
+| `U9` | Subscription-type checker (stripe, apple, google_play) |
+| `zu_` | Plan resolver helper |
+| `Ou_` | Subscription status helper |
+| `Zn` | Background-task notification emitter |
+| `G$7` | Post-launch output renderer |
+| `FhA` | Full bughunter UI flow (result rendering + session monitor) |
+| `NQH` | Remote eligibility background checker |
+| `iL9` | Eligibility sub-checks (policy_blocked, not_logged_in, byoc, not_in_git_repo, no_git_remote, github_app_not_installed) |
+| `E` | Key-event handler (preventDefault + dispatch) |
+| `u` | UI event source |
+| `QP` | User-settings accessor |
+| `D` | Supervisor daemon config updater |
+| `WOH` | Session result formatter |
+| `G4q` | Background-task event forwarder |
+| `l1H` | Remote session creator / teleporter (full lifecycle) |
+| `sXA` | Session request builder |
+| `nXA` | Git bundle uploader (`teleport_git_bundle_upload`) |
+| `v6` | Bundle file path builder |
+| `SG9` | Remote session record initialiser (randomUUID) |
+| `hG9` | Session-link recorder (`tengu_ccr_session_link`) |
+| `_l` | Cloud environment lister (`teleport_environments_list`) |
+| `oBH` | Cloud environment creator (`teleport_default_environment_create`) |
+| `vH` | String utility (String coercion) |
+| `wN4` | Task-title generator (`teleport_generate_title`) |
+| `xS` | Extended background-session state machine |
+| `IGH` | GitHub App installation checker |
+| `mq` | Message queue helper |
+| `HA` | Error-to-string converter |
+| `kQH` | Remote-agent session launcher (remote_agent) |
+| `ky` | Session token generator (randomBytes, 8 bytes) |
+| `tq8` | Browser/tab opener (xn.open) |
+| `_2` | Session pending-state handler |
+| `ZN4` | Session result string formatter |
+| `bG9` | Session poll loop / event dispatcher (1 800 000 ms timeout) |
+| `HTH` | Session dialogue manager |
+| `JD` | Prompt/question UI component |
+| `W$7` | Result-item list mapper (H.map) |
+| `phA` | Final cleanup / teardown after ultrareview |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

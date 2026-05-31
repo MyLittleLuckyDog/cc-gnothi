@@ -1,12 +1,13 @@
 ---
 type: feature-spec
 feature: "feedback"
-cc_version: "2.1.133"
-updated: "2026-05-18"
+cc_version: 2.1.133
+updated: "2026-05-31"
 tags: ["feedback", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v2.1.133 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -14,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/feedback`
 
-> Analysis basis: CC v2.1.133 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.133
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/feedback` command (aliased as `/bug`) allows users to submit feedback or bug reports about Claude Code directly from the CLI. Before opening any feedback submission UI or flow, the command performs a multi-stage gate check — evaluating environment variables, network-traffic policy, and organizational policy — and short-circuits with an informational message if any gate is closed. When all gates pass, the command renders a JSX component and initiates the submission process.
+The `/feedback` command (also aliased as `/bug`) allows users to submit feedback or bug reports about Claude Code. It is a `local-jsx` command that performs several gate checks — environment variable flags, telemetry policy, organizational policy — before constructing a JSX UI element and dispatching the feedback submission via an async handler. If any gate fails, the command returns an early error message rather than proceeding.
 
 ---
 
@@ -33,157 +34,174 @@ The `/feedback` command (aliased as `/bug`) allows users to submit feedback or b
 | name | `feedback` |
 | description | `Submit feedback about Claude Code` |
 | argumentHint | `[report]` |
-| aliases | `bug` |
-| module_id | `Io9` |
+| aliases | `["bug"]` |
+| module_id | `ir9` |
+| load_inline | `true` |
+| handler | `Ie4` (AsyncFunction, resolved via `module_id` path) |
+| `loc_byte_end` | `9813694` |
+| `arbor_handler.name` | `Ie4` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::Ie4` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.133 bundle.js:+9827617
+Analysis basis: CC v2.1.132 bundle.js:+9813486 – +9813694
 
 ---
 
 ## Input Branching
 
-The command evaluates four sequential gate conditions before proceeding to the feedback UI. Each gate may terminate execution early with a descriptive message.
+The handler (`Ie4`) and its downstream utilities perform a cascading series of gate checks before rendering the feedback UI. The flowchart below captures all branching paths identified within depth-2 traversal.
 
 ```mermaid
 flowchart TD
-    A(["/feedback or /bug invoked"]) --> B{DISABLE_FEEDBACK_COMMAND\nenvironment variable set?}
-    B -- "yes / on / 1" --> B_OUT["Display: '/feedback has been disabled via\nthe DISABLE_FEEDBACK_COMMAND\nenvironment variable'"]
-    B -- "not set" --> C{DISABLE_BUG_COMMAND\nenvironment variable set?}
-    C -- "yes / on / 1" --> C_OUT["Display: '/feedback has been disabled via\nthe DISABLE_BUG_COMMAND\nenvironment variable'"]
-    C -- "not set" --> D{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC\nenv variable active? (essential-traffic check)"}
-    D -- "enabled" --> D_OUT["Display: '/feedback has been disabled via\nthe CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC\nenvironment variable'"]
-    D -- "not enabled" --> E{"Organization policy\n'allow_product_feedback' permits feedback?"}
-    E -- "denied" --> E_OUT["Display: '/feedback has been disabled\nby your organization's policy'"]
-    E -- "permitted" --> F["Resolve authentication token\n(OAuth or API key)"]
-    F --> G["Render feedback JSX component\n+ schedule timed UI event"]
-    B_OUT --> Z([End])
-    C_OUT --> Z
-    D_OUT --> Z
-    E_OUT --> Z
-    G --> Z
+    A(["/feedback invoked"]) --> B{DISABLE_FEEDBACK_COMMAND\nor DISABLE_BUG_COMMAND set?}
+    B -- "yes (env var = 'yes' or 'on')" --> ERR1["Return error:\ncommand disabled via env var"]
+    B -- no --> C{CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC set?}
+    C -- yes --> ERR2["Return error:\ncommand disabled via nonessential traffic env var"]
+    C -- no --> D{Organization policy:\nallow_product_feedback?}
+    D -- "false / blocked" --> ERR3["Return error:\ndisabled by organization policy"]
+    D -- allowed --> E{Auth context check:\nOAuth token available?}
+    E -- no --> F{API key available?}
+    F -- no --> ERR4["Return error:\nno auth credential available"]
+    F -- yes --> G[Build auth headers\nwith x-api-key]
+    E -- yes --> H[Build auth headers\nwith OAuth token + anthropic-beta header]
+    G --> I[Render JSX feedback UI\nvia createElement]
+    H --> I
+    I --> J[Dispatch async submission\nwith random nonce + setTimeout]
+    J --> K([Done])
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+9811715, +9811844, +9811937, +9812076
+Analysis basis: CC v2.1.132 bundle.js:+9813312 (handler entry), +9797610 (env gate 1), +9797739 (env gate 2), +9797832 (nonessential traffic gate), +9797939 (org policy gate)
 
 ---
 
 ## Behavioral Spec
 
-### Gate 1 — `DISABLE_FEEDBACK_COMMAND` Environment Variable Check
+### Gate 1 — Environment Variable Disable Checks
+
+The command handler delegates first to the environment-check utility (`IM8`), which reads two distinct environment variables.
 
 ```
-function checkDisableFeedbackEnvVar():
-    value = getEnvironmentVariable("DISABLE_FEEDBACK_COMMAND")
-    normalizedValue = String(value).toLowerCase()
-    if normalizedValue is in {"yes", "on"} or numeric value equals 1:
-        return DisabledResult(
-            message = "/feedback has been disabled via the DISABLE_FEEDBACK_COMMAND environment variable"
-        )
-    return PassResult()
+function checkEnvDisableFlags():
+    if env("DISABLE_FEEDBACK_COMMAND") in ["yes", "on"]:
+        return Error("/feedback has been disabled via the DISABLE_FEEDBACK_COMMAND environment variable")
+    if env("DISABLE_BUG_COMMAND") in ["yes", "on"]:
+        return Error("/feedback has been disabled via the DISABLE_BUG_COMMAND environment variable")
+    return null
 ```
 
-The string is coerced via `String()` before comparison against the canonical truthy literals `"yes"` and `"on"`.
+The truthiness test compares the environment variable value against the string literals `"yes"` and `"on"` (case-sensitive comparison inferred from literal values).
 
-Analysis basis: CC v2.1.133 bundle.js:+9811715, +25188, +25237, +25243, +25147
+Analysis basis: CC v2.1.132 bundle.js:+9797610, +9797739, +25237, +25243
 
 ---
 
-### Gate 2 — `DISABLE_BUG_COMMAND` Environment Variable Check
+### Gate 2 — Non-Essential Traffic Policy Check
 
-```
-function checkDisableBugEnvVar():
-    value = getEnvironmentVariable("DISABLE_BUG_COMMAND")
-    normalizedValue = String(value).toLowerCase()
-    if normalizedValue is in {"yes", "on"} or numeric value equals 1:
-        return DisabledResult(
-            message = "/feedback has been disabled via the DISABLE_BUG_COMMAND environment variable"
-        )
-    return PassResult()
-```
-
-Because the command is aliased as `/bug`, this gate mirrors the previous one but targets the `DISABLE_BUG_COMMAND` variable. The same truthy-literal set applies.
-
-Analysis basis: CC v2.1.133 bundle.js:+9811844
-
----
-
-### Gate 3 — Non-Essential Traffic Policy Check
+After the environment gate, a secondary check (`kq` → `h1_`) verifies whether non-essential network traffic has been suppressed. The traffic classification literals `"essential-traffic"`, `"no-telemetry"`, and `"default"` govern this routing.
 
 ```
 function checkNonessentialTrafficPolicy():
-    trafficCategory = "essential-traffic"
-    if globalTrafficPolicySet.has(trafficCategory):
-        return DisabledResult(
-            message = "/feedback has been disabled via the CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC environment variable"
-        )
-    return PassResult()
+    trafficMode = getCurrentTrafficMode()  // returns "essential-traffic" | "no-telemetry" | "default"
+    if trafficMode == "essential-traffic":
+        return Error("/feedback has been disabled via the CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC environment variable")
+    return null
 ```
 
-The implementation queries a policy set (`YH7`) using the string key `"essential-traffic"`. If that key is present in the set, feedback submission is classified as non-essential and is blocked.
-
-Analysis basis: CC v2.1.133 bundle.js:+9811937, +911558, +9783599
+Analysis basis: CC v2.1.132 bundle.js:+9797832, +910466, +910525, +910599
 
 ---
 
-### Gate 4 — Organizational Policy Check
+### Gate 3 — Organization Policy Check
+
+The org-policy check (`AL`) inspects an application-state set (`Ft4`) and, if needed, fetches organizational entitlements.  
+The policy key `"allow_product_feedback"` must be truthy for the command to proceed. Account tier literals `"enterprise"` and `"team"` are examined during entitlement resolution (`zm` → `j6`).
 
 ```
-function checkOrganizationPolicy():
-    policyKey = "allow_product_feedback"
-    allowed = evaluatePolicy(policyKey)
-    if not allowed:
-        return DisabledResult(
-            message = "/feedback has been disabled by your organization's policy"
-        )
-    return PassResult()
+function checkOrgPolicy():
+    if Ft4.has(currentContext):
+        // cached result available
+    else:
+        entitlements = resolveEntitlements(accountTier)  // checks "enterprise", "team"
+    if not entitlements["allow_product_feedback"]:
+        return Error("/feedback has been disabled by your organization's policy")
+    return null
 ```
 
-The `evaluatePolicy` call consults the active organization policy store for the boolean key `"allow_product_feedback"`. A falsy result blocks the command entirely.
+A telemetry event (`tengu_slate_kestrel`) is fired during the entitlement resolution path within `j6`.
 
-Analysis basis: CC v2.1.133 bundle.js:+9812044, +9812076
+Analysis basis: CC v2.1.132 bundle.js:+9769494, +9797939, +9797971, +9766163, +9766249, +9766284
 
 ---
 
-### Authentication Token Resolution
+### Gate 4 — Authentication Credential Resolution
+
+The auth-resolution utility (`hP`) wraps two sub-utilities: a credential reader (`R_` → `nY`) and a header builder (`Hj`).
 
 ```
-function resolveAuthToken():
-    oauthToken = getOAuthToken()
-    if oauthToken is null or empty:
-        raise AuthError("No OAuth token available")
-
-    apiKey = getApiKey()
-    if apiKey is null or empty:
-        raise AuthError("No API key available")
-
-    headers = buildHeaders({
-        "anthropic-beta": <beta-header-value>,
-        "x-api-key":      apiKey
-    })
-    return AuthContext(oauthToken, headers)
+function resolveAuthCredential():
+    token = readOAuthToken()
+    if token is null:
+        apiKey = readApiKey()  // checks env "ANTHROPIC_API_KEY"
+        if apiKey is null:
+            raise Error("ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required")
+        return buildHeaders(type="api-key", value=apiKey)
+            // sets header "x-api-key": apiKey
+    return buildHeaders(type="oauth", value=token)
+        // sets header "anthropic-beta": <beta-tag>
 ```
 
-The implementation attempts OAuth token retrieval first, then falls back to an API key check. Both must be available; the absence of either raises an authentication error before any network call is made. The `"anthropic-beta"` header is included unconditionally in the outbound request headers.
+The `apiKeyHelper` config path is also consulted during API key resolution (`co8` branch within `o$`).
 
-Analysis basis: CC v2.1.133 bundle.js:+2899032, +2899044, +2899092, +2899176, +2899239, +2899279
+Analysis basis: CC v2.1.132 bundle.js:+9798034, +2893213, +2893273, +2893357, +2893420, +2893460, +2868107, +2868201, +2868528
 
 ---
 
-### JSX Rendering and Timed UI Event
+### Provider Context Check
+
+During credential and traffic checks, the platform context utility (`yH` → `g_`) detects the active provider. Known provider identifiers checked against: `"bedrock"`, `"foundry"`, `"anthropicAws"`, `"mantle"`, `"vertex"`, `"firstParty"`. The canonical API host `"api.anthropic.com"` is referenced during routing.
 
 ```
-function renderFeedbackComponent(authContext):
-    element = createElement(FeedbackView, { auth: authContext })
-
-    delay = Math.random() * 2          // random value in [0, 2)
-    setTimeout(scheduledUIAction, delay)
-
-    return element
+function detectProvider(config):
+    provider = config.provider  // one of: "bedrock", "foundry", "anthropicAws",
+                                //         "mantle", "vertex", "firstParty"
+    if provider in ["bedrock", "foundry", "anthropicAws", "mantle", "vertex"]:
+        // third-party or enterprise routing; may restrict features
+    else:
+        // default first-party path via api.anthropic.com
+    return provider
 ```
 
-Once all gates pass and authentication is resolved, the command renders a JSX element (via `nVA.createElement`). A random delay in the range **[0, 2)** (the literal `2` appears at the call site) is computed using `Math.random()` and passed to `setTimeout`, which schedules a deferred UI action such as focus management or animation triggering.
+Analysis basis: CC v2.1.132 bundle.js:+1975229, +1975269, +1975319, +1975375, +1975429, +1975477, +1975486, +1976104
 
-Analysis basis: CC v2.1.133 bundle.js:+9827313, +12285767, +12285769, +12285806
+---
+
+### JSX UI Rendering
+
+After all gates pass, the render component (`nr9`) is called via `LVA.createElement` to produce the feedback UI element. This is the JSX rendering step that surfaces the form or prompt to the user in the CLI interface.
+
+```
+function renderFeedbackUI(props):
+    return createElement(FeedbackComponent, props)
+```
+
+Analysis basis: CC v2.1.132 bundle.js:+9813182, +9813359
+
+---
+
+### Async Submission Dispatch
+
+The main handler (`Ie4`) invokes a nonce/delay utility (`H`) after rendering. This utility generates a random identifier and introduces a `setTimeout`-based delay before finalizing submission.
+
+```
+async function dispatchFeedbackSubmission(payload):
+    nonce = Math.floor(Math.random() * 2)   // 2 is the upper bound literal
+    await delay(setTimeout, nonce)
+    submit(payload)
+```
+
+Analysis basis: CC v2.1.132 bundle.js:+9813330, +12264283, +12264285, +12264322
 
 ---
 
@@ -191,14 +209,12 @@ Analysis basis: CC v2.1.133 bundle.js:+9827313, +12285767, +12285769, +12285806
 
 | Item | Detail |
 |---|---|
-| Telemetry | No `tengu_*` telemetry events were found in the depth-2 traversal for this command. |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Network requests | Outbound HTTP call using OAuth token + API key, with `anthropic-beta` and `x-api-key` headers. Analysis basis: CC v2.1.133 bundle.js:+2899176, +2899279 |
+| Telemetry | `tengu_slate_kestrel` — fired during organizational entitlement resolution (bundle.js:+9766163) |
+| Hook registration | None identified within depth-2 traversal |
+| appState changes | Organizational entitlement cache (`Ft4`) may be populated as a side effect of the org-policy gate (bundle.js:+9769494) |
+| Auth headers | `x-api-key` or `anthropic-beta` header constructed in memory; not persisted (bundle.js:+2893357, +2893460) |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Environment reads | `DISABLE_FEEDBACK_COMMAND`, `DISABLE_BUG_COMMAND`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` |
-| Organization policy reads | `allow_product_feedback` |
-| Timed side effect | `setTimeout` with a `Math.random()`-derived delay in [0, 2) ms/s. Analysis basis: CC v2.1.133 bundle.js:+12285806 |
+| Async delay | `setTimeout` used in submission dispatch; introduces a non-deterministic short delay (bundle.js:+12264322) |
 
 ---
 
@@ -206,17 +222,17 @@ Analysis basis: CC v2.1.133 bundle.js:+9827313, +12285767, +12285769, +12285806
 
 | Version | Change |
 |---|---|
-| v2.1.133 | Initial analysis |
+| v2.1.132 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Setting only `DISABLE_BUG_COMMAND` and expecting `/feedback` to still work.** Both `DISABLE_FEEDBACK_COMMAND` and `DISABLE_BUG_COMMAND` are checked independently; either one blocks the command regardless of how it is invoked.
-2. **Expecting the command to work without a valid OAuth token.** The authentication resolution step requires both an OAuth token and an API key. Environments that have only an API key (e.g., raw API access without an OAuth session) will hit the `"No OAuth token available"` error.
-3. **Assuming `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` only affects data collection.** This variable also suppresses the `/feedback` command, which may be surprising when the variable is set for privacy reasons.
-4. **Assuming the `/bug` alias behaves differently.** `/bug` is a true alias; the implementation is identical and all four gates apply equally.
-5. **Expecting the command to respect only one disable mechanism.** All four gate checks are sequential and independent — passing one does not skip the others.
+1. **Forgetting the `/bug` alias**: `/feedback` and `/bug` are registered as the same command. Both invoke identical logic; using either name is equivalent.
+2. **Setting `DISABLE_FEEDBACK_COMMAND=1`**: The gate checks only for the values `"yes"` and `"on"` — setting the variable to `"1"`, `"true"`, or any other truthy string will **not** disable the command.
+3. **Enterprise/team accounts with restricted policy**: If an organization has set `allow_product_feedback` to false in their policy, the command will silently fail with a policy error rather than any network error — this is not a connectivity issue.
+4. **Using non-first-party providers**: Users on `bedrock`, `vertex`, `foundry`, `anthropicAws`, or `mantle` may encounter auth routing differences that affect whether the feedback submission reaches Anthropic's endpoint.
+5. **Expecting synchronous completion**: The submission step uses `setTimeout`-based async dispatch; the command may return a success UI state before the underlying HTTP request has completed.
 
 ---
 
@@ -226,11 +242,23 @@ Analysis basis: CC v2.1.133 bundle.js:+9827313, +12285767, +12285769, +12285806
 
 | Identifier | Role |
 |---|---|
-| `Zo9` | Feedback JSX view component (renders the feedback UI element) |
-| `oH7` | Top-level command handler (orchestrates gate checks, auth, and rendering) |
-| `aM8` | Gate evaluation pipeline (runs all four disable-checks in sequence) |
-| `kH` | Environment variable string coercion helper (wraps `String()`) |
-| `yq` | Non-essential traffic policy resolver (queries the `essential-traffic` key) |
-| `LL` | Policy set membership checker (calls `.has()` on the traffic policy set) |
-| `FP` | Authentication token resolver (retrieves OAuth token and API key, builds headers) |
-| `H` | Timed UI event scheduler (calls `Math.random()` and `setTimeout`) |
+| `nr9` | Feedback JSX render component (called via `LVA.createElement`) |
+| `Ie4` | Main async handler for `/feedback` command (entry point, AsyncFunction) |
+| `IM8` | Top-level gate orchestrator (env checks, traffic policy, org policy, auth) |
+| `yH` | Provider/platform context string normalizer |
+| `kq` | Non-essential traffic policy checker |
+| `h1_` | Traffic mode reader (returns "essential-traffic" / "no-telemetry" / "default") |
+| `AL` | Organizational policy gate (checks `allow_product_feedback`) |
+| `Mr9` | Entitlement fetch sub-routine called within org-policy gate |
+| `FIA` | Entitlement resolution wrapper (calls `zm` and `Kr9`) |
+| `zm` | Core entitlement resolver; dispatches to account-tier and telemetry paths |
+| `g_` | Provider detection utility (reads provider string from config) |
+| `a3` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| `o$` | API credential loader (checks `ANTHROPIC_API_KEY`, `apiKeyHelper`, OAuth) |
+| `j6` | Entitlement cache and set manager; fires `tengu_slate_kestrel` telemetry |
+| `hP` | Auth header resolution orchestrator |
+| `R_` | OAuth token reader |
+| `nY` | Low-level credential fetch (reads env vars, calls `o$` for API key) |
+| `fU` | Boolean coercion helper for credential presence check |
+| `Hj` | Auth header builder (constructs `x-api-key` or `anthropic-beta` headers) |
+| `H` | Nonce + async delay utility (`Math.random` + `setTimeout`) |

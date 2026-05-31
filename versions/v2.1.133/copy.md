@@ -2,8 +2,8 @@
 type: feature-spec
 feature: "copy"
 cc_version: "2.1.133"
-updated: "2026-05-18"
 tags: ["copy", "commands", "slash-commands"]
+updated: "2026-05-31"
 source: "bundle-analysis"
 bundle_verified: true
 analysis_basis: "CC v2.1.133 bundle.js (AST extraction + Claude interpretation)"
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/copy` slash command copies Claude's last assistant response to the system clipboard. An optional integer argument `N` allows the user to target the Nth-latest assistant message instead of the most recent one. The command extracts the text content of the selected message, serializes it, and writes it to the clipboard via the platform's native mechanism.
+The `/copy` slash command copies Claude's most recent assistant response to the system clipboard. When given a numeric argument `N`, it copies the Nth-latest assistant message instead. The command resolves the target message from the conversation history, extracts its plain-text content, and delegates to a platform-aware clipboard writer.
 
 ---
 
@@ -33,6 +33,15 @@ The `/copy` slash command copies Claude's last assistant response to the system 
 | name | `copy` |
 | description | `Copy Claude's last response to clipboard (or /copy N for the Nth-latest)` |
 | module_id | `La9` |
+| load_inline | `true` |
+| loc_byte | `9853662` |
+| loc_byte_end | `9853848` |
+| loc_line | `5564` |
+| arbor_handler.name | `h67` |
+| arbor_handler.fqn | `claude-2.1.133::h67` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
 Analysis basis: CC v2.1.133 bundle.js:+9853662
 
@@ -40,178 +49,210 @@ Analysis basis: CC v2.1.133 bundle.js:+9853662
 
 ## Input Branching
 
-The command handler (`h67`) accepts an optional argument string. The branching logic is:
-
-1. If the argument is absent or empty → target index defaults to `1` (most recent assistant message).
-2. If the argument is present → attempt to parse it as a number via `Number()`.
-3. If the parsed value is a valid integer (`Number.isInteger`) and ≥ 1 → use it as the Nth-latest index.
-4. If parsing fails or the value is not a valid positive integer → display an error.
-5. If no assistant message exists at the resolved index → emit the literal error `"No assistant message to copy"`.
-6. If a valid assistant message is found → extract its text content, perform markdown-to-plaintext rendering, and write to clipboard.
+Three distinct branches are present: no argument (copy last response), a valid integer argument (copy Nth-latest response), and an invalid/non-integer argument (error path). A Mermaid flowchart is used.
 
 ```mermaid
 flowchart TD
-    A["/copy called with optional arg"] --> B{Argument present?}
-    B -- No --> C[targetIndex = 1]
-    B -- Yes --> D[Parse arg as Number]
-    D --> E{Number.isInteger AND >= 1?}
-    E -- No --> F[Show parse error / usage hint]
-    E -- Yes --> G[targetIndex = N]
-    C --> H[Filter messages for role == 'assistant']
-    G --> H
-    H --> I{Message at targetIndex exists?}
-    I -- No --> J[Emit: 'No assistant message to copy']
-    I -- Yes --> K[Extract text content blocks]
-    K --> L[Render markdown tokens via lexer]
-    L --> M[Serialize to plaintext]
-    M --> N[Write to clipboard]
-    N --> O[Emit tengu_copy telemetry]
-    O --> P[Return success]
+    A([User invokes /copy with optional argument]) --> B{Argument present?}
+    B -- No --> C[Default N = 1\ncopy latest assistant message]
+    B -- Yes --> D{Is argument a valid integer?\nNumber.isInteger check}
+    D -- No --> E[Display error:\n'No assistant message to copy'\nor invalid index feedback]
+    D -- Yes --> F[Parse integer N]
+    F --> G[Collect all assistant messages\nfrom conversation history]
+    C --> G
+    G --> H{Nth-latest message exists?}
+    H -- No --> E
+    H -- Yes --> I[Extract text content blocks\nfilter by type=text]
+    I --> J[Concatenate text into plain string]
+    J --> K[Invoke platform-aware\nclipboard writer]
+    K --> L{Platform?}
+    L -- darwin --> M[pbcopy]
+    L -- linux/wl --> N[wl-copy]
+    L -- linux/x11-xclip --> O[xclip -selection clipboard]
+    L -- linux/x11-xsel --> P[xsel --clipboard --input]
+    L -- win32 --> Q[powershell -NoProfile\n-NonInteractive -Command ...]
+    L -- tmux/iTerm2 --> R[tmux load-buffer or\nkitty/iTerm2 protocol]
+    M & N & O & P & Q & R --> S[Emit tengu_copy telemetry]
+    S --> T([Return success or error message to UI])
+    E --> T
 ```
-
-Analysis basis: CC v2.1.133 bundle.js:+9852847 (handler entry), +9852957 (`Number` parse), +9852971 (`Number.isInteger` check), +9852888 (`"No assistant message to copy"` literal), +9853266 (telemetry emit)
 
 ---
 
 ## Behavioral Spec
 
-### 1. Argument Parsing
+### Handler Entry Point (`h67`)
+
+The Arbor-resolved handler is `h67` (AsyncFunction, resolved via `module_id` → `La9`).
+
+Analysis basis: CC v2.1.133 bundle.js:+9852847
 
 ```
-function parseTargetIndex(rawArg):
-    if rawArg is absent or blank:
-        return 1
-    n = Number(rawArg)
-    if Number.isInteger(n) AND n >= 1:
-        return n
+async function copyCommandHandler(args, conversationContext):
+    // Step 1: Collect assistant messages from conversation history
+    assistantMessages = collectAssistantMessages(conversationContext)
+    // Aa9 at bundle.js:+9852847
+
+    // Step 2: Parse numeric index from args (if provided)
+    rawArg = args  // H at bundle.js:+9852886
+    if rawArg is present:
+        index = Number(rawArg)  // bundle.js:+9852957
+        if not Number.isInteger(index):
+            return errorResult("No assistant message to copy")
+            // literal at bundle.js:+9852888
     else:
-        raise UsageError("argument must be a positive integer")
+        index = 1  // default: latest message
+
+    // Step 3: Retrieve Nth-latest assistant message
+    // index=1 means the most recent; index=N means Nth from the end
+    targetMessage = getNthLatestAssistantMessage(assistantMessages, index)
+    // Ha9 at bundle.js:+9853201
+
+    if targetMessage is null or undefined:
+        return errorResult("No assistant message to copy")
+
+    // Step 4: Extract plain text from target message
+    plainText = extractTextContent(targetMessage)
+    // filters content blocks where type == "text" (literal at bundle.js:+9719750)
+    // NL/H.filter at bundle.js:+9719727
+
+    // Step 5: Write text to system clipboard
+    writeToClipboard(plainText)
+    // LvA / kE at bundle.js:+9853355, +9849211
+
+    // Step 6: Emit telemetry
+    emit("tengu_copy")  // bundle.js:+9853266
+
+    // Step 7: Return contextual result to UI
+    // "message" / "messages" literals at bundle.js:+9853142, +9853152
+    return successResult(targetMessage, index)
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+9852957, +9852971
+Analysis basis: CC v2.1.133 bundle.js:+9852847 – +9853662
 
 ---
 
-### 2. Assistant Message Selection
+### Assistant Message Collection (`Aa9`)
 
 ```
-function selectAssistantMessage(conversationMessages, targetIndex):
-    assistantMessages = conversationMessages
-        .filter(msg => msg.role == "assistant")
-        .reverse()          // most-recent first
-    if assistantMessages.length == 0 OR targetIndex > assistantMessages.length:
-        return Error("No assistant message to copy")
-    return assistantMessages[targetIndex - 1]
+function collectAssistantMessages(conversationContext):
+    // Array.isArray check at bundle.js:+9848865
+    if not Array.isArray(conversationContext):
+        return []
+
+    result = []
+    for each message in conversationContext:
+        // filter role == "assistant" (literal at bundle.js:+9848795)
+        if message.role == "assistant":
+            result.push(message)  // A.push at bundle.js:+9848913
+
+    // NL: further filters content blocks by type == "text"
+    // H.filter at bundle.js:+9719727
+    return result filtered to those with at least one text content block
 ```
 
-The role filter uses the string literal `"assistant"`.
-Analysis basis: CC v2.1.133 bundle.js:+9848795 (`"assistant"` literal), +9852888 (`"No assistant message to copy"` literal), +9853142 (`"message"` literal), +9853152 (`"messages"` literal)
+Analysis basis: CC v2.1.133 bundle.js:+9848865
 
 ---
 
-### 3. Content Extraction and Text Normalization
+### Nth-Latest Message Retrieval (`Ha9`)
 
 ```
-function extractTextContent(messageContentBlocks):
-    textParts = []
-    for block in messageContentBlocks:
-        filtered = filterToTextBlocks(block)   // keeps only blocks with type "text"
-        textParts.push(filtered.text)
-    return textParts.join("")
+function getNthLatestAssistantMessage(assistantMessages, N):
+    // Uses Ef.lexer for markdown-aware parsing at bundle.js:+9848446
+    // H.indexOf at bundle.js:+9848492
+    // eo9 — table rendering helper, invoked at bundle.js:+9848613
+    // _.slice to extract sub-range at bundle.js:+9848624
+
+    reversedMessages = assistantMessages.slice().reverse()
+    if N < 1 or N > reversedMessages.length:
+        return null
+    return reversedMessages[N - 1]
 ```
 
-Only content blocks whose type equals `"text"` are retained; other block types (tool use, tool result, images) are discarded.
-Analysis basis: CC v2.1.133 bundle.js:+9719750 (`"text"` literal), +9848897 (`filterToTextBlocks` call via `NL`)
+The internal rendering path (`eo9`) prepares a table-formatted summary of messages (using column separators `" | "`, alignment `"center"`, `"right"`, `"left"` — literals at bundle.js:+9848135, +9848170, +9848212, +9848252) when displaying the index listing, but the actual clipboard payload is the raw text content, not the rendered table.
+
+Analysis basis: CC v2.1.133 bundle.js:+9848446 – +9848624
 
 ---
 
-### 4. Markdown Token Rendering (Table Handling)
+### Table Rendering Helper (`eo9`)
 
-The raw text is tokenized via the markdown lexer (`Ef.lexer`). The implementation contains special-case logic for `"table"` tokens:
+This function formats multi-message listings for display (not copied to clipboard).
 
 ```
-function renderTokensToPlaintext(tokens):
-    output = []
-    for token in tokens:
-        if token.type == "table":
-            renderedTable = renderMarkdownTable(token)
-            // Column separators: " | " (literal)
-            // Pipe escape pattern: "\|" is unescaped
-            // Column alignment: "center", "right", "left"
-            // Minimum column width: 3 characters
-            // Column padding computed via Math.max(headerWidth, cellWidth, 3)
-            output.push(renderedTable)
-        else if token.type == "code":
-            output.push(token.text)   // code block content preserved as-is
-        else:
-            output.push(stripMarkdown(token))
-    return output.join("\n")
+function renderMessageTable(messages, maxWidth):
+    // V67.map — map over rows at bundle.js:+9847898
+    // $.map — map over columns at bundle.js:+9847949
+    // O.replace with "\|" escape at bundle.js:+9847960, +9847976
+    // Math.max for column widths at bundle.js:+9848026
+    // z8 (Bun.stringWidth) for terminal-aware width at bundle.js:+9848051
+    // column minimum width = 3 (literal at bundle.js:+9848035)
+    // separator = " | " (literal at bundle.js:+9848135)
+    // alignment modes: "center", "right", "left"
+
+    for each message row:
+        escapedCells = cells.map(c => c.replace("|", "\\|"))
+        colWidths     = Math.max(minWidth=3, terminalWidth(cell))
+        alignedCells  = cells.map((cell, col) => align(cell, colWidths[col], alignment[col]))
+
+    return rows joined by newline, columns joined by " | "
 ```
 
-Table column separator literal: `" | "` (Analysis basis: CC v2.1.133 bundle.js:+9848135)
-Pipe escape literal: `"\\|"` (Analysis basis: CC v2.1.133 bundle.js:+9847976)
-Alignment values: `"center"`, `"right"`, `"left"` (Analysis basis: CC v2.1.133 bundle.js:+9848170, +9848212, +9848252)
-Minimum column width: `3` (Analysis basis: CC v2.1.133 bundle.js:+9848035)
-Token type `"table"` (Analysis basis: CC v2.1.133 bundle.js:+9848559)
-Token type `"code"` (Analysis basis: CC v2.1.133 bundle.js:+9847722)
-Markdown parser: `oWH.parse` via `Ef` (Analysis basis: CC v2.1.133 bundle.js:+4333133, +9848446)
+Analysis basis: CC v2.1.133 bundle.js:+9847933 – +9848404
 
 ---
 
-### 5. Terminal Width Measurement
-
-When rendering table columns, the implementation uses `Bun.stringWidth` (via `z8`) to measure display width of each cell string, ensuring correct alignment in terminals that display wide (CJK) characters.
+### Platform-Aware Clipboard Writer (`kE` via `LvA`)
 
 ```
-function measureDisplayWidth(cellString):
-    return Bun.stringWidth(cellString)   // accounts for multi-byte / wide chars
+function writeToClipboard(text):
+    platform = process.platform
+
+    if platform == "darwin":          // bundle.js:+9853355 via kE/x0K/Y8/N6
+        spawn("pbcopy", [], stdin=text)  // literal at bundle.js:+9188656 (pbcopy)
+
+    else if platform == "linux":      // literal at bundle.js:+3188682
+        if waylandAvailable():
+            spawn("wl-copy", [], stdin=text)       // literal at bundle.js:+3188721
+        else if xclipAvailable():
+            spawn("xclip", ["-selection", "clipboard"], stdin=text)
+            // literals at bundle.js:+3188767, +3188788, +3188801
+        else if xselAvailable():
+            spawn("xsel", ["--clipboard", "--input"], stdin=text)
+            // literals at bundle.js:+3188833, +3188852, +3188866
+
+    else if platform == "win32":      // literal at bundle.js:+3189133
+        spawn("powershell", ["-NoProfile", "-NonInteractive", "-Command", <pipe-expr>], stdin=text)
+        // literals at bundle.js:+3189145, +3189159, +3189172, +3189190
+
+    // Terminal multiplexer / special terminal fallbacks:
+    if insideTmux():
+        // iTerm2/tmux load-buffer path
+        // literals: "tmux" at bundle.js:+3188317, "load-buffer" at +3188255, "-w" at +3188289
+        spawnTmux("load-buffer", "-w", tmpFile)
+
+    if termProgram == "iTerm2":       // literal at bundle.js:+3188245
+        useKittyProtocol(text)        // "kitty" literal at bundle.js:+3187755, "base64" at +3188435
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+165342 (`Bun.stringWidth` call), +9848051 (`z8` call from `eo9`)
+The tmp-file path for tmux/iTerm2 uses `so9.join` and `K38.writeFile`/`K38.mkdir` (bundle.js:+9849076, +9849103, +9849146). The directory helper `cP` enforces permissions (mode `448` = octal `0700`, literal at bundle.js:+3752739) via `SRK` and `o2H.chmodSync` (bundle.js:+3752560).
+
+Analysis basis: CC v2.1.133 bundle.js:+9849211 – +9849291
 
 ---
 
-### 6. Plaintext File Fallback Path
-
-The call graph reveals a secondary path (`qa9`) that writes content to a `.txt` file using `K38.writeFile` and `K38.mkdir`. This is invoked when the clipboard API is unavailable or when the rendered output is directed to a file sink.
+### Text Content Extraction (`NL`)
 
 ```
-function writePlaintextFile(content, outputPath):
-    ensureDirectoryExists(outputPath.parent, mode=448)   // octal 0o700
-    await fileSystem.writeFile(outputPath, content)
+function extractTextContent(message):
+    // H.filter at bundle.js:+9719727
+    // type == "text" literal at bundle.js:+9719750
+    textBlocks = message.content.filter(block => block.type == "text")
+    return textBlocks.map(b => b.text).join("")
 ```
 
-File extension used: `".txt"` (Analysis basis: CC v2.1.133 bundle.js:+9849032)
-Plaintext content type label: `"plaintext"` (Analysis basis: CC v2.1.133 bundle.js:+9849000)
-Directory creation mode: `448` (decimal, = `0o700`) (Analysis basis: CC v2.1.133 bundle.js:+9849134)
-Analysis basis: CC v2.1.133 bundle.js:+9849069 (`cP` call), +9849076 (`so9.join`), +9849103 (`K38.mkdir`), +9849146 (`K38.writeFile`)
-
----
-
-### 7. Clipboard Write
-
-```
-function writeToClipboard(plaintextContent):
-    clipboardProvider = resolveClipboardEncoder()   // kE: detects encoding (utf8/base64)
-    detectPlatformLineEndings(plaintextContent)     // l4: checks indexOf for line-end style
-    writeClipboardContent(plaintextContent)         // qa9: performs the actual write
-```
-
-Encoding options observed: `"utf8"`, `"base64"` (Analysis basis: CC v2.1.133 bundle.js:+3188418, +3188435)
-Analysis basis: CC v2.1.133 bundle.js:+9849211 (`kE` call from `LvA`), +9849252 (`l4` call), +9849291 (`qa9` call)
-
----
-
-### 8. Markdown Inline Replacement
-
-A helper (`_a9`) applies a `H.replace` pass over inline markdown syntax (bold, italic, backticks, links) to produce a clean plain-text representation before clipboard insertion.
-
-```
-function stripInlineMarkdown(inlineText):
-    return inlineText.replace(markdownInlinePattern, replacementFn)
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+9848960
+Analysis basis: CC v2.1.133 bundle.js:+9719727
 
 ---
 
@@ -219,15 +260,13 @@ Analysis basis: CC v2.1.133 bundle.js:+9848960
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_copy` emitted on every successful copy operation (bundle.js:+9853266) |
-| Telemetry (incidental) | `tengu_mcp_retry_failed_remote` (MCP subsystem, not directly triggered by `/copy`; bundle.js:+13870729) |
-| Telemetry (incidental) | `tengu_config_parse_error` (config subsystem; bundle.js:+3113854) |
-| Clipboard | System clipboard is written with the plaintext-rendered assistant message |
-| File system | Optional `.txt` file written when clipboard path is unavailable (via `K38.writeFile`) |
-| Directory creation | Parent directory created with mode `0o700` if absent (bundle.js:+9849134) |
-| appState changes | No persistent appState mutation observed at depth ≤ 2 |
-| Hook registration | No hook registration observed at depth ≤ 2 |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | `tengu_copy` (bundle.js:+9853266) — emitted on every invocation of `/copy` |
+| Clipboard mutation | Writes plain text to the OS clipboard via a platform-specific subprocess (`pbcopy`, `wl-copy`, `xclip`, `xsel`, `powershell`, `tmux load-buffer`, or Kitty/iTerm2 protocol) |
+| Tmp file (tmux/iTerm2) | A temporary file may be written under the configured tmp directory (enforced mode `0700`) and subsequently cleaned up |
+| appState changes | None observed in depth-2 traversal |
+| Hook registration | None observed in depth-2 traversal |
+| Sound | None observed in depth-2 traversal |
+| Error literal | `"No assistant message to copy"` (bundle.js:+9852888) — shown when the conversation has no assistant messages or index `N` is out of range |
 
 ---
 
@@ -241,12 +280,11 @@ Analysis basis: CC v2.1.133 bundle.js:+9848960
 
 ## Common Mistakes
 
-1. **Passing a non-integer argument** — `/copy 1.5` or `/copy last` will fail argument validation because `Number.isInteger` rejects non-integers and non-numeric strings. Always pass a bare positive integer or omit the argument entirely.
-2. **Expecting N to be zero-indexed** — The argument `N` is 1-based (the most recent message is `/copy 1`, not `/copy 0`). Passing `0` will fail the `>= 1` guard.
-3. **Assuming all content blocks are copied** — Only blocks with type `"text"` are included. Tool-use blocks, image blocks, and tool-result blocks are silently dropped from the copied content.
-4. **Expecting rich markdown in the clipboard** — The command renders markdown to plaintext before copying. Tables become ASCII-aligned text; code blocks are included as raw text; inline formatting (bold, italic, links) is stripped.
-5. **Using `/copy` when no assistant turn exists** — Running `/copy` at the start of a session or after only user messages produces the error `"No assistant message to copy"` and writes nothing to the clipboard.
-6. **Requesting an index deeper than the conversation history** — `/copy 10` in a session with only 3 assistant messages will trigger the out-of-bounds error path, not copy the oldest message.
+1. **Passing a non-integer argument** — `/copy 1.5` or `/copy foo` fails the `Number.isInteger` check (bundle.js:+9852971) and returns the error message rather than copying anything.
+2. **Expecting rich/formatted output** — `/copy` places plain concatenated text on the clipboard; markdown formatting, code fences, and table structures are not preserved in the copied content.
+3. **Index off-by-one** — `/copy 1` retrieves the *latest* assistant response (index 1 from the end, not from the beginning). `/copy 2` is the second-latest, etc.
+4. **Remote/SSH clipboard unavailability** — On SSH sessions without `DISPLAY` set and without Wayland, none of the Linux clipboard backends (`wl-copy`, `xclip`, `xsel`) may be reachable, causing a silent failure. The tmux path is the fallback in multiplexed sessions.
+5. **Invoking before any assistant turn** — If no assistant message exists yet in the session, `/copy` immediately returns the error literal at bundle.js:+9852888.
 
 ---
 
@@ -256,29 +294,37 @@ Analysis basis: CC v2.1.133 bundle.js:+9848960
 
 | Identifier | Role |
 |---|---|
-| `eo9` | Table markdown renderer — formats token list into aligned plain-text table rows |
-| `V67` | Column header mapping helper — maps table header tokens to display strings |
-| `XDq` | Session/message factory — constructs new message objects with timestamps |
-| `d8` | Message state handler — processes stopped/background session state |
-| `z8` | Display-width measurement — wraps `Bun.stringWidth` for wide-char support |
-| `Ha9` | Message content extractor — finds and slices assistant message content blocks |
-| `Ef` | Markdown lexer wrapper — exposes `Ef.lexer` for tokenizing markdown text |
-| `_a9` | Inline markdown stripper — applies regex replacements to remove inline syntax |
-| `Aa9` | Text block filter/collector — checks `Array.isArray`, filters to text blocks |
-| `NL` | Content block type filter — filters blocks by `type == "text"` |
-| `h67` | Top-level `/copy` command handler — entry point; orchestrates argument parsing, message selection, rendering, and clipboard write |
-| `I67` | Code block extractor — lexes content and collects `"code"` typed tokens |
-| `COH` | Code block text normalizer — applies `H.replace` to code block content |
-| `R6` | Config/file-system resolver — resolves config state and initiates file watchers |
-| `m5H` | Config file reader — reads, parses, and migrates config files from disk |
-| `u2K` | File watcher — wraps `Yd6.watchFile` / `Yd6.unwatchFile` for config change detection |
-| `LvA` | Clipboard write orchestrator — sequences encoding detection, line-ending detection, and clipboard write |
-| `kE` | Clipboard encoding detector — selects `"utf8"` or `"base64"` encoding |
-| `l4` | Line-ending style detector — uses `H.indexOf` to detect CRLF vs LF |
-| `qa9` | Clipboard / file writer — performs `K38.mkdir` + `K38.writeFile` for plaintext output |
-| `iZH` | MCP server connection initializer — connects configured MCP servers (not directly part of `/copy` logic) |
-| `mFq` | MCP update applier — applies MCP state updates and handles cleanup |
-| `J6` | MCP client registry — manages client set membership and retrieval |
-| `Og7` | MCP server orchestrator — filters, connects, and maps MCP server entries |
-| `k` | Platform/environment detector — checks environment type (`debug`, `native`, etc.) |
-| `M` | App state/session manager — aggregates session state, MCP clients, and config |
+| `h67` | Main async handler for `/copy` command (Arbor-resolved entry point) |
+| `Aa9` | Assistant message collector — filters conversation history by role |
+| `Ha9` | Nth-latest message retrieval — reverses list, selects by index |
+| `eo9` | Table rendering helper — formats message index listing for display |
+| `V67` | Row-map helper used inside table renderer |
+| `I67` | Markdown lexer pass used during message rendering |
+| `COH` | String replace helper used in lexer normalization |
+| `NL` | Text content extractor — filters content blocks by `type == "text"` |
+| `_a9` | String replace helper used in plaintext extraction path |
+| `LvA` | Clipboard write dispatcher — selects platform strategy |
+| `kE` | Core clipboard write implementation |
+| `Nj` | Join helper used in clipboard encoding path |
+| `x0K` | Darwin/macOS clipboard path selector |
+| `Y8` | Clipboard subprocess spawner |
+| `C0K` | Additional clipboard path constructor |
+| `R0K` | String `replaceAll` helper in clipboard encoding |
+| `l4` | `indexOf` helper used in clipboard path resolution |
+| `qa9` | Tmp-directory setup for tmux/iTerm2 clipboard path |
+| `cP` | Secure tmp-directory creator (enforces mode `0700`) |
+| `SRK` | Directory permission validator and chmod helper |
+| `z8` | Terminal-aware string width calculator (`Bun.stringWidth`) |
+| `d8` | Auxiliary helper reached from table renderer |
+| `eo9` | Message table renderer (column alignment, separator `" | "`) |
+| `Ef` | Markdown lexer module |
+| `y7H` | Text normalization helper (trim, 1000 ms threshold literal at +2123058) |
+| `iY` | Atomic file write helper (random bytes, writeFile, rename) |
+| `Sj6` | Daemon status path builder (`daemon.status.json`) |
+| `SH` | `JSON.stringify` wrapper |
+| `XDq` | Daemon status fetch/update helper |
+| `yr` | Higher-level text extraction utility |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

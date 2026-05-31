@@ -3,6 +3,7 @@ type: feature-spec
 feature: "passes"
 cc_version: "2.1.133"
 tags: ["passes", "commands", "slash-commands"]
+updated: "2026-05-31"
 source: "bundle-analysis"
 bundle_verified: true
 analysis_basis: "CC v2.1.133 bundle.js (AST extraction + Claude interpretation)"
@@ -20,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/passes` command is a local JSX-rendered slash command that displays and manages "guest passes" — a feature governing access permissions for guest or third-party users of a Claude Code session. When invoked, it emits a telemetry visit event, reads and renders the current pass configuration from the global config file, and presents an interactive UI allowing the user to inspect or modify pass state. Its implementation is tightly coupled to the shared config read/write subsystem, including file-locking, backup rotation, and auth-loss protection.
+The `/passes` command allows a user to share a free week of Claude Code with friends by presenting and managing guest-pass tokens. It is implemented as a `local-jsx` command, meaning its output is rendered as a React JSX element directly in the CLI. The command records a telemetry visit event when it is invoked.
 
 ---
 
@@ -28,11 +29,20 @@ The `/passes` command is a local JSX-rendered slash command that displays and ma
 
 | Field | Value |
 |---|---|
-| type | `local-jsx` |
-| name | `passes` |
-| description | `null` |
-| module_id | `bfq` |
-| loc_line | 6869 |
+| `type` | `local-jsx` |
+| `name` | `passes` |
+| `description` | Share a free week of Claude Code with friends |
+| `module_id` | `bfq` |
+| `load_inline` | `true` |
+| `isHidden` | `null` (not hidden) |
+| `loc_byte` | `11131881` |
+| `loc_byte_end` | `11132201` |
+| `loc_line` | `6869` |
+| `arbor_handler.name` | `Xz7` |
+| `arbor_handler.fqn` | `claude-2.1.133::Xz7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.n_hits` | `2` |
 
 Analysis basis: CC v2.1.133 bundle.js:+11131881
 
@@ -40,266 +50,265 @@ Analysis basis: CC v2.1.133 bundle.js:+11131881
 
 ## Input Branching
 
-The command's top-level render function (`CommandRoot`) coordinates three major sub-systems: the config read/watch subsystem, the pass-list enumeration subsystem, and the JSX rendering layer. The branching logic at invocation time is shown below.
+The command's top-level handler (`Xz7`) delegates to three distinct internal paths before assembling a JSX result: it fetches configuration state (via the config reader `R6`), fetches pass data (via the pass-data loader `PO8`/`F7`), and reads the current guest-pass store (`e6`). Three or more clearly distinct branches are present, so a flowchart is used.
 
 ```mermaid
 flowchart TD
-    A["/passes invoked"] --> B[Emit tengu_guest_passes_visited telemetry]
-    B --> C[Initialize config accessor via readConfig]
-    C --> D{Config accessible?}
-    D -- No --> E[Throw 'Config accessed before allowed.' error]
-    D -- Yes --> F[Read global config JSON from disk via readFileSync UTF-8]
-    F --> G{File exists?}
-    G -- No / ENOENT --> H[Return empty/default pass list]
-    G -- Yes --> I[Parse JSON; check for parse errors]
-    I --> J{Parse succeeded?}
-    J -- No --> K[Emit tengu_config_parse_error; surface error to UI]
-    J -- Yes --> L[Enumerate passes; classify each by status]
-    L --> M[Classify: unknown / migrated / local / installed / native / disabled / enabled / no_permissions / not_configured / global]
-    M --> N[Start file watcher via watchFile]
-    N --> O{File change detected?}
-    O -- Yes --> P[Re-read config; reconcile state; re-render JSX]
-    O -- No / unwatch --> Q[Render pass list as JSX via CSA.createElement]
-    P --> Q
-    Q --> R[User sees interactive pass list UI]
+    A([User runs /passes]) --> B[Emit tengu_guest_passes_visited telemetry]
+    B --> C[Read app config via configReader]
+    C --> D{Config readable?}
+    D -- No --> E[Surface config error to UI]
+    D -- Yes --> F[Load pass entitlement data via passLoader]
+    F --> G{Pass data available?}
+    G -- No / network error --> H[Render error or empty state in JSX]
+    G -- Yes --> I[Read guest-pass store via guestPassStore]
+    I --> J{Pass store state}
+    J -- unknown --> K[Render unknown/loading state]
+    J -- local / migrated --> L[Render locally-managed passes UI]
+    J -- native / installed --> M[Render native-credential passes UI]
+    J -- disabled --> N[Render disabled state]
+    J -- enabled --> O[Render active-passes UI with share controls]
+    J -- no_permissions --> P[Render permissions-error state]
+    J -- not_configured / global --> Q[Render setup-required state]
+    K & L & M & N & O & P & Q --> R[Return JSX element to CLI renderer]
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11131564 (command root dispatch), +3108275 (config session initializer), +3109608 (file watcher setup), +3113211 (guard throw), +3113854 (parse error telemetry)
+Analysis basis: CC v2.1.133 bundle.js:+11131564 (handler entry), +3108914 (state literals)
 
 ---
 
 ## Behavioral Spec
 
-### Command Root — Entry Point
+### 1. Top-level Handler — `guestPassesCommandHandler` (`Xz7`)
 
 ```
-function commandRoot(context):
-    emit telemetry event "tengu_guest_passes_visited"
-    initialize configSession = newConfigSession()
-    initialize passWatcher  = newFileWatcher(configSession)
-    render JSX tree using CSA.createElement with:
-        - configSession
-        - passWatcher
-        - application state (d)
-    return rendered JSX element
+async function guestPassesCommandHandler(context):
+    emit telemetry("tengu_guest_passes_visited")       // +11131704
+
+    config    = await readConfig(context)              // R6, +11131564
+    passData  = await loadPassEntitlement(context)     // PO8 → F7, +11131598
+    passStore = await readGuestPassStore(context)      // e6, +11131604
+
+    element = CSA.createElement(
+        PassesUIComponent,
+        { config, passData, passStore, ...context }    // +11131753
+    )
+    return element
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11131564, +11131598, +11131604, +11131702, +11131704, +11131753
+Analysis basis: CC v2.1.133 bundle.js:+11131564, +11131598, +11131604, +11131702, +11131753
 
 ---
 
-### Config Reader — Reading the Global Config File
+### 2. Config Reader — `readConfig` (`R6`)
 
 ```
-function readGlobalConfig(guardFlag):
-    if guardFlag is not set:
-        throw Error("Config accessed before allowed.")   // guard check
-
-    raw = fs.readFileSync(configFilePath, "utf-8")       // encoding: utf-8
-
-    if readFileSync throws with code == "ENOENT":
-        return defaultConfig()                           // file absent → defaults
-
-    parsed = JSON.parse(raw)
-
-    if parse raises an exception:
-        emit telemetry "tengu_config_parse_error"
-        log error with level "error"
-        return defaultConfig()
-
-    return parsed
+function readConfig(context):
+    startTime = Date.now()                             // +3110190
+    rawConfig = configFileReader(context)              // F6, +3110101
+    parsed    = parseConfigObject(rawConfig)           // t2, +3110115
+    merged    = mergeConfigDefaults(parsed)            // He8, +3110134
+    result    = applyConfigTransforms(merged)          // m5H, +3110138
+    watchedResult = watchConfigFile(result)            // u2K, +3110243
+    return watchedResult
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+3113211 (guard error), +3113273 (readFileSync), +3113300 (utf-8 encoding), +3113447 (ENOENT handling), +3113768 (error log level), +3113854 (parse error telemetry)
+Analysis basis: CC v2.1.133 bundle.js:+3110101
 
 ---
 
-### Pass Status Classification
+### 3. Config File Transformer — `applyConfigTransforms` (`m5H`)
 
-Each pass entry returned from the config is classified into one of ten status strings. Classification proceeds by inspecting fields on the raw pass object.
+Reads and transforms the on-disk config file. Includes a guard against accessing config before it is ready:
 
 ```
-function classifyPassStatus(passEntry):
-    if passEntry is missing or unrecognized:
-        return "unknown"
-    if passEntry.origin == "migrated":
-        return "migrated"
-    if passEntry.scope == "local":
-        return "local"
-    if passEntry.installState == "installed":
-        return "installed"
-    if passEntry.kind == "native":
-        return "native"
-    if passEntry.enabled == false or numeric 0:
-        return "disabled"
-    if passEntry.enabled == true or numeric 1:
-        return "enabled"
-    if passEntry.permissions == null or missing:
-        return "no_permissions"
-    if passEntry.scope == "global":
-        return "global"
-    return "not_configured"
+function applyConfigTransforms(configObj):
+    if not configObj.ready:
+        throw Error("Config accessed before allowed.")   // +3113217
+
+    raw = fs.readFileSync(configPath, "utf-8")           // +3113273, +3113300
+
+    parsed = safeJsonParse(raw)                          // p6 → JSON.parse, +3113320
+    parsed = stripAnthropicPrefix(parsed)                // nh, +3113323
+
+    // Map numeric/string status to canonical string constants
+    // Status values: "unknown", "local", "migrated", "installed",
+    //                "native", "disabled", "enabled",
+    //                "no_permissions", "not_configured", "global"
+    //                (+3108914 … +3109141)
+
+    if parsed.status == ENOENT_SENTINEL:                 // +3113447
+        return defaultConfigObject()
+
+    result = buildTypedConfig(parsed)                    // A, +3113340
+    result.statusCode = String(result.code)              // +3113394
+
+    backupPath = resolveBackupPath(configPath)           // PX1, +3113463
+    result.backupInfo = backupPath
+
+    if ioError (EEXIST etc.):                            // +3114068
+        emit telemetry("tengu_config_parse_error")       // +3113854
+
+    fs.statSync(configPath)                              // +3113814
+    fs.copyFileSync(src, dest)                           // +3114362
+    return result
 ```
 
-Status values (string literals):
-- `"unknown"` — Analysis basis: CC v2.1.133 bundle.js:+3108935
-- `"migrated"` — Analysis basis: CC v2.1.133 bundle.js:+3108997
-- `"local"` — Analysis basis: CC v2.1.133 bundle.js:+3109010
-- `"installed"` — Analysis basis: CC v2.1.133 bundle.js:+3109028
-- `"native"` — Analysis basis: CC v2.1.133 bundle.js:+3109042
-- `"disabled"` — Analysis basis: CC v2.1.133 bundle.js:+3109061
-- `"enabled"` — Analysis basis: CC v2.1.133 bundle.js:+3109087
-- `"no_permissions"` — Analysis basis: CC v2.1.133 bundle.js:+3109101
-- `"not_configured"` — Analysis basis: CC v2.1.133 bundle.js:+3109122
-- `"global"` — Analysis basis: CC v2.1.133 bundle.js:+3109141
-
-Numeric sentinels used: `0` (disabled) and `1` (enabled) — Analysis basis: CC v2.1.133 bundle.js:+3108914, +3109075
+Analysis basis: CC v2.1.133 bundle.js:+3113211, +3113273, +3113854
 
 ---
 
-### Config Session Initializer
+### 4. Backup Path Resolver — `resolveBackupPath` (`PX1`)
 
 ```
-function newConfigSession():
-    configPath = resolveGlobalConfigPath()
-    dirPath    = path.dirname(configPath)
-    ensure directory exists: fs.mkdirSync(dirPath, { recursive: true })
-    timestamp  = Date.now()
-    lock       = acquireLock(configPath, maxRetries=100)
-    if lock not acquired within retries:
-        emit telemetry "tengu_config_lock_contention"
-        log warning "Lock acquisition took longer than expected - another Claude instance may be running"
-    read config via readGlobalConfig()
-    return session object { configPath, timestamp, lock, data }
+function resolveBackupPath(configPath):
+    base    = path.basename(configPath)                 // Ez.basename, +3112825
+    backDir = buildBackupDirectory(configPath)          // Me8, +3112842
+    // Me8 joins configDir with "backups" literal       // +3112785
+
+    entries = fs.readdirStringSync(backDir)             // A.readdirStringSync, +3112858
+
+    // Filter entries starting with backup prefix       // M.startsWith, +3112893
+    // Walk directory tree resolving symlinks           // Ez.join, +3112949
+    //                                                     Ez.dirname, +3112975
+    // Entries starting with "." are skipped            // $.startsWith, +3113034
+
+    stats = fs.statSync(backupCandidate)                // A.statSync, +3113134
+    return resolvedBackupPath
 ```
 
-Maximum lock retry iterations: 100 — Analysis basis: CC v2.1.133 bundle.js:+3111178
-Lock contention warning message: "Lock acquisition took longer than expected - another Claude instance may be running" — Analysis basis: CC v2.1.133 bundle.js:+3111184
+Analysis basis: CC v2.1.133 bundle.js:+3112818
 
 ---
 
-### Config Writer with Lock and Backup Rotation
+### 5. Pass Entitlement Loader — `loadPassEntitlement` (`PO8` → `F7`)
 
 ```
-function saveGlobalConfigWithLock(session, newData):
-    // Re-read from disk before writing to detect stale state
-    freshData = readGlobalConfig()
-
-    if freshData differs from cached data by timestamp or version:
-        emit telemetry "tengu_config_stale_write"
-
-    // Auth-loss guard (GH #3117 protection)
-    if cachedData.auth exists AND freshData.auth is missing:
-        emit telemetry "tengu_config_auth_loss_prevented"
-        log warning "saveConfigWithLock: re-read config is missing auth that cache has; refusing to write to avoid wiping ~/.claude.json. See GH #3117."
-        return without writing
-
-    // Backup rotation
-    backupDir  = path.join(path.dirname(configPath), "backups")
-    fs.mkdirSync(backupDir, ignoreEEXIST=true)
-    existingBackups = fs.readdirStringSync(backupDir)
-                        .filter(name => name.startsWith(".backup."))
-                        .map(name => { ts: Number(name.split(".")[...]), name })
-                        .filter(entry => not Number.isNaN(entry.ts))
-                        .sort by timestamp ascending
-
-    // Prune oldest backups if count exceeds limit
-    maxBackups = 5
-    while existingBackups.length >= maxBackups:
-        oldest = existingBackups.shift()
-        fs.unlinkSync(path.join(backupDir, oldest.name))
-
-    // Copy current file as backup before overwriting
-    backupName = ".backup." + Date.now()
-    fs.copyFileSync(configPath, path.join(backupDir, backupName))
-
-    // Write new data
-    write newData serialized as JSON to configPath
-    release lock
-
-    // Prune again after write if needed (keep at most 2 extra)
-    // (secondary pruning pass using slice and unlink)
+async function loadPassEntitlement(context):
+    sessionData = await fetchSession(context)           // F7, +10804373
+    // F7 internally calls rY (sessionFetcher) which:
+    //   - resolves HK (headerBuilder)
+    //   - resolves NS (networkSender)
+    //   - resolves _O (responseObjectBuilder)
+    //     which reads env ANTHROPIC_API_KEY (+2874043)
+    //     throws if neither API key nor OAuth token present (+2874464)
+    //   - resolves o96 (statusCodeChecker)
+    configResult = await readConfig(context)            // R6, +10804421
+    return { sessionData, configResult }
 ```
 
-Maximum backup files retained: 5 — Analysis basis: CC v2.1.133 bundle.js:+3112203
-Backup file name prefix: `".backup."` — Analysis basis: CC v2.1.133 bundle.js:+3112070
-Secondary pruning constant: 2 — Analysis basis: CC v2.1.133 bundle.js:+3112459
-Auth-loss warning (GH #3117): "saveConfigWithLock: re-read config is missing auth that cache has; refusing to write to avoid wiping ~/.claude.json. See GH #3117." — Analysis basis: CC v2.1.133 bundle.js:+3111600
-Global config fallback warning (GH #3117): "saveGlobalConfig fallback: re-read config is missing auth that cache has; refusing to write. See GH #3117." — Analysis basis: CC v2.1.133 bundle.js:+3108482
+Analysis basis: CC v2.1.133 bundle.js:+10804373, +10804421, +2874043, +2874464
 
 ---
 
-### File Watcher — Live Config Updates
+### 6. Guest-Pass Store Reader — `readGuestPassStore` (`e6`)
 
 ```
-function newFileWatcher(configSession):
-    configPath = configSession.configPath
-    currentStat = fs.statSync(configPath)
+async function readGuestPassStore(context):
+    parsed    = parseConfigObject(context)              // t2, +3108279
+    randomCtx = getRandomContext()                      // H, +3108299
+    flagState = featureFlag(context)                    // fxH, +3108331
 
-    startWatching():
-        Yd6.watchFile(configPath, callback = onChange)
+    entries = buildPassEntries(context)                 // jX1 → Object.entries, +3108350
+    // jX1 iterates over pass records
 
-    onChange(newStat):
-        if newStat.mtime != currentStat.mtime:
-            freshData = readGlobalConfig()
-            reconcileState(freshData)
-            rerenderPassList()
-            currentStat = newStat
+    timestamps = getTimestamps()                        // MxH → Date.now, +3108375
 
-    stopWatching():
-        Yd6.unwatchFile(configPath)
+    configData = readConfig(context)                    // k, +3108391
+    rawPasses  = applyConfigTransforms(context)         // m5H, +3108456
 
-    // Watcher is torn down when the command UI is unmounted
-    return { startWatching, stopWatching }
+    storeState = resolveStoreState(rawPasses)           // lq6, +3108472
+    // storeState is one of the status literals:
+    //   "unknown"(+3108935), "migrated"(+3108997), "local"(+3109010),
+    //   "installed"(+3109028), "native"(+3109042),
+    //   "disabled"(+3109061), "enabled"(+3109087),
+    //   "no_permissions"(+3109101), "not_configured"(+3109122),
+    //   "global"(+3109141)
+
+    disk   = readFromDisk(storeState)                   // d, +3108608
+    render = buildRenderInfo(storeState)                // Ke8, +3108722
+    // Ke8 calls KhH (atomicFileWriter) which performs
+    //   temp-file → fsync → rename cycle              // +3110883
+
+    if storeState includes backup sentinel:
+        backupInfo = resolveBackupPath(configPath)      // PX1, implied via Ke8→KhH
+
+    return { storeState, disk, render, entries }
 ```
 
-Watcher uses `Yd6.watchFile` / `Yd6.unwatchFile` (Node.js `fs` module wrappers). Analysis basis: CC v2.1.133 bundle.js:+3109613, +3109940
-
-Stale write maximum age: 60000 ms — Analysis basis: CC v2.1.133 bundle.js:+3111954
+Analysis basis: CC v2.1.133 bundle.js:+3108275, +3108914, +3109141
 
 ---
 
-### Pass Entry Enumeration
+### 7. Config Lock / Save Guard — `saveConfigWithLock` (`fe8`)
+
+Called as a side-effect when the command mutates pass state (e.g., claiming a pass):
 
 ```
-function enumeratePasses(configData):
-    passes = []
-    for each [key, value] in Object.entries(configData.passes or {}):
-        status = classifyPassStatus(value)
-        passes.push({ key, value, status })
-    return passes
+async function saveConfigWithLock(config):
+    dir = path.dirname(configPath)                      // Ez.dirname, +3110979
+    fs.mkdirSync(dir, { recursive: true })              // K.mkdirSync, +3111000
+    lockStart = Date.now()                              // +3111045
+    lockObj = acquireLock(configPath)                   // ql_, +3111058
+
+    if lock took too long:
+        emit telemetry("tengu_config_lock_contention")  // +3111273
+        log warn "Lock acquisition took longer..."      // +3111184
+
+    reRead = fs.statSync(configPath)                    // K.statSync, +3111349
+
+    if reRead is missing auth that cache has:
+        emit telemetry("tengu_config_auth_loss_prevented") // +3111752
+        log error "saveConfigWithLock: re-read config..." // +3111600
+        return // refuse write
+
+    emit telemetry("tengu_config_stale_write")          // +3109 area, +3111409
+
+    backupCount = keepLastN(backups, 5)                 // +3112203
+    // Backup files tagged with ".backup." substring   // +3112070
+
+    atomicWrite(configPath, newConfig)                  // KhH, +3112443
+    // atomicWrite uses 6-byte random hex temp name    // +3112785..+3113979
+    // sets permissions mode 384 (0o600)               // +3112485
+    // fsync before rename for durability              // KhH→az.fsyncSync
+
+    return savedConfig
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+3109457 (Object.entries)
+Analysis basis: CC v2.1.133 bundle.js:+3111058, +3111184, +3111273, +3111752, +3112203, +3112443, +3112485
 
 ---
 
-### Random Jitter for Retry / Debounce
+### 8. Atomic File Writer — `atomicFileWriter` (`KhH`)
 
 ```
-function jitteredDelay(baseMs):
-    jitter = Math.random() * someMultiplier
-    setTimeout(callback, baseMs + jitter)
+function atomicFileWriter(targetPath, content):
+    lstat = fs.lstatSync(targetPath)                    // +953733
+
+    if lstat.isSymbolicLink():
+        linkTarget = fs.readlinkSync(targetPath)        // +953338
+        if not path.isAbsolute(linkTarget):
+            linkTarget = path.resolve(dirname, linkTarget)  // +953358/953388
+
+    randomSuffix = crypto.randomBytes(6).toString("hex")  // +953963, value 6 (+953979), "hex" (+953991)
+    tempPath = targetPath + "." + randomSuffix
+
+    fd = fs.openSync(tempPath, flags)                   // +953497
+    fs.writeFileSync(tempPath, content)                 // +954399
+    fs.fchmodSync(fd, originalMode)                     // +954457, mode 384 (+3112485)
+    fs.fsyncSync(fd)                                    // +954523
+    fs.closeSync(fd)                                    // +953484
+
+    if ELOOP or ENOTDIR error:                          // +953624, +953637
+        throw Error(...)
+
+    fs.renameSync(tempPath, targetPath)                 // +954651
+    // On failure, fs.unlinkSync(tempPath)              // +954808
+
+    return targetPath
 ```
 
-Used to avoid thundering-herd when multiple Claude instances contend for the config lock or file watcher.
-
-Analysis basis: CC v2.1.133 bundle.js:+12285769 (Math.random), +12285806 (setTimeout)
-
----
-
-### Log-Level Routing
-
-```
-function routeLog(level, message, metadata):
-    if level == "debug":
-        send to debug sink
-    elif level in ["error", "warn", "info"]:
-        send to appropriate sink
-    // level string "debug" used in pass-related config paths
-```
-
-Log level constant `"debug"` used in this call path — Analysis basis: CC v2.1.133 bundle.js:+162555
+Analysis basis: CC v2.1.133 bundle.js:+953251, +953963, +954399, +954523, +954651
 
 ---
 
@@ -307,17 +316,21 @@ Log level constant `"debug"` used in this call path — Analysis basis: CC v2.1.
 
 | Item | Detail |
 |---|---|
-| Telemetry — visit | `tengu_guest_passes_visited` fired once on every `/passes` invocation (Analysis basis: CC v2.1.133 bundle.js:+11131704) |
-| Telemetry — config parse error | `tengu_config_parse_error` fired when global config JSON cannot be parsed (Analysis basis: CC v2.1.133 bundle.js:+3113854) |
-| Telemetry — lock contention | `tengu_config_lock_contention` fired when config lock is not acquired within 100 retries (Analysis basis: CC v2.1.133 bundle.js:+3111273) |
-| Telemetry — stale write | `tengu_config_stale_write` fired when an in-flight write detects the on-disk config has changed since the cache was populated (Analysis basis: CC v2.1.133 bundle.js:+3111409) |
-| Telemetry — auth loss prevented | `tengu_config_auth_loss_prevented` fired when a write is blocked because the freshly-read config is missing auth credentials that the cache still holds (Analysis basis: CC v2.1.133 bundle.js:+3111752) |
-| File watcher registration | `Yd6.watchFile` registered on the global config path while `/passes` UI is mounted; torn down via `Yd6.unwatchFile` on unmount (Analysis basis: CC v2.1.133 bundle.js:+3109613, +3109940) |
-| Disk reads | `fs.readFileSync` (utf-8) on global config path on mount and on each file-change event (Analysis basis: CC v2.1.133 bundle.js:+3113273) |
-| Disk writes | `fs.copyFileSync` (backup), `fs.mkdirSync` (backup dir), `fs.unlinkSync` (old backups), JSON write to config path on save (Analysis basis: CC v2.1.133 bundle.js:+3114362, +3114033, +3112321, +3112177) |
-| appState changes | Reads and potentially mutates application-level state `d` for rendering (Analysis basis: CC v2.1.133 bundle.js:+11131702) |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| JSX rendering | Uses `CSA.createElement` to produce the interactive pass list UI (Analysis basis: CC v2.1.133 bundle.js:+11131753) |
+| Telemetry — `tengu_guest_passes_visited` | Fired immediately on command invocation (bundle.js:+11131704) |
+| Telemetry — `tengu_config_parse_error` | Fired when the config file cannot be parsed (bundle.js:+3113854) |
+| Telemetry — `tengu_config_lock_contention` | Fired when config lock acquisition is slower than expected (bundle.js:+3111273) |
+| Telemetry — `tengu_config_stale_write` | Fired when a stale-write condition is detected during config save (bundle.js:+3111409) |
+| Telemetry — `tengu_config_auth_loss_prevented` | Fired when a write is refused to prevent loss of auth credentials (bundle.js:+3111752) |
+| Telemetry — `tengu_feature_ok` | Fired on successful feature-flag resolution (bundle.js:+907381) |
+| Telemetry — `tengu_feature_bad` | Fired on failed feature-flag resolution (bundle.js:+907437) |
+| Telemetry — `tengu_mcp_retry_failed_remote` | Fired if a background MCP retry is exhausted during pass data fetch (bundle.js:+13870729) |
+| Telemetry — `tengu_bg_*` events | Background-session lifecycle events reachable via `w`/`nFA`/`tFA`/`Y` call paths (bundle.js:+14157040, +14157619, +14158234, +14158355, +14158618, +14156817, etc.) |
+| Config file | May be read, backed up (up to 5 backups, `.backup.` suffix), and atomically rewritten with mode `0o600` (384) |
+| File-system side effects | Backup directory created if absent (`q.mkdirSync`, +3114033); temp files cleaned up on error |
+| JSX render | Returns a `CSA.createElement` call; the CLI renders the resulting React element in-terminal (bundle.js:+11131753) |
+| appState changes | Pass store state is updated to one of the canonical status strings listed under `readGuestPassStore` |
+| Sound | None detected in depth-2 traversal |
+| Hook registration | `Yd6.watchFile` / `Yd6.unwatchFile` registered on the config path via `u2K` (bundle.js:+3109613, +3109940) |
 
 ---
 
@@ -325,21 +338,17 @@ Log level constant `"debug"` used in this call path — Analysis basis: CC v2.1.
 
 | Version | Change |
 |---|---|
-| v2.1.133 | Initial analysis — command registered as `local-jsx`, module `bfq`, with guest-pass visit telemetry and full config lock/backup subsystem |
+| v2.1.133 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Invoking `/passes` before config initialization completes** — The config accessor throws `"Config accessed before allowed."` if the internal guard flag has not been set by the time the read is attempted. This can surface as an unhandled error in the UI if the command is invoked at startup before the config subsystem is ready. (Analysis basis: CC v2.1.133 bundle.js:+3113217)
-
-2. **Concurrent Claude instances corrupting the config** — The lock contention path emits `tengu_config_lock_contention` and logs a warning but does not abort. If two instances race to write, the stale-write detection (`tengu_config_stale_write`) may still allow the write to proceed. Users running multiple Claude Code sessions sharing the same `~/.claude.json` should be aware of this risk.
-
-3. **Assuming `/passes` has a description** — The `description` field in the registration is `null`. Any UI that renders command descriptions will display nothing or a fallback for `/passes`. (Analysis basis: CC v2.1.133 bundle.js:+11131881)
-
-4. **Expecting backup files to accumulate indefinitely** — The backup rotation hard-caps retained backup files at **5**. Older backups are silently deleted. Do not rely on the backup directory for long-term config history. (Analysis basis: CC v2.1.133 bundle.js:+3112203)
-
-5. **Misreading the auth-loss guard as a bug** — The deliberate refusal to overwrite `~/.claude.json` when the freshly-read file is missing auth credentials is an intentional safety measure (GH #3117), not a crash. The `tengu_config_auth_loss_prevented` telemetry event confirms a blocked write. (Analysis basis: CC v2.1.133 bundle.js:+3111752, +3111600)
+1. **Running `/passes` without authentication** — The pass-entitlement loader (`PO8`/`F7`) checks for `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`. If neither is present the command throws immediately with a descriptive error (bundle.js:+2874464).
+2. **Expecting a text response** — `/passes` is type `local-jsx`; it renders a React component, not a markdown/text reply. Piping or scripting its output will not yield plain text.
+3. **Assuming passes are always available** — The guest-pass store can be in one of ten status states (`unknown`, `local`, `migrated`, `installed`, `native`, `disabled`, `enabled`, `no_permissions`, `not_configured`, `global`). Most states do not expose a share action.
+4. **Concurrent Claude instances** — A second Claude process writing the config simultaneously may trigger `tengu_config_lock_contention`. The lock guard will eventually succeed but may be slow.
+5. **Modifying the config file externally while `/passes` is open** — The `watchFile` listener on the config path will reload state, potentially resetting UI display mid-session.
 
 ---
 
@@ -349,21 +358,74 @@ Log level constant `"debug"` used in this call path — Analysis basis: CC v2.1.
 
 | Identifier | Role |
 |---|---|
-| `Xz7` | Command root render function for `/passes` |
-| `R6` | Config read entry point (reads global config from disk) |
-| `F6` | Path resolution utility (resolves config file path) |
-| `He8` | Config guard / access-allowed flag checker |
-| `m5H` | Low-level config file reader with ENOENT and parse-error handling |
-| `u2K` | File watcher setup and teardown (watchFile / unwatchFile wrapper) |
-| `PO8` | Pass-list orchestrator (coordinates config read + pass enumeration) |
-| `F7` | Intermediate dispatcher connecting pass-list orchestrator to config reader |
-| `e6` | Config session initializer (sets up lock, directory, timestamp) |
-| `fe8` | Config writer with lock acquisition, stale-write check, backup rotation, and auth-loss guard |
-| `H` | Jittered retry / debounce helper (Math.random + setTimeout) |
-| `fxH` | Pass entry formatter or filter helper |
-| `jX1` | Pass enumeration function (Object.entries iteration over passes map) |
-| `MxH` | Stale-write timestamp comparator (Date.now based) |
-| `k` | Log-level router (debug / error / warn / info sink dispatcher) |
-| `lq6` | Config lock acquisition utility |
-| `d` | Application state accessor / store reference |
-| `Ke8` | Directory-and-path setup helper (dirname + mkdirSync + path join) |
+| `Xz7` | Top-level handler for `/passes` (`guestPassesCommandHandler`) |
+| `R6` | Config reader / loader |
+| `F6` | Config file reader (low-level) |
+| `He8` | Config defaults merger |
+| `m5H` | Config file transformer / applier |
+| `PX1` | Backup path resolver |
+| `Me8` | Backup directory path builder |
+| `M` | MCP / remote connection state accessor |
+| `p6` | Safe JSON parse wrapper |
+| `nh` | Anthropic-prefix string stripper |
+| `H` | Random context / utility (uses `Math.random`, `setTimeout`) |
+| `A` | Typed config object builder |
+| `w8` | Shared write utility |
+| `k` | Environment / header config builder |
+| `Ztq` | Config environment resolver |
+| `SH` | JSON stringify wrapper |
+| `Uf` | Path redaction utility (replaces with `[REDACTED]`) |
+| `LkH` | Config unlock helper |
+| `vtq` | File content encoder (uses `Buffer.byteLength`) |
+| `fH` | Error log dispatcher |
+| `HA` | Error string normalizer |
+| `kH` | String coercion helper |
+| `yq` | Essential-traffic network requester |
+| `NJL` | Queue shift/push manager |
+| `d` | Disk read/write utility |
+| `w` | Background session dispatcher |
+| `_` | Process/value map utility |
+| `y` | Child-process wrapper |
+| `uH` | Background session "bad" reporter |
+| `hH` | Background session "ok" reporter |
+| `sFA` | System-free-memory reporter |
+| `x` | Settled-promise cleaner (uses `clearTimeout`) |
+| `J6` | Job/task queue dispatcher |
+| `nFA` | Background session network connector |
+| `tFA` | Task lifecycle tracker (done/killed/stopped/failed/blocked/crashed/working/active) |
+| `K` | Task set manager (add/delete) |
+| `Y` | Background session lifecycle handler |
+| `u` | Disposable resource handle |
+| `u2K` | Config file watcher (watchFile / unwatchFile) |
+| `kd` | Key derivation helper |
+| `y1` | Reactive state updater |
+| `Qoq` | Undefined-value sentinel checker |
+| `PO8` | Pass entitlement loader |
+| `F7` | Session fetcher |
+| `rY` | HTTP session builder |
+| `HK` | HTTP header builder |
+| `NS` | Network sender |
+| `_O` | Response object builder |
+| `o96` | HTTP status code checker |
+| `e6` | Guest-pass store reader |
+| `fe8` | Config save-with-lock handler |
+| `ql_` | Lock acquisition wrapper |
+| `jQ8` | Lock object constructor |
+| `lq6` | Store state resolver |
+| `Z` | Pass store entry iterator |
+| `P` | MCP connection/SDK adapter |
+| `jP8` | MCP protocol frame builder |
+| `I` | In-memory pass list |
+| `KhH` | Atomic file writer |
+| `O` | File stat / symlink checker |
+| `D8` | Write-mode flag resolver |
+| `f` | Stream/socket handle |
+| `fxH` | Feature flag accessor |
+| `jX1` | Pass entry iterator (uses `Object.entries`) |
+| `MxH` | Timestamp helper (uses `Date.now`) |
+| `Ke8` | Pass render info builder |
+| `$` | MCP / XDq adapter |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

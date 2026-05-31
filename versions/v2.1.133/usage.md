@@ -1,12 +1,13 @@
 ---
 type: feature-spec
 feature: "usage"
-cc_version: "2.1.133"
+cc_version: 2.1.133
+updated: "2026-05-31"
 tags: ["usage", "commands", "slash-commands"]
-updated: "2026-05-18"
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v2.1.133 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -14,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/usage`
 
-> Analysis basis: CC v2.1.133 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.133
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/usage` command renders a JSX panel displaying session cost, plan usage, and activity statistics for the current Claude Code session. It is a read-only, display-only command that produces no side effects on application state and emits no telemetry events. The command is aliased as `/cost` and `/stats`, all three aliases triggering identical behavior.
+The `/usage` command (also invocable as `/cost` or `/stats`) renders a JSX panel displaying session-level cost, plan usage, and activity statistics for the current Claude Code session. It is a `local-jsx` command, meaning it resolves entirely on the client side and returns a rendered React element rather than sending a prompt to the model. The command dispatches via the `control-request` thin-client path, keeping it outside the normal agent turn cycle.
 
 ---
 
@@ -32,69 +33,114 @@ The `/usage` command renders a JSX panel displaying session cost, plan usage, an
 | type | `local-jsx` |
 | name | `usage` |
 | description | `Show session cost, plan usage, and activity stats` |
-| aliases | `["cost", "stats"]` |
+| aliases | `cost`, `stats` |
 | thinClientDispatch | `control-request` |
-| module_id | `I5q` |
+| module_id | `c7q` |
+| load_inline | `true` |
+| handler | `r37` (resolved via `module_id` path) |
+| loc_byte span | `11056107` – `11056333` |
+| `loc_byte_end` | `11056333` |
+| `arbor_handler.name` | `r37` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::r37` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.133 bundle.js:+11073352
+Analysis basis: CC v2.1.132 bundle.js:+11056107
 
 ---
 
 ## Input Branching
 
-The command accepts no user-supplied arguments. Regardless of which alias (`/usage`, `/cost`, `/stats`) is used to invoke it, the implementation unconditionally delegates to the same JSX rendering function. There is no conditional branching based on input.
+Because this is a `local-jsx` / `control-request` command, there is no model prompt involved and no free-form argument parsing at the agent level. Branching is limited to how the JSX renderer selects which tab or view to surface.
 
 ```mermaid
 flowchart TD
-    A([User types /usage, /cost, or /stats]) --> B{Alias resolution}
-    B -->|"/usage"| C[Resolve to command 'usage']
-    B -->|"/cost"| C
-    B -->|"/stats"| C
-    C --> D[Dispatch via thinClientDispatch: control-request]
-    D --> E[Invoke JSX render function]
-    E --> F[createElement — render Usage panel]
-    F --> G([Display panel to user])
+    A([User invokes /usage, /cost, or /stats]) --> B{Alias used?}
+    B -- "/stats or /cost" --> C[Alias resolved to 'usage' registration]
+    B -- "/usage" --> C
+    C --> D[thinClientDispatch: control-request]
+    D --> E[Handler r37 invoked — no model round-trip]
+    E --> F[createElement called with Stats/Usage view components]
+    F --> G{Active tab / view label}
+    G -- "'stats' tab" --> H[Render Stats panel]
+    G -- "'Usage' tab" --> I[Render Usage panel]
+    H & I --> J([JSX element returned to CLI renderer])
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11072687, +11072745, +11072761
+Analysis basis: CC v2.1.132 bundle.js:+11055442 (callGraph edge), +11055500–+11055516 (tab-label literals)
 
 ---
 
 ## Behavioral Spec
 
-### JSX Panel Rendering
+### Handler Entry Point
 
-The command's sole implementation function constructs and returns a JSX element tree representing the usage panel. No arguments are consumed from the slash-command input. The rendered panel presents at minimum two labeled sections, identified by the string constants `"Stats"` and `"Usage"` found in the implementation.
+The async handler `r37` (resolved from module `c7q` via the `module_id` path) is the sole implementation entry point for this command. Because `load_inline: true` is set, the module is resolved eagerly without a dynamic import boundary at invocation time.
 
 ```
-function renderUsagePanel():
-    statsSection  = createElement(StatsComponent,  label="Stats")
-    usageSection  = createElement(UsageComponent,  label="Usage")
-    panel         = createElement(PanelContainer, [statsSection, usageSection])
-    return panel
+async function renderUsagePanel(commandContext):
+    element = createElement(
+        UsageRootComponent,
+        props derived from commandContext,
+        TabView(
+            Tab(label="stats",  content=StatsPanel),
+            Tab(label="Stats",  content=StatsPanel),   // display label
+            Tab(label="Usage",  content=UsagePanel)    // display label
+        )
+    )
+    return element
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11072687 (createElement call), +11072753 (`"Stats"` literal), +11072761 (`"Usage"` literal), +11072745 (`"stats"` identifier literal)
+Analysis basis: CC v2.1.132 bundle.js:+11055442 (`hhA.createElement` call), +11055500 (`"stats"` literal), +11055508 (`"Stats"` literal), +11055516 (`"Usage"` literal)
 
-### Dispatch Mechanism
+### Dispatch Path
 
-Because the registration field `thinClientDispatch` is set to `"control-request"`, the command's output is routed through the control-request dispatch path rather than being streamed as a model turn. This means the panel is rendered locally in the CLI process without a round-trip to the Anthropic API.
+The `thinClientDispatch: "control-request"` field causes the CLI shell to handle this command locally, bypassing the agent loop entirely. No tokens are consumed, no tool calls are made, and the response is a synchronous (or microtask-resolved) JSX element handed directly to the terminal renderer.
 
-Analysis basis: CC v2.1.133 bundle.js:+11073352
+```
+function dispatchUsageCommand(cmd):
+    if cmd.thinClientDispatch == "control-request":
+        result = await cmd.handler(sessionContext)
+        renderToTerminal(result)
+        return                          // never enters agent queue
+```
 
-### Alias Handling
+Analysis basis: CC v2.1.132 bundle.js:+11056107 (`thinClientDispatch` field in registration)
 
-The registration declares two aliases in addition to the canonical name:
+### Alias Resolution
 
-| Invocation | Resolves to |
-|---|---|
-| `/usage` | canonical |
-| `/cost` | alias → `usage` |
-| `/stats` | alias → `usage` |
+The command is registered under the primary name `usage` with aliases `["cost", "stats"]`. The CLI command-router maps all three names to the same registration object before dispatch.
 
-All three invocations produce identical output. The string literal `"stats"` at bundle offset +11072745 corresponds to the alias entry; it does not gate any conditional logic.
+```
+function resolveCommand(inputName):
+    for each registration in commandRegistry:
+        if registration.name == inputName:
+            return registration
+        if inputName in registration.aliases:
+            return registration
+    return null
+```
 
-Analysis basis: CC v2.1.133 bundle.js:+11072745, +11073352
+Analysis basis: CC v2.1.132 bundle.js:+11056107 (`aliases` field in registration)
+
+### Rendered Content
+
+The handler composes a panel containing at minimum two named view areas surfaced as tab-like components:
+
+- **Stats** — session activity statistics (token counts, turn counts, or similar per-session metrics). The internal tab key is the lowercase string `"stats"` while the display label is `"Stats"`.
+- **Usage** — plan-level usage and cost information. The display label is `"Usage"`.
+
+Exact data fields populated within each panel are sourced from session state at render time; the depth-2 call graph traversal did not reach the data-binding layer.
+
+```
+function buildTabViews(sessionContext):
+    statsTab  = Tab(key="stats",  label="Stats",  data=getActivityStats(sessionContext))
+    usageTab  = Tab(key="Usage",  label="Usage",  data=getCostAndPlanData(sessionContext))
+    return [statsTab, usageTab]
+```
+
+Analysis basis: CC v2.1.132 bundle.js:+11055500, +11055508, +11055516
 
 ---
 
@@ -102,12 +148,13 @@ Analysis basis: CC v2.1.133 bundle.js:+11072745, +11073352
 
 | Item | Detail |
 |---|---|
-| Telemetry | None — `telemetry` array is empty; no `tengu_*` events are emitted |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | None detected at depth-2 traversal |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| API round-trip | None — dispatched as `control-request` (local rendering) |
-| Persistence | None detected at depth-2 traversal |
+| Telemetry | None detected in depth-2 traversal |
+| Hook registration | None detected in depth-2 traversal |
+| appState changes | None detected; read-only render of existing session state |
+| Model tokens consumed | Zero — `control-request` path bypasses agent loop |
+| Sound | None detected in depth-2 traversal |
+| Network calls | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Data sources for panel | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 
 ---
 
@@ -115,17 +162,17 @@ Analysis basis: CC v2.1.133 bundle.js:+11072745, +11073352
 
 | Version | Change |
 |---|---|
-| v2.1.133 | Initial analysis — `local-jsx`, `control-request` dispatch, aliases `cost` and `stats`, no telemetry |
+| v2.1.132 | Initial analysis — `local-jsx` / `control-request` command with aliases `cost` and `stats`; handler `r37` in module `c7q` |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting model output**: Because `thinClientDispatch` is `"control-request"`, invoking `/usage` does not produce a streamed model response. Callers that wait for a message-turn response will time out or receive nothing from the model layer.
-2. **Treating aliases as distinct commands**: `/cost` and `/stats` are pure aliases. Any tooling that inspects the command registry by canonical name only will miss invocations made through these aliases.
-3. **Expecting telemetry coverage**: Unlike many other slash commands, `/usage` emits zero telemetry events. Dashboards or test suites that rely on `tengu_*` events to confirm command execution will not receive a signal from this command.
-4. **Passing arguments**: The command registration and call graph show no argument-parsing logic. Any tokens typed after `/usage` are silently ignored rather than raising an error.
-5. **Assuming network latency**: Because the panel is rendered locally via `local-jsx` + `control-request`, response time is bounded by local rendering, not by API latency. Latency budgets designed for model-turn commands do not apply here.
+1. **Expecting a model response**: Because `/usage` uses `thinClientDispatch: "control-request"`, it never enters the agent queue. Callers should not poll for a streamed reply or measure latency against model response time.
+2. **Assuming `/cost` and `/stats` are separate commands**: Both are aliases for the same `usage` registration and produce identical output. There is no behavioral difference between the three invocation forms.
+3. **Treating the Stats tab and Usage tab as the same data**: The literals `"stats"` / `"Stats"` and `"Usage"` represent distinct view areas within the panel, likely showing different data categories (activity metrics vs. cost/plan quota).
+4. **Expecting telemetry events**: No `tengu_*` telemetry events were found in the depth-2 traversal. Do not build monitoring pipelines that rely on this command emitting usage-tracking events.
+5. **Dynamic import assumptions**: Although the handler is loaded via `module_id: "c7q"`, `load_inline: true` means the module is bundled inline and does not require a separate chunk fetch at invocation time.
 
 ---
 
@@ -135,4 +182,5 @@ Analysis basis: CC v2.1.133 bundle.js:+11072745, +11073352
 
 | Identifier | Role |
 |---|---|
-| `ZO7` | Usage panel JSX render function — the top-level component factory for the `/usage` command; calls `PSA.createElement` to construct the display panel |
+| `r37` | Async handler function for the `/usage` command; entry point resolved from module `c7q` via `module_id` path; calls `hhA.createElement` to produce the JSX output |
+| `hhA` | React (or compatible) createElement host; called by `r37` to construct the panel element tree (Analysis basis: CC v2.1.132 bundle.js:+11055442) |

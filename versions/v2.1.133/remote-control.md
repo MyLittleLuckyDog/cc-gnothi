@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "remote-control"
 cc_version: "2.1.133"
-updated: "2026-05-18"
+updated: "2026-05-31"
 tags: ["remote-control", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,9 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/remote-control` command (alias `/rc`) registers the current terminal as a named endpoint for remote-control sessions. It accepts an optional session name argument, trims and normalizes whitespace from the input, and renders a JSX component that manages the connection lifecycle — including opening and closing the remote session channel.
-
----
+`/remote-control` (alias `/rc`) registers the current terminal session as a named remote-control endpoint, enabling external processes or orchestration layers to send instructions to this Claude Code instance. It trims and normalises the optional `[name]` argument, opens a session socket/channel, and renders a JSX status element confirming the connection. When the session ends, it cleans up all registered connection handles and removes the associated socket file from disk.
 
 ## Registration
 
@@ -31,145 +29,149 @@ The `/remote-control` command (alias `/rc`) registers the current terminal as a 
 |---|---|
 | type | `local-jsx` |
 | name | `remote-control` |
-| description | `Connect this terminal for remote-control sessions` |
+| aliases | `rc` |
+| description | Connect this terminal for remote-control sessions |
 | argumentHint | `[name]` |
 | immediate | `true` |
-| aliases | `["rc"]` |
-| module\_id | `zDq` |
+| isHidden | `null` (visible) |
+| module_id | `zDq` |
+| load_inline | `true` |
+| loc_byte | `11406694` |
+| loc_byte_end | `11406940` |
+| loc_line | `7128` |
+| arbor_handler.name | `LX7` |
+| arbor_handler.fqn | `claude-2.1.133::LX7` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `1` |
 
 Analysis basis: CC v2.1.133 bundle.js:+11406694
 
----
-
 ## Input Branching
 
-The command entry point trims the raw argument string, then delegates to the JSX component for all further logic.
+The command accepts an optional `[name]` argument. After normalisation the resolved name drives three distinct downstream states: no active socket (first connection), socket already open (reconnect/replace), and teardown (session close). This warrants a Mermaid flowchart.
 
 ```mermaid
 flowchart TD
-    A([User invokes /remote-control or /rc]) --> B[Read optional argument: name]
-    B --> C[Trim whitespace from argument string]
-    C --> D{Argument present after trim?}
-    D -- Yes --> E[Use trimmed string as session name]
-    D -- No --> F[Session name is empty string]
-    E --> G[Render JSX session component]
+    A(["/remote-control [name] invoked"]) --> B["Trim whitespace from raw argument\n(_.trim)"]
+    B --> C["Normalise to lowercase\n(f.toLowerCase)"]
+    C --> D{Name provided\nafter normalisation?}
+    D -- "No (empty string)" --> E["Use default session name"]
+    D -- "Yes" --> F["Use supplied session name"]
+    E --> G{Existing socket/channel\nalready open?}
     F --> G
-    G --> H{Session state}
-    H -- Active session exists --> I[Close primary session handle]
-    I --> J[Close secondary session handle]
-    J --> K[Invoke session teardown handler K]
-    H -- No active session --> L[Wait / display connection UI]
-    K --> M([Session closed])
-    L --> N([Awaiting remote connection])
+    G -- "None open (index 0)" --> H["Open new socket / IPC channel\n(connectionManager)"]
+    G -- "Already open" --> I["Close existing handles\n(sessionHandler.close + socketQueue.close)\nRemove socket file (fs.unlinkSync)"]
+    I --> H
+    H --> J["Register connection in active-set\n(socketQueue.add)"]
+    J --> K["Attach finally-handler for cleanup\n(sessionHandler.finally → socketQueue.delete)"]
+    K --> L["Render JSX status element\n(React.createElement)"]
+    L --> M([Return JSX to shell])
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11406365, +11406389, +14167101, +14167103, +14167113, +14167253
-
----
+Analysis basis: CC v2.1.133 bundle.js:+11406365 (trim), +11406389 (createElement), +14181260 (toLowerCase), +14167103 (close sequence), +14161309 (add), +14161318 (finally), +14161332 (delete)
 
 ## Behavioral Spec
 
-### Argument Normalization
-
-The command handler extracts the raw user-supplied argument and applies whitespace trimming before any further processing.
+### 1. Argument Normalisation
 
 ```
-function normalizeSessionName(rawArgument):
-    trimmed = trim(rawArgument)          // removes leading and trailing whitespace
-    return trimmed                        // may be empty string if no argument given
+async function remoteControlHandler(rawArgs):
+    trimmedName  = trim(rawArgs)                 // remove leading/trailing whitespace
+    sessionName  = toLowerCase(trimmedName)      // canonical lowercase key
+    return sessionName
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11406365
+Analysis basis: CC v2.1.133 bundle.js:+11406365 (trim), +14181260 (toLowerCase)
 
-### JSX Component Rendering
+---
 
-After normalization, the command renders a JSX element that manages the remote-control session UI and state. The rendering call uses `createElement` from the React-compatible renderer bundled with CC.
+### 2. Socket / Channel Lifecycle
 
 ```
-function renderRemoteControlComponent(sessionName):
-    element = createElement(RemoteControlComponent, { name: sessionName })
-    return element
+async function openSession(sessionName):
+
+    // Teardown any pre-existing connection for this name
+    existingIndex = lookupActiveConnection(sessionName)   // 0 = none (literal 0)
+    if existingIndex != 0:
+        sessionHandler.close()                            // close IPC/socket handle
+        socketQueue.close()                               // drain pending messages
+        fs.unlinkSync(socketFilePath)                     // remove socket file from disk
+
+    // Open fresh connection
+    newHandle = openNewSocketChannel(sessionName)
+
+    // Track in active-connection set
+    socketQueue.add(newHandle)
+
+    // Register cleanup on session end
+    newHandle.finally(() =>
+        socketQueue.delete(newHandle)                     // remove from active set
+    )
+
+    return newHandle
+```
+
+The sentinel value `0` (bundle.js:+14167101) is used as the "no existing connection" index, consistent with an array or map that stores handles starting at positive indices. The constant `40` (bundle.js:+14181334) appears in the toLowerCase branch of the normalisation utility; its precise semantic role — likely a character-code boundary or maximum name length — is <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
+
+Analysis basis: CC v2.1.133 bundle.js:+14167103, +14167113, +14137065, +14161309, +14161318, +14161332, +14167101
+
+---
+
+### 3. JSX Status Rendering
+
+Because the command is registered as `local-jsx` with `immediate: true`, the handler returns a React element rather than printing plain text. The element is constructed via `React.createElement` immediately after the session is opened, conveying connection status to the terminal UI.
+
+```
+function buildStatusElement(sessionName, connectionHandle):
+    return React.createElement(
+        StatusComponent,
+        { sessionName: sessionName, handle: connectionHandle }
+    )
 ```
 
 Analysis basis: CC v2.1.133 bundle.js:+11406389
 
-### Name Lowercasing
-
-Within the session component, the session name is converted to lowercase before being used as a connection identifier. This ensures that session names are case-insensitive from the perspective of the remote-control subsystem.
-
-```
-function normalizeSessionKey(name):
-    return name.toLowerCase()
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+14181260
-
-### Session Teardown Sequence
-
-When the user or the system terminates a remote-control session, the component executes a three-step teardown in order:
-
-1. Close the primary session handle (index `0`).
-2. Close the secondary session handle.
-3. Invoke the registered teardown callback to clean up any remaining state.
-
-```
-function teardownSession(primaryHandle, secondaryHandle, teardownCallback):
-    primaryHandle.close(0)       // closes primary channel; argument 0 signals normal closure
-    secondaryHandle.close()      // closes secondary channel
-    teardownCallback()           // fires registered teardown handler
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+14167101, +14167103, +14167113, +14167253
-
-### Numeric Constant — Limit or Timeout
-
-A numeric literal `40` appears within the session component logic near the lowercasing operation. Based on its position adjacent to string processing, it likely represents a maximum length cap applied to the normalized session name before it is used as a key.
-
-Maximum session name operative length: **40 characters** (Analysis basis: CC v2.1.133 bundle.js:+14181334)
-
-```
-function applyNameLengthLimit(name):
-    normalized = name.toLowerCase()
-    if length(normalized) > 40:
-        normalized = substring(normalized, 0, 40)
-    return normalized
-```
-
-> <!-- TODO: the exact role of the literal `40` (truncation vs. validation vs. display) is not fully resolvable at depth-2 traversal; needs --depth 4 -->
-
 ---
+
+### 4. Full Handler Flow (composite)
+
+```
+async function LX7(context):                         // arbor: LX7, AsyncFunction
+    sessionName   = normaliseArgument(context.args)  // trim + toLowerCase
+    connectionHandle = openSession(sessionName)       // lifecycle (see §2)
+    statusElement = buildStatusElement(sessionName, connectionHandle)
+    return statusElement                              // rendered by local-jsx shell
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+11406365–11406389 (handler entry block)
 
 ## State & Side Effects
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at depth-2 traversal (telemetry array is empty) |
-| Hook registration | The `immediate: true` flag causes the command to execute without waiting for user confirmation or a follow-up prompt submission |
-| Session handles | Two session handles (primary and secondary) are opened on activation and explicitly closed via `.close()` calls on teardown |
-| Teardown callback | A teardown handler (`K` in bundle scope) is invoked after both handles are closed; its full behavior is beyond depth-2 resolution |
+| Telemetry | None detected in this implementation (`telemetry: []`) |
+| Socket file creation | A named socket/IPC file is created on disk for the session |
+| Socket file deletion | `fs.unlinkSync` removes the socket file on teardown (bundle.js:+14137065) |
+| Active-connection set | `socketQueue.add` / `socketQueue.delete` mutate a module-level set of open handles (bundle.js:+14161309, +14161332) |
+| Session handle cleanup | A `finally` callback ensures the handle is removed from the active set even on error (bundle.js:+14161318) |
+| JSX render | Returns a `local-jsx` element immediately (`immediate: true`) — no streaming output |
 | appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Alias | `/rc` is a registered alias and behaves identically to `/remote-control` |
-
----
 
 ## Version History
 
 | Version | Change |
 |---|---|
-| v2.1.133 | Initial analysis — command registered as `local-jsx`, alias `rc`, with argument normalization and dual-handle teardown |
-
----
+| v2.1.133 | Initial analysis |
 
 ## Common Mistakes
 
-1. **Providing a mixed-case session name and expecting it to be case-sensitive.** The session component lowercases the name before using it as a connection key. `/rc MySession` and `/rc mysession` resolve to the same session.
-2. **Expecting a confirmation prompt before the session starts.** The `immediate: true` flag means the command executes as soon as it is submitted; there is no secondary confirmation step.
-3. **Assuming `/rc` and `/remote-control` have separate state.** They share the same underlying module (`zDq`) and component; they are strictly equivalent.
-4. **Providing a very long session name and expecting full fidelity.** The literal `40` near the lowercasing operation suggests a name length limit of 40 characters; names longer than this may be silently truncated.
-5. **Manually closing only one of the two session handles during scripted teardown.** The teardown sequence closes both a primary and a secondary handle; skipping one may leave a dangling connection.
-
----
+1. **Omitting the `[name]` argument when multiple sessions are needed.** Without a distinguishing name, concurrent `/remote-control` invocations will collide on the same default session key, causing the first session's socket to be torn down silently.
+2. **Assuming `/rc` behaves differently from `/remote-control`.** The alias `rc` is registered identically; both invoke the same `LX7` handler with no behavioural difference.
+3. **Expecting plain-text output.** The command is `local-jsx` + `immediate: true`. Shell integrations that capture stdout will see no text; they must handle the JSX render path.
+4. **Not accounting for automatic socket cleanup on crash.** The `finally` handler only runs within the Node process. If the process is killed hard (`SIGKILL`), the socket file written by `unlinkSync` may persist on disk and block future connections until manually removed.
+5. **Case-sensitive name matching.** The session name is lowercased before registration. Passing `MySession` and `mysession` in separate invocations will resolve to the same key and trigger a replace, not a second connection.
 
 ## Appendix — Identifier Mapping
 
@@ -177,6 +179,12 @@ function applyNameLengthLimit(name):
 
 | Identifier | Role |
 |---|---|
-| `LX7` | Command handler entry point — normalizes the argument and renders the JSX session component |
-| `_` | Session component — manages connection state, lowercases the session name, and orchestrates teardown |
-| `f` | Session teardown function — closes both session handles and invokes the teardown callback `K` |
+| `LX7` | Main async handler for `/remote-control` (entry point resolved by Arbor via `module_id` path) |
+| `_` | Argument-normalisation utility — exposes `trim` and `toLowerCase` helpers |
+| `f` | Session-handler object — owns `close()` and `finally()` on the active IPC/socket handle |
+| `q` | Socket-queue / active-connection set — exposes `add`, `delete`, `close`; also calls `fs.unlinkSync` on teardown |
+| `K` | Connection-lifecycle orchestrator — coordinates `socketQueue.add`, `sessionHandler.finally`, and `socketQueue.delete` |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

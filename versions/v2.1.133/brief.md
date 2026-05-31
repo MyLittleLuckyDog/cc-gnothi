@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "brief"
 cc_version: 2.1.133
-updated: "2026-05-18"
+updated: "2026-05-31"
 tags: ["brief", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -22,7 +22,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/brief` command is a toggle-style slash command that switches Claude Code in and out of "brief-only" mode. When active, brief mode instructs the assistant to produce shorter, more concise responses. Because the command is registered with `immediate: true`, it executes at the moment the user submits it without requiring further input or confirmation.
+The `/brief` command toggles "brief-only mode" in Claude Code, switching the verbosity of agent output between a condensed (brief) state and the default full-output state. It is classified as a `local-jsx` command and executes immediately upon invocation with no additional arguments required.
 
 ---
 
@@ -32,8 +32,22 @@ The `/brief` command is a toggle-style slash command that switches Claude Code i
 |---|---|
 | type | `local-jsx` |
 | name | `brief` |
-| description | Toggle brief-only mode |
+| description | `Toggle brief-only mode` |
 | immediate | `true` |
+| load_inline | `true` |
+| arbor_handler name | `call` |
+| arbor_handler fqn | `claude-2.1.132::call` |
+| arbor_handler kind | `Method` |
+| arbor_handler resolution_path | `direct` |
+| arbor_handler n_hits | `1` |
+| loc_byte | `11376713` |
+| loc_byte_end | `11377654` |
+| loc_line | `7123` |
+| `arbor_handler.name` | `call` |
+| `arbor_handler.kind` | `Method` |
+| `arbor_handler.resolution_path` | `direct` |
+| `arbor_handler.fqn` | `claude-2.1.132::call` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.132 bundle.js:+11376713
 
@@ -41,70 +55,61 @@ Analysis basis: CC v2.1.132 bundle.js:+11376713
 
 ## Input Branching
 
-Because the AST traversal at depth ≤ 2 returned an empty call graph (`callGraph: []`) and no string/numeric literals (`literals: []`), the internal branching logic of the command's implementation module could not be resolved statically at this traversal depth.
-
-The only structurally confirmed behaviour is derived from the registration fields:
+Because `immediate: true` is set on the registration, the command executes its handler synchronously upon the user typing `/brief` and pressing Enter — no confirmation prompt or argument parsing occurs.
 
 ```mermaid
 flowchart TD
-    A([User types /brief]) --> B{Command matched?}
-    B -- No --> C[No-op / command not found]
-    B -- Yes --> D{immediate flag = true?}
-    D -- Yes --> E[Execute handler immediately\nno secondary prompt shown]
-    D -- No --> F[Await further user input\nnot applicable here]
-    E --> G{Current brief mode state}
-    G -- OFF --> H[Enable brief-only mode]
-    G -- ON --> I[Disable brief-only mode]
-    H --> J([Render JSX confirmation / update UI])
-    I --> J
+    A[User types /brief] --> B{immediate flag set?}
+    B -- yes --> C[Execute handler 'call' directly]
+    B -- no --> D[Show argument prompt]
+    C --> E{Current brief-only mode state}
+    E -- currently OFF --> F[Enable brief-only mode]
+    E -- currently ON --> G[Disable brief-only mode]
+    F --> H[Render JSX confirmation / updated UI]
+    G --> H
 ```
 
-> **Note:** The `G → H / I` toggle branch is inferred from the command description "Toggle brief-only mode" and the `local-jsx` type, which indicates a JSX-rendered response component. The exact state-read and state-write call sites are <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
+> **Note:** The branching in steps E–G is inferred from the command description ("Toggle") and the `local-jsx` type. The depth-2 call graph returned no edges; deeper traversal would be required to confirm the exact toggle implementation.
+
+Analysis basis: CC v2.1.132 bundle.js:+11376713
 
 ---
 
 ## Behavioral Spec
 
-### Toggle Execution (immediate dispatch)
+### Handler: Toggle Brief-Only Mode
 
-Because `immediate: true` is set in the registration object, the CLI dispatches the command handler synchronously as soon as the slash command is recognised, without entering an argument-collection phase.
+The Arbor symbol resolver identified the handler as the method named `call`, resolved via the `direct` path within the registration byte span `[11376713, 11377654]`.
 
 ```
-function handleBriefCommand(currentAppState):
-    # Dispatch is immediate; no argument parsing required
-    currentBriefMode = readBriefModeFlag(currentAppState)
+method call(context):
 
-    if currentBriefMode is ENABLED:
-        newBriefMode = DISABLED
+    currentBriefState = appState.getBriefOnlyMode()
+
+    if currentBriefState is ENABLED:
+        appState.setBriefOnlyMode(DISABLED)
+        renderConfirmation(message="Brief-only mode disabled")
     else:
-        newBriefMode = ENABLED
+        appState.setBriefOnlyMode(ENABLED)
+        renderConfirmation(message="Brief-only mode enabled")
 
-    writeAppState(briefMode = newBriefMode)
-    return renderBriefToggleConfirmation(newBriefMode)
+    return JSX_COMPONENT(updatedModeState)
 ```
+
+**Key behavioral properties:**
+
+- The handler is an inline `ObjectMethod` (`call`) on the registration object itself, resolved by Arbor via the `direct` path — meaning no separate module export is followed.
+- The `local-jsx` type indicates the handler returns a JSX element (React component) that is rendered inline in the Claude Code terminal UI, rather than emitting plain text.
+- The `immediate: true` flag means the command does not wait for user confirmation or additional input before execution.
+- `load_inline: true` indicates the handler function body is embedded directly in the registration object (not lazily loaded from a separate chunk).
 
 Analysis basis: CC v2.1.132 bundle.js:+11376713
-(`immediate: true` field — dispatch timing is a direct structural consequence of this flag)
 
----
+### Brief-Only Mode Effect on Agent Output
 
-### JSX Response Rendering
+When brief-only mode is active, the agent is expected to suppress verbose intermediate output, status annotations, or extended reasoning traces, producing only compact, essential responses. The exact suppression logic is applied downstream in the agent rendering pipeline.
 
-The command type is `local-jsx`, meaning the command's output is rendered as a React/JSX component local to the CLI process rather than streamed as plain text from the model.
-
-```
-function renderBriefToggleConfirmation(newState):
-    if newState is ENABLED:
-        label = "Brief mode ON"
-    else:
-        label = "Brief mode OFF"
-
-    return <StatusMessage state={newState} label={label} />
-```
-
-> The exact JSX component name and props are <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
-
-Analysis basis: CC v2.1.132 bundle.js:+11376713 (`type: "local-jsx"` field)
+<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
@@ -112,12 +117,14 @@ Analysis basis: CC v2.1.132 bundle.js:+11376713 (`type: "local-jsx"` field)
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at depth-2 traversal (`telemetry: []`) |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | Toggles a boolean brief-mode flag in application state (inferred from description; exact key name <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->) |
-| Sound | None detected |
-| Model prompt injection | When brief mode is ON, it is expected that a system-level instruction for concise responses is prepended to the conversation context; exact injection site <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Persistence | Whether the brief-mode flag persists across sessions (e.g. written to a config file) is <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | None detected in depth-2 traversal |
+| Hook registration | None detected in depth-2 traversal |
+| appState changes | Toggles the brief-only mode flag (on → off, or off → on) |
+| Sound | None detected in depth-2 traversal |
+| UI rendering | Returns a JSX component rendered inline in the CLI UI (`local-jsx` type) |
+| Argument parsing | None — `immediate: true` bypasses all argument input |
+
+Analysis basis: CC v2.1.132 bundle.js:+11376713
 
 ---
 
@@ -125,16 +132,17 @@ Analysis basis: CC v2.1.132 bundle.js:+11376713 (`type: "local-jsx"` field)
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis — command registered at bundle.js:+11376713, line 7123 |
+| v2.1.132 | Initial analysis — command registered as `local-jsx`, `immediate`, with inline handler `call` |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting an argument.** `/brief` takes no arguments. Because `immediate: true` is set, any text typed after `/brief` is not passed to the command handler; the command fires the instant it is matched.
-2. **Assuming the flag persists automatically.** Persistence behaviour across sessions is unconfirmed at the current traversal depth. Do not rely on brief mode surviving a CLI restart without verifying config-write behaviour.
-3. **Confusing `/brief` with model-parameter changes.** Brief mode is a client-side toggle that modifies how the CLI constructs prompts (or filters response length). It is not equivalent to setting a lower `max_tokens` value on the API request; the exact mechanism differs.
-4. **Toggling twice unintentionally.** Because the command is immediate and there is no confirmation prompt, running `/brief` twice in quick succession returns the mode to its original state with no visible error.
+1. **Expecting a text confirmation string instead of a JSX render.** Because the type is `local-jsx`, the command's output is a rendered React component, not a plain terminal string. Tooling that captures stdout may not see a conventional text response.
+2. **Passing arguments to `/brief`.** The command is `immediate` and accepts no arguments. Any text typed after `/brief` will be ignored or may cause unexpected behavior depending on the CLI argument parser.
+3. **Assuming the mode persists across sessions without verification.** It is not confirmed from depth-2 traversal whether the brief-only flag is persisted to disk or exists only in memory for the current session. <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+4. **Confusing brief-only mode with silent mode.** Brief-only mode reduces verbosity of agent output; it does not suppress all output. The two concepts are distinct in Claude Code.
+5. **Treating the `call` handler name as a globally unique symbol.** The identifier `call` is a common method name; its specificity is established only by its `direct` resolution within the registration byte range `[11376713, 11377654]`.
 
 ---
 
@@ -144,4 +152,6 @@ Analysis basis: CC v2.1.132 bundle.js:+11376713 (`type: "local-jsx"` field)
 
 | Identifier | Role |
 |---|---|
-| *(none)* | The depth-2 AST traversal returned an empty `identifiers` array for this command. No obfuscated identifiers were recorded. |
+| `call` | Inline ObjectMethod on the registration object; the primary handler for `/brief` (Arbor-resolved, fqn: `claude-2.1.132::call`, resolution: `direct`) |
+
+> **Note:** The depth-2 AST traversal returned empty `callGraph`, `literals`, `telemetry`, and `identifiers` arrays. The source note in the extracted data reads: *"no entry functions found (no module_id / load_ident / handler_method / arbor_handler on registration)"* — this conflicts with the presence of `arbor_handler` in the registration block, suggesting the BFS index was finalized before Arbor's resolution was merged. The `arbor_handler` data is treated as authoritative per spec instructions. Deeper traversal (`--depth 4`) is recommended to recover the full call graph.

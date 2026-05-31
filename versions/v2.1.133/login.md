@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "login"
 cc_version: "2.1.133"
-updated: "2026-05-18"
+updated: "2026-05-31"
 tags: ["login", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/login` command initiates an interactive OAuth-based authentication flow within the Claude Code CLI, allowing users to authenticate with Anthropic's backend. Upon successful completion, it persists the resulting API key and OAuth token to application state, optionally enrolls the device as a trusted device, and refreshes remote managed settings and policy limits. The command renders a JSX confirmation UI, handles cancellation via Escape, and emits completion signals for both successful and interrupted login outcomes.
+The `/login` command allows a user to switch Anthropic accounts or sign in with an Anthropic account from within a running Claude Code session. It presents an interactive JSX-based confirmation UI, initiates the OAuth flow, manages API key transitions, and synchronises application state and remote-managed settings upon completion.
 
 ---
 
@@ -31,9 +31,17 @@ The `/login` command initiates an interactive OAuth-based authentication flow wi
 |---|---|
 | type | `local-jsx` |
 | name | `login` |
-| description | `null` |
-| loc_line | `6233` |
+| description | `"Switch Anthropic accounts \| Sign in with your Anthropic account"` |
 | module_id | `WZ9` |
+| load_inline | `true` |
+| loc_byte | `10400262` |
+| loc_byte_end | `10400495` |
+| loc_line | `6233` |
+| arbor_handler.name | `S6q` |
+| arbor_handler.fqn | `claude-2.1.133::S6q` |
+| arbor_handler.kind | `Function` |
+| arbor_handler.resolution_path | `direct` (symbol falls within the registration byte range) |
+| arbor_handler.n_hits | `2` |
 
 Analysis basis: CC v2.1.133 bundle.js:+10400262
 
@@ -41,337 +49,338 @@ Analysis basis: CC v2.1.133 bundle.js:+10400262
 
 ## Input Branching
 
-The `/login` command does not accept free-text arguments. Its branching logic is driven entirely by internal state transitions during the OAuth flow and the environment conditions detected at execution time.
+The command exhibits more than three distinct execution branches (confirmation accepted, confirmation cancelled/interrupted, API-key change path, OAuth token path, remote-settings refresh path), so a Mermaid flowchart is used.
 
 ```mermaid
 flowchart TD
-    A["/login invoked"] --> B{CLAUDE_TRUSTED_DEVICE_TOKEN env var set?}
-    B -- Yes --> C[Skip trusted-device enrollment\nlog: env var takes precedence]
-    B -- No --> D{OAuth token present?}
-    D -- No --> E[Skip trusted-device enrollment\nlog: No OAuth token]
-    D -- Yes --> F{Essential-traffic-only mode active?}
-    F -- Yes --> G[Skip trusted-device enrollment\nlog: Essential traffic only]
-    F -- No --> H[POST enrollment request to bridge endpoint]
-    H --> I{HTTP response status}
-    I -- 200 or 201 --> J{device_token field present in response?}
-    J -- Yes --> K[Persist device token to storage]
-    J -- No --> L[Emit missing_token error event]
-    I -- Other --> M[Emit http_error event]
-    H -- Network failure --> N[Emit request_failed event]
-    K --> O{Storage write successful?}
-    O -- No --> P[Log: Cannot read storage, skipping token persist\nEmit storage_failed]
-    O -- Yes --> Q[Enrollment complete]
-    C & E & G & L & M & N & P & Q --> R[Refresh remote managed settings]
-    R --> S[Refresh policy limits]
-    S --> T{Login UI outcome}
-    T -- Completed --> U[Emit Login successful\nCall onDone]
-    T -- Cancelled / Esc --> V[Emit Login interrupted\nCall onDone]
+    A([User types /login]) --> B[Render JSX confirmation UI\nwith 'Login' title and 'Esc = cancel' hint]
+    B --> C{User response}
+
+    C -- "Esc / cancel\n(confirm:no)" --> D[Emit 'Login interrupted'\nReturn without state change]
+
+    C -- "Confirmed" --> E[Read current app state\nvia getAppState]
+    E --> F{Auth credential type}
+
+    F -- "ANTHROPIC_API_KEY env var present\nor CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR" --> G[Call onChangeAPIKey handler\nUpdate API key in state]
+    F -- "OAuth token path" --> H[Invoke OAuth flow\nvia oauthFlowHandler]
+
+    G --> I[Call applyMessageOp\nto record credential update]
+    H --> I
+
+    I --> J[Trigger remote-settings refresh\nbOA / z36 pipeline]
+    J --> K[Compute settings hash SHA-256\nFetch remote managed settings]
+    K --> L{HTTP response code}
+
+    L -- "200 / new content" --> M[Validate settings structure\nShow security dialog if needed]
+    L -- "304 Not Modified" --> N[Use cached settings\nLog 'Using cached settings 304']
+    L -- "404" --> O[Delete local cache file\nLog 'Deleted cached file 404']
+    L -- "401 auth error" --> P[Log 'Not authorized'\nUse stale cache]
+    L -- "network / timeout error" --> Q[Log error type\nUse stale cache]
+
+    M --> R{Security dialog result}
+    R -- "accepted" --> S[Write settings to disk\nNotify aS.notifyChange]
+    R -- "rejected" --> T[Keep cached settings\nLog 'User rejected new settings']
+
+    N --> S
+    O --> S
+    P --> S
+    Q --> S
+    T --> S
+
+    S --> U[Poll loop starts: T49 / pi6\nBackground interval for settings]
+    U --> V[Policy limits refresh\nVJ6 / mr9 pipeline]
+    V --> W[Emit 'Login successful'\nsetAppState updated]
+    D --> X([Done])
+    W --> X
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+7994629, +6458452, +6458795, +6458880, +6459279, +6459349, +6459365, +6459562, +6459663, +6459715, +6459813, +7995074, +7995093
+Analysis basis: CC v2.1.133 bundle.js:+7994629, +7994629, +6576495, +6574720, +9784262
 
 ---
 
 ## Behavioral Spec
 
-### 1. Command Entry Point and State Setup
+### 1. JSX Shell and Confirmation Gate
+
+The top-level render function (`$y4` / `xOH`) creates a React element tree. It renders a confirmation component titled `"Login"` with an `"Esc"` / `"cancel"` affordance and a `"confirm:no"` sentinel value.
 
 ```
-function loginCommandHandler(props):
-    appState = props.getAppState()
-    setState(initialLoginState)
+function loginCommandShell(props):
+    state = useAppState()
+    onDone = props.onDone
 
-    render LoginConfirmationUI(
-        onChangeAPIKey  = handleApiKeyChange,
-        applyMessageOp  = handleMessageOp,
-        onDone          = handleCompletion
+    return createElement(ConfirmationWidget, {
+        title: "Login",
+        escLabel: "Esc",
+        cancelValue: "confirm:no",
+        onConfirm: (result) =>
+            if result == "confirm:no":
+                emitStatusMessage("Login interrupted")
+                onDone()
+                return
+            runLoginFlow(state, onDone)
+    })
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+7995349, +7995373, +7995391, +7995328, +7995074, +7995093
+
+---
+
+### 2. Login Flow Orchestration (`xL8`)
+
+The main login flow handler (obfuscated: `xL8`) sequences the credential update, state sync, and remote-settings refresh.
+
+```
+async function loginFlowOrchestrator(appState, onDone):
+    // 1. Record message operation for credential change
+    applyMessageOp(appState, { kind: "update" })          // loc +7994648, +7994671
+
+    // 2. Trigger remote-managed settings refresh
+    refreshRemoteSettings()                                // z36 pipeline, loc +7994710
+
+    // 3. Start OAuth / API-key exchange
+    initiateOAuthOrKeyExchange(appState)                   // iz6 pipeline, loc +7994716
+
+    // 4. Reload permission / auto-mode state
+    reloadPermissionState(appState)                        // dz6, loc +7994810
+
+    // 5. Reload session configuration
+    reloadSessionConfig(appState)                          // cz6, loc +7994872
+
+    // 6. Persist updated app state
+    setAppState(appState)                                  // loc +7994926
+
+    emitStatusMessage("Login successful")                 // loc +7995074
+    onDone()
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+7994629, +7994648, +7994710, +7994716, +7994810, +7994872, +7994926
+
+---
+
+### 3. API Key / OAuth Credential Handling (`xL8` → `onChangeAPIKey`, `iz6`)
+
+When an API key change is detected the handler (`xL8`) calls `H.onChangeAPIKey`. The credential resolution logic (`_O`) checks, in priority order:
+
+```
+function resolveCredential(env):
+    if env["ANTHROPIC_API_KEY"] is set:               // loc +2874043
+        return { type: "api_key", value: env["ANTHROPIC_API_KEY"] }
+
+    if env["CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR"] is set:   // loc +1997795
+        fd = parseInt(env["CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR"])
+        return { type: "api_key", value: readFromFd(fd) }   // loc +1997783
+
+    if oauthToken is set:
+        return { type: "oauth", value: oauthToken }    // loc +9782713
+
+    raise Error("ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required")
+                                                       // loc +2874464
+```
+
+Known credential type strings: `"api_key"` (bundle.js:+9782703), `"oauth"` (bundle.js:+9782713).
+
+---
+
+### 4. Remote-Managed Settings Refresh Pipeline (`z36` → `bOA`)
+
+After a credential change, the settings-fetch pipeline is triggered unconditionally. The pipeline logs `"Remote settings: Refreshed after auth change"` (bundle.js:+6576585).
+
+```
+async function refreshRemoteSettingsAfterAuth(currentSettings):
+    // Build request headers including User-Agent and If-None-Match ETag
+    headers = buildHeaders(currentSettings)             // loc +6572984, +6573010
+
+    // Compute SHA-256 hash of current settings for cache validation
+    hash = sha256(serialize(currentSettings))           // loc +6572176, +6572161
+
+    response = await httpGet(remoteSettingsEndpoint, headers, timeout=10000)
+
+    switch response.statusCode:
+        case 200, 201:
+            validate(response.body)                     // loc +6573522, +6573760
+            if securityDialogRequired(response.body):
+                result = await showSecurityDialog()     // tengu_managed_settings_security_dialog_shown
+                if result == "rejected":
+                    log("Remote settings: User rejected new settings, using cached settings")
+                    return cachedSettings               // loc +6575481
+            writeSettingsToDisk(response.body)          // loc +6574364, +6574399
+            notifyChange()                              // aS.notifyChange, loc +6576997
+            log("Remote settings: Applied new settings successfully")  // loc +6575611
+
+        case 304:
+            log("Remote settings: Using cached settings (304)")        // loc +6573164
+            return cachedSettings
+
+        case 404:
+            deleteLocalCacheFile()                      // xGH.unlink, loc +6575760
+            log("Remote settings: Deleted cached file (404 response)") // loc +6575776
+
+        case 401:
+            log("Not authorized for remote settings")                  // loc +6574061
+
+        default:
+            log("remote_managed_settings_unexpected")                  // loc +6576077
+            useStaleCacheIfAvailable()
+```
+
+HTTP status codes observed: 200 (bundle.js:+6573104), 204 (bundle.js:+6573113), 304 (bundle.js:+6573122), 404 (bundle.js:+6573131).
+
+---
+
+### 5. Policy Limits Fetch (`iz6` → `VJ6` → `mr9`)
+
+Immediately after the credential exchange the policy-limits pipeline refreshes. It logs `"Policy limits: Refreshed after auth change"` (bundle.js:+9784336).
+
+```
+async function refreshPolicyLimits(authContext):
+    data = readPolicyLimitsFile()                       // ur9 / br9.readFileSync, loc +9782221
+    hash = computeHash(data)                            // MH7 / Cr9.createHash, loc +9779993
+
+    response = await fetchPolicyLimits(authContext, ifNoneMatchHash=hash)
+
+    // Retry with exponential backoff
+    backoffDelay = calculateBackoff(attempt,
+        base=32000,                                     // loc +9774524
+        multiplier=0.25,                                // loc +9774587
+        maxAttempts=10)                                 // loc +9774617
+
+    switch response:
+        case 200 / new content:
+            applyNewRestrictions()
+            log("Policy limits: Applied new restrictions successfully") // loc +9783312
+            emit telemetry("tengu_policy_limits_fetch", { authType, ... })
+
+        case 304:
+            log("Policy limits: Cache still valid (304 Not Modified)") // loc +9783158
+
+        case stale cache fallback:
+            log("Policy limits: Using stale cache after fetch failure") // loc +9782989
+            emit telemetry with outcome="stale_cache_used"             // loc +9783055
+
+        case unexpected error:
+            emit telemetry with outcome="unexpected_error"             // loc +9783536
+
+    // Start background polling interval
+    startPollingInterval(policyLimitsPollHandler)       // pi6 / setInterval, loc +3994860
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+9784262, +9782743, +9780888
+
+---
+
+### 6. Background Poll Registration (`T49` / `XM4` / `pi6`)
+
+After successful login, both the remote-managed settings and the policy-limits subsystems register background polling intervals.
+
+```
+function registerBackgroundPolls(settingsContext, policyContext):
+    settingsPollId = setInterval(
+        () => pollSettingsAndNotify(settingsContext),   // XM4 → bOA, loc +6576904
+        pollInterval                                   // <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
     )
+
+    policyPollId = setInterval(
+        () => pollPolicyLimits(policyContext),          // Ur9 → JH7 → mr9, loc +9784516
+        pollInterval
+    )
+
+    // Both intervals are clearInterval-safe on session teardown
+    registerCleanup(() => {
+        clearInterval(settingsPollId)                  // loc +3994928
+        clearInterval(policyPollId)
+    })
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+7994794, +7994926, +7994629, +7994648
+Analysis basis: CC v2.1.133 bundle.js:+6577079, +6577095, +9784681
 
 ---
 
-### 2. OAuth URL Resolution
+### 7. Session Teardown on Re-Login (`A2H` / `AxH`)
+
+Before new credentials are accepted, the existing session is torn down:
 
 ```
-function resolveOAuthEndpoint(environment):
-    allowed = ["local", "staging", "prod"]
-
-    if environment == "local":
-        base = LOCAL_OAUTH_BASE
-    elif environment == "staging":
-        base = STAGING_OAUTH_BASE
-    else:
-        base = PRODUCTION_OAUTH_BASE
-
-    customUrl = readEnv("CLAUDE_CODE_CUSTOM_OAUTH_URL")
-    if customUrl is not null:
-        if customUrl not in approvedEndpoints:
-            raise Error("CLAUDE_CODE_CUSTOM_OAUTH_URL is not an approved endpoint.")
-        append "-custom-oauth" suffix to flow identifier
-
-    return resolvedEndpoint
+function teardownCurrentSession():
+    process.off("exit")                                // loc +3092210
+    clearAllSubscriptionSets()                         // b5H.clear, pq6.clear, Ut8.clear, cU.clear
+                                                       // loc +3092329–3092365
+    clearTimers()                                      // nt8 → clearInterval, loc +3092855
+    removeProcessListeners()                           // process.removeListener, loc +3092890
+    emitTeardownEvent()                                // HxH.emit, loc +3092082
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+892507, +892532, +892562, +892692, +893208
+Analysis basis: CC v2.1.133 bundle.js:+3092060, +3092076, +3092082
 
 ---
 
-### 3. API Key Validation and Normalization
+### 8. Security Dialog for Remote Managed Settings (`w49`)
+
+When newly fetched remote settings differ from the locally cached copy a security confirmation dialog is shown to the user:
 
 ```
-function validateAndNormalizeApiKey(rawKey):
-    trimmed = rawKey.trim()
-    upper   = trimmed.toUpperCase()
+function showRemoteSettingsSecurityDialog(newSettings, cachedSettings):
+    emit telemetry("tengu_managed_settings_security_dialog_shown")   // loc +6570054
 
-    if upper contains known debug prefix:
-        applyDebugKeyPath(trimmed)
-        return
+    result = await showSecurityConfirmation(newSettings)
 
-    normalizedKey = normalize(trimmed)   // strips whitespace variants
-    store(normalizedKey)
-    return normalizedKey
+    if result == "approved":                           // loc +6570138
+        emit telemetry("tengu_managed_settings_security_dialog_accepted") // loc +6570149
+        return "approved"
+
+    if result == "rejected":
+        emit telemetry("tengu_managed_settings_security_dialog_rejected") // loc +6570199
+        return "rejected"
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+162619, +162681, +162704, +162555
+Security-check event string: `"remote_managed_settings_security_check"` (bundle.js:+6570271).
 
 ---
 
-### 4. Remote Managed Settings Refresh
+### 9. Trusted-Device Enrollment (`F$A`)
 
-After authentication state changes, the settings subsystem is re-triggered:
-
-```
-function refreshRemoteSettings(authChanged):
-    if authChanged:
-        log("Remote settings: Refreshed after auth change")
-
-    result = fetchRemoteSettings()
-
-    if result.status == 304:
-        log("Remote settings: Cache still valid (304 Not Modified)")
-        return cachedSettings
-
-    if result.failed:
-        log("Remote settings: Using stale cache after fetch failure")
-        emitTelemetry("remote_managed_settings_fetch_failed")
-        return cachedSettings
-
-    if result.status == 404:
-        deleteLocalCacheFile()
-        log("Remote settings: Deleted cached file (404 response)")
-        return null
-
-    if userRejectedNewSettings:
-        log("Remote settings: User rejected new settings, using cached settings")
-        return cachedSettings
-
-    applyNewSettings()
-    log("Remote settings: Applied new settings successfully")
-    emitTelemetry("remote_managed_settings_pull")
-    notifyChange("policySettings")
-    return newSettings
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+6576585, +6575251, +6575082, +6575031, +6575776, +6575481, +6575611, +6575000, +6576680, +6576696
-
----
-
-### 5. Policy Limits Refresh
+After OAuth succeeds (macOS `"darwin"` platform, bundle.js:+6459084), the command attempts trusted-device enrollment:
 
 ```
-function refreshPolicyLimits(authChanged):
-    if authChanged:
-        log("Policy limits: Refreshed after auth change")
+async function enrollTrustedDevice(oauthToken, appState):
+    if env["CLAUDE_TRUSTED_DEVICE_TOKEN"] is set:
+        log("[trusted-device] CLAUDE_TRUSTED_DEVICE_TOKEN env var is set, skipping enrollment")
+        return                                         // loc +6458452
 
-    clearExistingTimeout()
-    promise = loadPolicyLimits()
-
-    timeoutId = setTimeout(function():
-        log("Policy limits: Loading promise timed out, resolving anyway")
-        resolveAnyway()
-    , POLICY_LOAD_TIMEOUT)
-
-    result = await promise
-    clearTimeout(timeoutId)
-    emitTelemetry("policy_limits_load", { result })
-    return result
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+9784336, +9779399, +9779515, +9779544, +9784131, +9784208
-
----
-
-### 6. Trusted-Device Enrollment
-
-```
-function enrollTrustedDevice(oauthToken):
-    if env("CLAUDE_TRUSTED_DEVICE_TOKEN") is set:
-        log("[trusted-device] CLAUDE_TRUSTED_DEVICE_TOKEN env var is set, skipping enrollment (env var takes precedence)")
-        return
-
-    if oauthToken is null or empty:
+    if not oauthToken:
         log("[trusted-device] No OAuth token, skipping enrollment")
-        return
+        return                                         // loc +6458795
 
     if isEssentialTrafficOnly():
         log("[trusted-device] Essential traffic only, skipping enrollment")
-        emitTelemetry("bridge_trusted_device_enroll", { result: "essential-traffic" })
+        return                                         // loc +6458880
+
+    await waitForPolicyLimitsToLoad()                  // loc +6458591
+
+    if not isPolicyAllowed():                          // loc +6458622
         return
 
-    headers = { "Content-Type": "application/json" }
-    timeout = 10000   // ms  (bundle.js:+6459177)
-    retryDelay = 500  // ms  (bundle.js:+6459203)
+    response = await httpPost(enrollmentEndpoint, {
+        headers: { "Content-Type": "application/json" },// loc +6459134
+        timeout: 10000,                                 // loc +6459177
+        retries: 500                                    // loc +6459203
+    })
 
-    try:
-        response = POST(enrollmentEndpoint, body, headers, timeout)
-    catch networkError:
-        emitTelemetry("bridge_trusted_device_enroll", { result: "request_failed" })
+    emit telemetry("bridge_trusted_device_enroll", { outcome })  // loc +6459279
+
+    if response.statusCode != 201:                     // loc +6459365
+        emit telemetry with outcome="http_error"       // loc +6459484
         return
 
-    if response.status not in [200, 201]:
-        emitTelemetry("bridge_trusted_device_enroll", { result: "http_error" })
-        return
-
-    if response.body.device_token is missing:
+    if not response.body.device_token:
         log("[trusted-device] Enrollment response missing device_token field")
-        emitTelemetry("bridge_trusted_device_enroll", { result: "missing_token" })
+        emit with outcome="missing_token"              // loc +6459663
         return
 
-    storageOk = writeDeviceToken(response.body.device_token)
-    if not storageOk:
-        log("[trusted-device] Cannot read storage, skipping token persist")
-        emitTelemetry("bridge_trusted_device_enroll", { result: "storage_failed" })
-        return
-
-    emitTelemetry("bridge_trusted_device_enroll", { result: "unknown" })  // success path default
+    persistDeviceToken(response.body.device_token)    // q.update / uH, loc +6459867
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+6458452, +6458795, +6458880, +6459134, +6459149, +6459177, +6459203, +6459279, +6459310, +6459349, +6459365, +6459484, +6459562, +6459663, +6459715, +6459813, +6459952
-
----
-
-### 7. Session Cleanup on Re-Login
-
-Before a new login is applied, existing process listeners and in-memory caches are cleared:
-
-```
-function teardownExistingSession():
-    process.off("beforeExit", exitHandler)
-    process.off("exit", exitHandler)
-    clearCacheSet(sessionCacheA)
-    clearCacheSet(sessionCacheB)
-    clearCacheSet(sessionCacheC)
-    clearCacheSet(sessionCacheD)
-    emitInternalEvent(sessionResetSignal)
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+3092200, +3092210, +3092222, +3092268, +3092329, +3092341, +3092353, +3092365, +3092082
-
----
-
-### 8. Auto-Mode Configuration After Login
-
-```
-function reconfigureAutoMode(settings):
-    emitTelemetry("tengu_auto_mode_config", { source: "settings" })
-
-    if settings.disableAutoMode == true:
-        log("auto mode disabled: disableAutoMode in settings")
-        return MODE_DISABLED
-
-    circuitBreakerState = readCircuitBreaker()
-    if circuitBreakerState == "disabled":
-        log("auto mode disabled: tengu_auto_mode_config.enabled === \"disabled\" (circuit breaker)")
-        emitTelemetry("tengu_auto_mode_config", { source: "circuit-breaker" })
-        return MODE_DISABLED
-
-    if circuitBreakerState == "enabled":
-        return MODE_ENABLED
-
-    // Evaluate plan/model eligibility
-    plan  = derivePlanFromState()
-    model = deriveModelFromState()
-
-    if plan == "auto" or eligibleByModel(model):
-        return MODE_AUTO
-    else:
-        emitTelemetry("auto_gate_denied")
-        return MODE_DEFAULT
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+9676808, +9676936, +9677045, +9677560, +9677573, +9677630, +9677664, +9677684, +9677793, +9677918, +9678053, +9678221
-
----
-
-### 9. Login UI Component
-
-```
-function renderLoginComponent(props):
-    [state, dispatch] = useReducer(loginReducer, initialState)
-
-    useEffect(function():
-        runLoginFlow(dispatch)
-    , [])
-
-    plan  = useMemo(computePlan, [state])
-    model = useMemo(computeModel, [state])
-
-    if state == COMPLETED:
-        appendMessage("Login successful")   // literal: bundle.js:+7995074
-        props.onDone()
-
-    if state == INTERRUPTED:
-        appendMessage("Login interrupted")  // literal: bundle.js:+7995093
-        props.onDone()
-
-    return createElement(
-        ConfirmationWidget,
-        {
-            keyBinding: "Esc",              // bundle.js:+7995373
-            confirmId:  "confirm:no",       // bundle.js:+7995328
-            title:      "Confirmation",     // bundle.js:+7995349
-            cancelText: "cancel",           // bundle.js:+7995391
-            label:      "Login",            // bundle.js:+7995770
-            category:   "permission"        // bundle.js:+7995795
-        },
-        children
-    )
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+7993081, +7993115, +7993376, +7995014, +7995061, +7995074, +7995093, +7995139, +7995299, +7995328, +7995349, +7995373, +7995391, +7995770, +7995795
-
----
-
-### 10. Bypass-Permissions Mode Reset
-
-If `bypassPermissions` mode was active in the prior session, it is cleared and the mode is reset to `default` upon login:
-
-```
-function resetBypassPermissionsMode(currentState):
-    emitTelemetry("tengu_disable_bypass_permissions_mode")
-    newMode = applyModeChange("setMode", "default")   // literals: bundle.js:+9679679, +9679694
-    if sessionScope:
-        applyModeChange("setMode", "session")          // literal: bundle.js:+9679716
-    return newMode
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+9678739, +9679646, +9679679, +9679694, +9679716
-
----
-
-### 11. Random Delay Jitter (Anti-Thundering-Herd)
-
-A short randomized delay is applied before certain upstream requests to avoid simultaneous bursts after login:
-
-```
-function scheduleWithJitter(callback):
-    delay = Math.floor(Math.random() * 2) + 1   // values 1–2 (bundle.js:+12285767, +12285783)
-    setTimeout(callback, delay)
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+12285769, +12285783, +12285806
+Analysis basis: CC v2.1.133 bundle.js:+6458067, +6458238, +6458989
 
 ---
 
@@ -379,25 +388,25 @@ Analysis basis: CC v2.1.133 bundle.js:+12285769, +12285783, +12285806
 
 | Item | Detail |
 |---|---|
-| Telemetry — `tengu_auto_mode_config` | Fired when auto-mode configuration is evaluated post-login (bundle.js:+9676808) |
-| Telemetry — `tengu_disable_bypass_permissions_mode` | Fired when bypass-permissions mode is cleared on new login (bundle.js:+9678739) |
-| Telemetry — `tengu_feature_ok` | Fired on successful feature gate evaluation (bundle.js:+907381) |
-| Telemetry — `tengu_feature_bad` | Fired on failed feature gate evaluation (bundle.js:+907437) |
-| Telemetry — `tengu_slate_kestrel` | Fired as part of policy-limits load completion (bundle.js:+9780268) |
-| Telemetry — `bridge_trusted_device_enroll` | Fired at each enrollment outcome with a `result` sub-key (`request_failed`, `http_error`, `missing_token`, `storage_failed`, `unknown`) (bundle.js:+6459279) |
-| Telemetry — `remote_managed_settings_pull` | Fired when new remote settings are successfully applied (bundle.js:+6575000) |
-| Telemetry — `remote_managed_settings_fetch_failed` | Fired when remote settings fetch fails (bundle.js:+6575031) |
-| Telemetry — `remote_managed_settings_unexpected` | Fired on unexpected error in settings fetch (bundle.js:+6576077) |
-| Telemetry — `policy_limits_load` | Fired after policy limits load attempt resolves (bundle.js:+9784131) |
-| `appState` — API key | Written via `onChangeAPIKey` after successful authentication (bundle.js:+7994629) |
-| `appState` — general update | Written via `setAppState` / `applyMessageOp` at command completion (bundle.js:+7994648, +7994926) |
-| `appState` — mode | Reset to `default` (or `session`) if `bypassPermissions` was active (bundle.js:+9679694) |
-| Process event hooks | `beforeExit` and `exit` listeners are detached during session teardown (bundle.js:+3092222, +3092268) |
-| Internal event bus | `HxH.emit` fires a session-reset signal during teardown (bundle.js:+3092082) |
-| File system | Trusted-device token is persisted to local storage; 404 responses from remote settings cause deletion of the local cache file via `xGH.unlink` (bundle.js:+6575760) |
-| In-memory cache | Four cache sets are cleared on re-login: `b5H`, `pq6`, `Ut8`, `cU` (bundle.js:+3092329–3092365) |
-| Storage (OAuth) | Device token written via storage update mechanism; stale file removed via `Ydq.unlinkSync` when appropriate (bundle.js:+14137065) |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry — `tengu_feature_ok` | Fired when a feature flag check succeeds (bundle.js:+907381) |
+| Telemetry — `tengu_feature_bad` | Fired when a feature flag check fails (bundle.js:+907437) |
+| Telemetry — `tengu_feature_sad` | Fired on an unexpected feature flag state (bundle.js:+907507) |
+| Telemetry — `tengu_managed_settings_security_dialog_shown` | Remote-settings security dialog displayed (bundle.js:+6570054) |
+| Telemetry — `tengu_managed_settings_security_dialog_accepted` | User accepted new remote settings (bundle.js:+6570149) |
+| Telemetry — `tengu_managed_settings_security_dialog_rejected` | User rejected new remote settings (bundle.js:+6570199) |
+| Telemetry — `tengu_slate_kestrel` | Policy-limits subsystem event (bundle.js:+9780268) |
+| Telemetry — `tengu_policy_limits_fetch` | Fired after each policy-limits HTTP fetch (bundle.js:+9782782) |
+| Telemetry — `tengu_disable_bypass_permissions_mode` | Fired if bypass-permissions mode is disabled (bundle.js:+9678739) |
+| Telemetry — `tengu_auto_mode_config` | Auto-mode configuration evaluated (bundle.js:+9676808) |
+| Telemetry — `tengu_daemon_config_reload` | Daemon config reloaded after login (bundle.js:+14170592) |
+| appState changes | `setAppState` called at end of flow (bundle.js:+7994926); `getAppState` read at start (bundle.js:+7994794) |
+| Credential storage | API key written via secure storage (`l41`); plaintext fallback logged with `"plaintext_fallback_used"` (bundle.js:+2864665) |
+| Remote settings file | Written to disk (`wM4` → `_.writeFile`, +6574364); deleted on 404 (`xGH.unlink`, +6575760) |
+| Background intervals | Two `setInterval` loops registered: remote-settings poll (`pi6`, +3994860) and policy-limits poll (`Ur9`, +9784681) |
+| Process listeners | `process.off("exit")` and `process.removeListener("beforeExit")` called during session teardown (bundle.js:+3092210, +3092913) |
+| Subscription sets | `b5H`, `pq6`, `Ut8`, `cU` cleared during teardown (bundle.js:+3092329–3092365) |
+| Cache invalidation | `JG6.clear` and `Q28.clear` called on credential reset (`l2`, bundle.js:+24901, +24913) |
+| Sound | None observed in depth-2 traversal |
 
 ---
 
@@ -411,17 +420,15 @@ Analysis basis: CC v2.1.133 bundle.js:+12285769, +12285783, +12285806
 
 ## Common Mistakes
 
-1. **Running `/login` when `CLAUDE_TRUSTED_DEVICE_TOKEN` is set via environment variable**: Trusted-device enrollment is silently skipped when this variable is present; the env var always takes precedence over the OAuth-based enrollment flow (bundle.js:+6458452).
+1. **Running `/login` with `ANTHROPIC_API_KEY` set in the environment** — The command will attempt to update the key from the environment variable rather than launching the browser OAuth flow. Clear `ANTHROPIC_API_KEY` before invoking `/login` if a full OAuth re-authentication is desired.
 
-2. **Expecting `/login` to accept arguments**: The command's `description` field is `null` and no argument parser is registered. Passing text after `/login` has no documented effect and is not processed by the command handler (bundle.js:+10400262).
+2. **Pressing Esc / sending `confirm:no` and expecting a clean state** — The `"Login interrupted"` path exits before any credential or settings update; the existing session credentials remain unchanged. No partial writes occur, but the background poll timers from the *previous* session are still active.
 
-3. **Interrupting the flow with Escape expecting a clean state**: Cancelling via Escape key produces an "Login interrupted" message and calls `onDone`, but does **not** roll back any partial state changes (such as API key fields already written). Users should re-run `/login` to ensure a consistent state (bundle.js:+7995093, +7995373).
+3. **Expecting instant effect after cancellation of the remote-settings security dialog** — When the security dialog is dismissed with "rejected", the old cached settings remain in force (`"Remote settings: User rejected new settings, using cached settings"`). The next background poll will re-present the dialog.
 
-4. **Assuming immediate policy-limit availability**: Policy limits are loaded asynchronously after login. A built-in timeout forces the promise to resolve regardless; callers must tolerate a brief window where limits are not yet enforced (bundle.js:+9779544).
+4. **Attempting `/login` in an environment where `CLAUDE_TRUSTED_DEVICE_TOKEN` is set** — Trusted-device enrollment is silently skipped; the login itself completes normally but the device will not be enrolled.
 
-5. **Expecting remote managed settings to always be fresh**: If the settings endpoint returns a non-200/304 error, the CLI falls back to stale cached settings silently. A 404 deletes the cache entirely, resulting in no managed settings until the next successful fetch (bundle.js:+6575082, +6575776).
-
-6. **Re-logging in without expecting session teardown**: Every `/login` invocation triggers full session cleanup — process listeners are detached, all four in-memory caches are wiped, and an internal reset event is emitted — before the new credentials are applied (bundle.js:+3092082, +3092210, +3092329).
+5. **Network-isolated environments** — Remote-settings and policy-limits fetches both fall back to stale cache on network error, but the command does not surface this failure to the user; always verify effective settings afterwards.
 
 ---
 
@@ -431,57 +438,139 @@ Analysis basis: CC v2.1.133 bundle.js:+12285769, +12285783, +12285806
 
 | Identifier | Role |
 |---|---|
-| `xL8` | Login command core handler / props processor |
-| `H` | General utility / state context object (varies by call site) |
-| `INH` | Timestamp utility (wraps `Date.now`) |
-| `z36` | Remote managed settings orchestrator |
-| `Z49` | Settings sub-initializer A |
-| `kOA` | Settings sub-initializer B (delegates to `_q_`) |
-| `$l` | Account-type resolver (`firstParty`, `local-agent`, `enterprise`, `team`) |
-| `ROA` | Settings change notifier (calls `aS.notifyChange`) |
-| `bOA` | Settings fetch and cache reconciliation handler |
-| `k` | API key validation and normalization function |
-| `V6H` | Shared value accessor / config reader |
-| `T49` | Settings post-apply handler |
-| `iz6` | Policy limits orchestrator |
-| `NVA` | Policy limits timeout canceller |
-| `QM8` | Policy limits loader with timeout guard |
-| `Wm` | Policy limits core loader |
-| `dM8` | Path joiner for policy limits file resolution |
-| `VJ6` | Policy limits refresh-after-auth-change handler |
-| `v5H` | Supplemental login side-effect handler A |
-| `A2H` | Session teardown / re-login reset coordinator |
-| `Po` | Process lifecycle hook installer |
-| `AxH` | Cache and listener cleanup executor |
-| `fH` | Error logging and event-push handler |
-| `HA` | Error string coercer |
-| `B$A` | Storage read/update wrapper A |
-| `O$H` | Internal event dispatcher (wraps `J6`) |
-| `dK` | Low-level storage accessor |
-| `F$A` | Trusted-device enrollment orchestrator |
-| `xS` | OAuth session state inspector |
-| `eL9` | Enrollment endpoint builder |
-| `A_` | Module export initializer / binding registrar |
-| `A` | Generic application state or config accessor |
-| `yq` | Network/traffic-category checker |
-| `q_` | OAuth URL resolver and validator |
-| `vH` | String coercion utility |
-| `uH` | Feature flag / config accessor |
-| `SH` | JSON serializer wrapper |
-| `q` | Persistent storage object (read/update/unlinkSync) |
-| `hH` | Secondary feature/config accessor |
-| `JZ9` | Login flow entry initializer |
-| `dz6` | App-state loader for login component |
-| `bL8` | App-state sub-reader |
-| `NGH` | App-state notifier / Wf dispatcher |
-| `rjA` | Login completion signal emitter |
-| `cz6` | Login UI state coordinator |
-| `lz6` | Auto-mode configuration evaluator |
-| `$y4` | Login JSX factory (top-level component wrapper) |
-| `xOH` | Login confirmation UI renderer |
-| `yD` | Login view state manager |
-| `O6` | External store sync hook wrapper |
-| `wZ9` | Login reducer and effect setup |
-| `Gq` | Plan/model string normalizer |
-| `fW` | Model capability classifier |
-| `yj` | React context consumer for login UI |
+| `S6q` | Arbor-resolved handler function for `/login` command (primary entry point) |
+| `xL8` | Login flow orchestrator (sequences credential update, settings refresh, OAuth) |
+| `$y4` | JSX shell component — renders login confirmation wrapper |
+| `xOH` | Outer JSX component — wires confirmation callbacks and `onDone` |
+| `yD` | Inner state-connected component — binds app state to confirmation UI |
+| `wZ9` | `useReducer` / `useEffect` hook wrapper for login state |
+| `z36` | Remote-managed settings refresh entry point (called after auth change) |
+| `bOA` | Remote-managed settings fetch-and-apply pipeline |
+| `ROA` | Settings change notifier — calls `aS.notifyChange` |
+| `T49` | Background poll scheduler for settings after login |
+| `XM4` | Settings background poll handler — calls `bOA`, notifies on change |
+| `pi6` | Generic interval manager (`setInterval` / `clearInterval` wrapper) |
+| `iz6` | OAuth / policy-limits post-login refresh orchestrator |
+| `VJ6` | Policy-limits refresh controller |
+| `mr9` | Policy-limits fetch-and-apply implementation |
+| `ur9` | Policy-limits cache file reader (`br9.readFileSync`) |
+| `MH7` | Settings/policy hash computation (`Cr9.createHash`, SHA-256) |
+| `OH7` | Policy-limits backoff and retry handler |
+| `Ur9` | Policy-limits background poll scheduler |
+| `JH7` | Policy-limits poll handler — calls `mr9` |
+| `DH7` | Policy-limits cache file writer (`IJ6.writeFile`) |
+| `A2H` | Session teardown orchestrator (clears listeners, subscriptions) |
+| `AxH` | Subscription set and interval cleanup helper |
+| `nt8` | Timer and process-listener removal on teardown |
+| `F$A` | Trusted-device enrollment handler |
+| `eL9` | OAuth environment / URL builder |
+| `q_` | OAuth URL validator / sanitiser |
+| `B$A` | Credential store read/update dispatcher |
+| `dK` | Credential persistence adapter (`l41`) |
+| `l41` | Secure storage read/write for API key/OAuth token |
+| `_O` | Credential resolution logic (env var priority chain) |
+| `xB8` | `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR` file-descriptor reader |
+| `OS` | API key trimmer (slices first 20 chars for logging, loc +1999137) |
+| `R6` | HTTP request helper used for settings/policy fetches |
+| `vs` | Exponential backoff calculator (`Math.min`, `Math.pow`, `Math.random`) |
+| `r8` | Async retry/abort wrapper (`setTimeout`, `clearTimeout`) |
+| `wM4` | Settings file atomic writer (`xGH.open`, `_.writeFile`, `_.datasync`, `_.close`) |
+| `OM4` | Settings serialiser and hash builder (`W49.createHash`, SHA-256) |
+| `SOA` | Recursive settings structure normaliser (`Array.isArray`, `Object.keys`) |
+| `DM4` | Settings fetch dispatcher — calls `YM4` with backoff |
+| `YM4` | Settings HTTP fetch implementation (sets `User-Agent`, `If-None-Match`) |
+| `w49` | Remote-settings security-check and approval workflow |
+| `KFH` | Settings header builder (`Object.entries`, `L.toUpperCase`) |
+| `O68` | Settings object key enumerator |
+| `OK9` | Settings serialisation helper |
+| `rKH` | Credential cache invalidation (`l2`) |
+| `l2` | Dual-cache clear (`JG6.clear`, `Q28.clear`) |
+| `P49` | Settings deep-clone helper (`Ch` / `structuredClone`) |
+| `J49` | Settings validation entry point (`fL`) |
+| `fL` | Settings structure validator |
+| `dz6` | Permission / auto-mode state reloader |
+| `bL8` | Permission state loader helper |
+| `lt8` | Auto-mode gate evaluator (`Bq6`, `gq6`, `Po`, `R6`) |
+| `NGH` | Permission-mode configuration applicator (`Wf`) |
+| `Wf` | Permission rules writer (`_.set`, `_.delete`) |
+| `cz6` | Session configuration reloader |
+| `lz6` | Full session config load pipeline |
+| `Wo` | Session permission initialiser (`qd6`) |
+| `mq` | Model-selection logic (`Gq`, `fX`) |
+| `Gq` | Model string normaliser (trim, toLowerCase, alias map) |
+| `fX` | Model alias resolver |
+| `TbH` | Model tier and capability checker |
+| `NlH` | Auto-mode opt-in checker (`ip`) |
+| `D` | Daemon/supervisor config reload handler |
+| `eDH` | Config file reader (`Cwq.readFile`) |
+| `lU` | Event subscription helper (`HxH.subscribe`, `queueMicrotask`) |
+| `HX1` | Async subscription bootstrap (`Promise.resolve`, `fH`) |
+| `fH` | Error-queue logger (`yq`, `NJL`, `cyH.push`, `yQ.logError`) |
+| `INH` | Timestamp helper (`Date.now`) |
+| `kH` | String coercion / normaliser |
+| `SH` | JSON serialiser (`JSON.stringify`) |
+| `Ch` | Deep-clone utility (`structuredClone`) |
+| `np` | Settings notification emitter (`wWL`, `XWL`) |
+| `uH` | Secure-storage feature-flag write helper (`d`) |
+| `hH` | Secure-storage feature-flag read helper (`d`) |
+| `y1` | Async task tracker (`d08.add`, `d08.delete`, `Object.assign`) |
+| `Qoq` | Undefined-safe property accessor |
+| `k` | HTTP client / fetch wrapper (includes header and body helpers) |
+| `Ztq` | HTTP base configuration (`aT`, `Ttq`, `xcA`) |
+| `Uf` | URL path builder (`rnA`, `H.replace`, `_.lastIndexOf`, `_.slice`) |
+| `vtq` | HTTP request executor with buffering (`Buffer.byteLength`, `gE6.then`) |
+| `LkH` | HTTP header utility (`UnA`) |
+| `J6` | Concurrent request deduplicator (`Bq6`, `gq6`, `Po`, `b5H`, `_d6`, `pq6`) |
+| `xS` | Request scheduler with policy check (`Bq6`, `gq6`, `Po`, `R6`) |
+| `_d6` | In-flight request tracker (`Ut8`, `b5H`, `pt8`) |
+| `pt8` | Request initiator (`jo`, `pU`, `ut8.randomUUID`, `Xo.emit`) |
+| `ct8` | Response handler (`I71`, `mA`, `LX1`, `CyH`) |
+| `KX1` | Feature-gate checked request wrapper |
+| `fW` | Model display-name formatter (`C_`, `kr`, `k7H`, `Ek`, `zM`, `DM`, `LX`, `pV`) |
+| `C_` | Model name renderer (`rY`, `wU`, `V_`) |
+| `rY` | Model string tokeniser (`HK`, `NS`, `kH`, `L_`, `_O`) |
+| `U9` | Token-sequence builder (`zu_`, `Ou_`, `rY`, `V_`) |
+| `Ko` | Token post-processor (`$u_`, `rY`, `V_`) |
+| `Ek` | Model label builder (`zM`, `DM`) |
+| `zM` | Display-string composer (`Q_`) |
+| `DM` | Styled-string builder (`VNH`, `BsL`, `_u_`, `_x6`, `Q_`) |
+| `LX` | Layout composer (`T8H`, `Z8H`, `Q_`, `C_`, `U9`) |
+| `pV` | Paragraph-level renderer (`zM`, `DM`) |
+| `Q_` | Text span renderer (`kH`) |
+| `kr` | Emphasis renderer (`U9`) |
+| `k7H` | Bold/italic renderer (`U9`, `Ko`) |
+| `FRH` | Strikethrough renderer (`U9`, `j71`) |
+| `O6` | App-state context reader (`MAA`, `A.getState`, `IfH.useSyncExternalStore`) |
+| `MAA` | App-state context hook (`IfH.useContext`, `ReferenceError`) |
+| `yj` | Secondary context hook (`HWH.useContext`) |
+| `Po` | Base HTTP poster (`kH`, `jo`) |
+| `jo` | Request builder (`Ex`) |
+| `Ex` | Low-level transport (`WPK`, `NH6`) |
+| `pa` | Event emitter helper (`I4`) |
+| `I4` | Structured event emitter (`bW8`, `k`, `jpH`, `haH`, `K.split`, `_.emit`) |
+| `o9H` | Session object mapper (`Wf`, `L.map`) |
+| `a9H` | App-state auxiliary loader |
+| `pN` | Plan metadata reader |
+| `Bdq` | Heartbeat scheduler (`Go`) |
+| `bwq` | Config diff calculator (`Object.keys`, `Math.max`, `n3`) |
+| `n4` | Permission rule helper (`HWL`) |
+| `NVA` | OAuth timeout canceller (`SVA`, `clearTimeout`) |
+| `QM8` | OAuth prompt renderer (`Wm`, `setTimeout`, `k`, `$e`) |
+| `Wm` | OAuth UI component (`Q_`, `o3`, `_O`, `V_`, `J6`) |
+| `dM8` | OAuth file-path builder (`xr9.join`, `n8`) |
+| `SVA` | OAuth timer reference holder |
+| `IJ6` | OAuth file-system adapter (`unlink`, `writeFile`) |
+| `ZaH` | Environment-name resolver (`NA`) |
+| `Ta8` | API-key helper config reader |
+| `Wx` | Flag settings reader (`HK`, `h8`, `L_`) |
+| `HK` | Settings property getter (`kH`) |
+| `R06` | Module initialisation helper |
+| `A_` | Module export bootstrapper (`OwH`, `P28`, `S06.call`, `R06.bind`, `Llq`, `SgA.set`) |
+| `q` | File-system unlink wrapper (`Ydq.unlinkSync`) |
+| `_` | File/path helper (toLowerCase, various path ops) |
+| `wF` | Settings write flow (`qM4`) |
+| `Z8` | Storage event emitter (`d`) |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

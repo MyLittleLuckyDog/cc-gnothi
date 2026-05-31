@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "background"
 cc_version: "2.1.133"
-updated: "2026-05-18"
+updated: "2026-05-31"
 tags: ["background", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/background` command (alias `/bg`) detaches the current interactive Claude Code session from the terminal and continues it as a daemon-managed background process. It validates permission mode and session state, spawns or dispatches to a background worker process via an IPC socket, and frees the terminal for other use. If the session is already running in a background context, the command is a no-op that emits a dedicated telemetry event.
+The `/background` command (alias `/bg`) detaches the current interactive Claude Code session from the terminal and hands execution off to a background daemon process. The foreground terminal is freed immediately while the agentic task continues running under daemon supervision. The command performs permission-mode and session-persistence checks before dispatching, and surfaces errors when preconditions are not met.
 
 ---
 
@@ -31,10 +31,25 @@ The `/background` command (alias `/bg`) detaches the current interactive Claude 
 |---|---|
 | type | `local-jsx` |
 | name | `background` |
-| description | `Continue this session in the background and free the terminal` |
 | aliases | `["bg"]` |
-| immediate | `null` |
+| description | `"Continue this session in the background and free the terminal"` |
 | module\_id | `IXq` |
+| load\_inline | `true` |
+| loc\_byte | `11711730` |
+| loc\_byte\_end | `11711950` |
+| loc\_line | `7857` |
+| immediate | `null` |
+| arbor\_handler.name | `rW7` |
+| arbor\_handler.kind | `AsyncFunction` |
+| arbor\_handler.fqn | `claude-2.1.133::rW7` |
+| arbor\_handler.resolution\_path | `module_id` |
+| arbor\_handler.n\_hits | `0` |
+| `loc_byte_end` | `11711950` |
+| `arbor_handler.name` | `rW7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.133::rW7` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.133 bundle.js:+11711730
 
@@ -42,297 +57,333 @@ Analysis basis: CC v2.1.133 bundle.js:+11711730
 
 ## Input Branching
 
-The command handler (`commandHandler`) evaluates several conditions before proceeding. The flowchart below captures the full branching logic derived from the call graph and string literals.
+The command has four or more distinct guarded branches before dispatching, so a flowchart is used.
 
 ```mermaid
 flowchart TD
-    A(["/background invoked"]) --> B{Already running\nin background context?}
-    B -- yes --> C[Emit tengu_background_already_bg\nReturn no-op]
-    B -- no --> D{Session persistence\nenabled?}
-    D -- no --> E[Return error:\n'Cannot background — session persistence\nis disabled…']
-    D -- yes --> F{Conversation has\nat least one message?}
-    F -- no --> G[Return error:\n'Nothing to background yet\n— send a message first.']
-    F -- yes --> H{Permission mode\nchecks pass?}
-    H -- bypassPermissions\nwithout prior acceptance --> I[Return error:\n'--bg with bypassPermissions\nrequires accepting the disclaimer first…']
-    H -- auto mode\nwithout prior opt-in --> J[Return error:\n'--bg with auto mode requires\nopting in first…']
-    H -- pass --> K[Build CLI argument list\nfor background process]
-    K --> L[Ensure socket directory\nexists via mkdir]
-    L --> M[Attempt daemon dispatch\nvia IPC socket]
-    M -- dispatch succeeds --> N[Append --model / --effort flags\nSend detach-request to terminal\nEmit tengu_background]
-    M -- ack-timeout / enoconn --> O{Previous short-alive\nsession still shutting down?}
-    O -- yes --> P[Return error:\n'Previous session is still\nshutting down — try again…']
-    O -- no --> Q[Spawn new background worker\nprocess via spawnSync]
-    Q -- spawn fails --> R[Emit tengu_background_spawn_failed\nReturn spawn error]
-    Q -- spawn ok --> S[Emit tengu_bg_dispatch_rescued\nEmit tengu_background\nReturn backgrounded status]
-    N --> T([Terminal freed\nSession continues as daemon])
-    S --> T
+    A(["/background invoked"]) --> B{Session persistence enabled?}
+    B -- No --> ERR1["Error: Cannot background — session persistence is disabled,\nso the forked job would have nothing to resume.\n(bundle.js:+11711177)"]
+    B -- Yes --> C{Conversation has at least one message?}
+    C -- No --> ERR2["Error: Nothing to background yet — send a message first.\n(bundle.js:+11711353)"]
+    C -- Yes --> D{Session already running in background?}
+    D -- Yes --> ALREADY["Emit tengu_background_already_bg\nReturn early (bundle.js:+11711110)"]
+    D -- No --> E{Permission mode is bypassPermissions\nAND disclaimer not yet accepted?}
+    E -- Yes --> ERR3["Error: --bg with bypassPermissions requires accepting\nthe disclaimer first. Run claude --dangerously-skip-permissions\nonce interactively. (bundle.js:+11705973)"]
+    E -- No --> F{Permission mode is 'auto'\nAND auto-mode opt-in not present?}
+    F -- Yes --> ERR4["Error: --bg with auto mode requires opting in first.\nRun claude --permission-mode auto once interactively.\n(bundle.js:+11706135)"]
+    F -- No --> G["Build child-process argument vector\n(model, effort, continue/resume flags, env vars)"]
+    G --> H["Ensure daemon is running\n(ensureDaemonRunning — see Behavioral Spec)"]
+    H --> I["Dispatch job to daemon\n(dispatchToDaemon — see Behavioral Spec)"]
+    I -- Dispatch succeeded --> J["Detach terminal / emit UI notification\n'(backgrounded)' (bundle.js:+11709264)"]
+    I -- Dispatch failed --> ERR5["Emit tengu_background_spawn_failed\n(bundle.js:+11708544)\nSurface error to user"]
+    J --> K([Terminal freed — daemon owns session])
 ```
-
-Analysis basis: CC v2.1.133 bundle.js:+11708081 through +11708832
 
 ---
 
 ## Behavioral Spec
 
-### Permission Gate Check
+### Handler entry — `rW7` (commandHandler)
 
-Before any dispatch is attempted, the permission mode of the current process is inspected.
+The Arbor-resolved handler `rW7` is an `AsyncFunction` reached via `module_id → IXq`.
 
 ```
-function checkPermissionGate(currentArgs):
-    separatorIndex = currentArgs.indexOf("--")
-    relevantArgs   = currentArgs.slice(0, separatorIndex)   // drop everything after "--"
+async function commandHandler(context):
+    // Guard 1 — persistence check
+    if not sessionPersistenceEnabled(context):
+        return errorMessage("Cannot background — session persistence is disabled...")
+        // bundle.js:+11711177
 
-    if relevantArgs includes "--permission-mode bypassPermissions":
-        if user has NOT previously accepted the bypass disclaimer:
-            return gateBlocked(
-                "--bg with bypassPermissions requires accepting the disclaimer first. " +
-                "Run `claude --dangerously-skip-permissions` once interactively."
-            )
+    // Guard 2 — conversation non-empty check
+    if conversationMessages(context).length == 0:
+        return errorMessage("Nothing to background yet — send a message first.")
+        // bundle.js:+11711353
 
-    if relevantArgs includes "--dangerously-skip-permissions"
-       OR "--allow-dangerously-skip-permissions":
-        // same disclaimer check applies
-        if not accepted:
-            return gateBlocked(...)
+    // Guard 3 — already-backgrounded check
+    if isAlreadyBackground(context):
+        emit telemetry("tengu_background_already_bg")   // bundle.js:+11711110
+        return
 
-    if permissionMode == "auto":
-        if user has NOT previously opted in interactively:
-            return gateBlocked(
-                "--bg with auto mode requires opting in first. " +
-                "Run `claude --permission-mode auto` once interactively."
-            )
-
-    return pass
+    // Delegate to UI renderer (kY8) which performs remaining guards and dispatch
+    return renderBackgroundUI(context)
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11705730, +11705773, +11705804, +11705836, +11705882, +11706115, +11706135
+Analysis basis: CC v2.1.133 bundle.js:+11711096
 
 ---
 
-### Session-State Precondition Checks
+### UI renderer — `kY8` (backgroundUIRenderer)
+
+`kY8` is called by `rW7` at bundle.js:+11711314. It produces the JSX output and orchestrates the remaining permission guards and dispatch via `uW7`.
 
 ```
-function checkSessionPreconditions(appState):
-    if appState.isBackgroundSession == true:
-        emitTelemetry("tengu_background_already_bg")
-        return NO_OP
+function backgroundUIRenderer(context):
+    // Permission-mode guard — bypassPermissions
+    if permissionMode == "bypassPermissions" and not disclaimerAccepted:
+        display error (bundle.js:+11705973)
+        return
 
-    if sessionPersistenceDisabled(appState):
-        return userError(
-            "Cannot background — session persistence is disabled, " +
-            "so the forked job would have nothing to resume."
-        )
+    // Permission-mode guard — auto mode
+    if permissionMode == "auto" and not autoModeOptIn:
+        display error (bundle.js:+11706135)
+        return
 
-    conversationMessages = getConversationMessages(appState)
-    if conversationMessages.length == 0:
-        return userError(
-            "Nothing to background yet — send a message first."
-        )
+    // Build argument vector
+    args = buildArgVector(context)     // → uW7
 
-    return pass
+    // Ensure daemon is reachable (may spawn transient or ask to install service)
+    daemonHandle = ensureDaemonRunning(context)   // → Bm
+
+    // Dispatch
+    result = dispatchJob(daemonHandle, args)       // → vbA
+
+    if result.ok:
+        display "(backgrounded)"  // bundle.js:+11709264
+        detachTerminal()
+    else:
+        emit telemetry("tengu_background_spawn_failed")   // bundle.js:+11708544
+        display errorSummary(result)
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11711110, +11711177, +11711353
+Analysis basis: CC v2.1.133 bundle.js:+11711314
 
 ---
 
-### CLI Argument Construction for the Background Worker
+### Argument vector builder — `uW7` (buildArgVector)
 
-When the session is eligible to be backgrounded, an argument list is assembled for the child process. The construction mirrors the current session configuration.
+Constructs the `claude` CLI invocation that the daemon will execute for the forked session.
 
 ```
-function buildBackgroundArgs(sessionState, appState):
+function buildArgVector(context):
     args = []
 
-    // Session identity
-    args.push("--agent")
-    if sessionState.name is set:
-        args.push("--name", sessionState.name)    // also accepts -n
+    // Carry forward model and effort if set
+    if context.model:
+        args += ["--model", context.model]         // bundle.js:+11708231
+    if context.effort:
+        args += ["--effort", context.effort]       // bundle.js:+11708253
 
-    // Session continuation strategy (mutually exclusive)
-    if sessionState.resumeId is set:
-        args.push("--resume", sessionState.resumeId)
-    else if sessionState.continueMode:
-        args.push("--continue")                   // or -c
-    else if sessionState.forkSessionId:
-        args.push("--fork-session", sessionState.forkSessionId)
+    // Session continuation strategy
+    // "continue" flag is passed to resume the conversation
+    args += ["continue"]                           // bundle.js:+11708294
 
-    // Session ID forwarding
-    args.push("--session-id", sessionState.sessionId)
+    // Gate: permission mode propagation
+    if permissionMode set:
+        args += ["--permission-mode", permissionMode]   // bundle.js:+11705773
 
-    // Model / effort overrides (appended later, near dispatch)
-    if appState.model is set:
-        args.push("--model", appState.model)
-    if appState.effort is set:
-        args.push("--effort", appState.effort)
+    // Dangerous-skip-permissions propagation
+    // "--dangerously-skip-permissions" (bundle.js:+11705836)
+    // "--allow-dangerously-skip-permissions" (bundle.js:+11705882)
+    propagateDangerousFlags(args)
 
-    // Process type tag
-    args.push("--bg")                             // marks child as bg type
+    // Fork-session flag for session identity
+    args += ["--fork-session"]                     // bundle.js:+11691807
+
+    // Session ID propagation
+    args += ["--session-id=<currentSessionId>"]    // bundle.js:+11705311
+
+    // Agent name if present
+    if agentName:
+        args += ["--name", agentName]              // bundle.js:+11691606
+
+    // Carry forward critical environment variables
+    propagateEnvVars([
+        "CLAUDE_CONFIG_DIR",                       // bundle.js:+11706722
+        "CLAUDE_INTERNAL_FC_OVERRIDES",            // bundle.js:+11706742
+        "AWS_REGION",                              // bundle.js:+11706773
+        "AWS_DEFAULT_REGION",                      // bundle.js:+11706786
+        "AWS_PROFILE",                             // bundle.js:+11706807
+        "GOOGLE_APPLICATION_CREDENTIALS",          // bundle.js:+11706821
+        "GOOGLE_CLOUD_PROJECT",                    // bundle.js:+11706854
+        "GCLOUD_PROJECT",                          // bundle.js:+11706877
+    ])
 
     return args
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11691579, +11691606, +11691622, +11691696, +11691706, +11691724, +11691734, +11691759, +11691786, +11691807, +11691908, +11708231, +11708253
+Analysis basis: CC v2.1.133 bundle.js:+11691211 (uW7 start)
 
 ---
 
-### Socket Directory Preparation
+### Daemon lifecycle manager — `Bm` (ensureDaemonRunning)
+
+Guarantees a daemon is available before dispatch. Handles multiple lifecycle states.
 
 ```
-function prepareSocketDirectory(socketPath):
-    dirPath = path.join(socketPath, ...)
-    await fs.mkdir(dirPath, { recursive: true })
-    // Existing directory is not an error
+async function ensureDaemonRunning(context):
+    emit telemetry("daemon_ensure_running")         // bundle.js:+11659103
+
+    status = checkDaemonStatus()
+
+    if status == "up":
+        // Verify binary path is not stale
+        if binaryIsStale():
+            emit telemetry("tengu_bg_daemon_service_stale_exec")  // bundle.js:+11659178
+            fallbackToTransientSpawn()
+            return
+
+    if status == "not_running":
+        // Determine platform (macos/linux/windows)  // bundle.js:+11659681,11659711,11659743
+        answer = askInstallPrompt()
+        // "Install as a service now? [y/N/never, or 'once' just for now]"  // bundle.js:+11663507
+        emit telemetry("tengu_bg_daemon_cold_start_ask")          // bundle.js:+11660126
+        emit telemetry("tengu_bg_daemon_cold_start_ask_answer")   // bundle.js:+11663582
+
+        if answer in ["yes", "y"]:
+            installService()
+            emit telemetry("tengu_bg_daemon_install")             // bundle.js:+11659561
+            // Poll up to 5000 ms for daemon to become reachable  // bundle.js:+11664038
+            if not daemonReachableWithin(5000):
+                error("service installed but daemon did not become reachable within 5s")
+                // bundle.js:+11664066
+        elif answer == "once":
+            spawnTransient()
+        elif answer in ["no", "never"]:
+            error("No background daemon is running. Run 'claude daemon install'")
+            // bundle.js:+11660191
+
+    if spawnFailed:
+        emit telemetry("tengu_bg_daemon_spawn_failed")            // bundle.js:+11660560
+        // EACCES check at bundle.js:+11660643
+
+    return daemonHandle
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11691178
+Analysis basis: CC v2.1.133 bundle.js:+11659060
 
 ---
 
-### Daemon Dispatch and Fallback Spawn
+### Job dispatcher — `vbA` (dispatchToDaemon)
+
+Writes a dispatch file and connects to the daemon control socket to hand off the job.
 
 ```
-function dispatchOrSpawn(args, sessionState, signal):
-    // Phase 1: Attempt dispatch over existing IPC socket
-    result = await attemptIpcDispatch(socketPath, args, {
-        ackTimeoutMs: 5000,    // wait up to 5 s for acknowledgement
-        connectTimeoutMs: 6000 // wait up to 6 s for connection
-    })
+async function dispatchToDaemon(daemonHandle, args):
+    // Generate random bytes for unique job identity  // bundle.js:+11687417
+    jobId = randomBytes()
 
-    if result.status == "dispatch":
-        // Daemon acknowledged; proceed to detach
-        return { strategy: "dispatch", result }
+    // Determine socket path and jobs directory  // bundle.js:+11687358
+    socketPath  = resolveSocketPath()
+    jobsDir     = resolveJobsDir()          // literal "jobs" at bundle.js:+3880662
 
-    if result.status in ["ack-timeout", "enoconn"]:
-        // Phase 2: Check for a recently-terminated short-lived session
-        if isStaleShortSession(sessionState):
-            emitTelemetry("stale_short")
-            return userError(
-                "Previous session is still shutting down — try again in a moment"
-            )
+    // Write dispatch file atomically (iY — atomicWriteFile)
+    writeDispatchFile(jobsDir, jobId, args)   // bundle.js:+11688037
 
-        // Phase 3: Spawn a fresh background worker
-        spawnResult = spawnBackgroundProcess(args, {
-            detached: true,
-            stdio: "ignore"
-        })
+    // Attempt socket connection (M$ — controlSocketConnect)
+    // Timeout: 6000 ms  // bundle.js:+11687562
+    // Ack timeout yields error code "no ack"  // bundle.js:+11687406
+    connection = connectToControlSocket(socketPath, timeout=6000)
 
-        if spawnResult.failed:
-            emitTelemetry("tengu_background_spawn_failed")
-            return spawnError(spawnResult)
+    if connection.error == "EALIVE":        // bundle.js:+11687664
+        // Daemon already alive, proceed
+    elif connection.error == "ESTALE":      // bundle.js:+11687794
+        handleStaleSocket()
 
-        emitTelemetry("tengu_bg_dispatch_rescued")
-        return { strategy: "spawn", result: spawnResult }
+    // Send dispatch request and await ack
+    ackResult = awaitAck(connection)        // "await-ack" bundle.js:+11688217
 
-    // Unexpected status — propagate as error
-    return unexpectedError(result)
+    if ackResult == "ESTARTING":            // bundle.js:+11688313
+        // Daemon starting up; retry after 200 ms  // bundle.js:+11688344
+        retry(delay=200)
+
+    if dispatchFailed:
+        // Classify failure mode for telemetry
+        classify = one of:
+            "daemon-unreachable"            // bundle.js:+11689667
+            "ack-timeout"                   // bundle.js:+11689711
+            "dispatch-write"                // bundle.js:+11689742
+            "enoconn"                       // bundle.js:+11689778
+            "stale-short"                   // bundle.js:+11689811
+            "short-alive"                   // bundle.js:+11689848
+        emit telemetry("tengu_bg_dispatch_fallback")   // bundle.js:+11689598
+        attemptRescue()
+
+    if rescueSucceeded:
+        emit telemetry("tengu_bg_dispatch_rescued")    // bundle.js:+11694117
+
+    emit telemetry("tengu_bg_dispatch")               // bundle.js:+11689072
+    return dispatchResult
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11692695, +11693871, +11693897, +11693936, +11694114, +11694384, +11694428, +11694445, +11694771, +11694903, +11694932, +11694965, +11695043
-
-Timeout constants:
-- IPC acknowledgement timeout: **5000 ms** (Analysis basis: CC v2.1.133 bundle.js:+11694428)
-- IPC connection timeout: **6000 ms** (Analysis basis: CC v2.1.133 bundle.js:+11694445)
+Analysis basis: CC v2.1.133 bundle.js:+11687134
 
 ---
 
-### Terminal Detach
+### Argument parser — `lW7` (parseResumeArgs)
 
-When the daemon acknowledges the dispatch, the CLI sends a `detach-request` message to the active terminal multiplexer (if present, e.g. tmux) and marks the foreground session as stopped.
+Parses resume-related flags from the existing session to reconstruct the continuation argument vector.
 
 ```
-function detachTerminal(terminalContext):
-    // Notify daemon of detach intent
-    writeToSocket(terminalContext.socket, { type: "detach-request" })
+function parseResumeArgs(args):
+    // Locate "--" separator  // literal "--" at bundle.js:+11705740
+    separatorIndex = args.indexOf("--")
 
-    // If running inside tmux, issue detach-client
-    if terminalContext.multiplexer == "tmux":
-        spawnSync("tmux", ["detach-client"], { stdio: "ignore" })
+    // Detect --resume= / -r= prefix forms
+    // "--resume=" prefix length 9  // bundle.js:+11704985
+    // "-r=" prefix  // bundle.js:+11705012
+    // "--resume" long form  // bundle.js:+11705052
+    // "-r" short form  // bundle.js:+11705068
+    resumeArg = extractResumeFlag(args)
 
-    // Mark UI state
-    appState.sessionStatus = "stopped"
-    appState.sessionLabel  = "background session"
+    // Check permission mode flags
+    if args.includes("--permission-mode"):   // bundle.js:+11705773
+        permMode = extractPermMode(args)
+
+    // bypassPermissions guard
+    if permMode == "bypassPermissions":       // bundle.js:+11705804
+        if not disclaimerAccepted():
+            error("--bg with bypassPermissions requires...")  // bundle.js:+11705973
+
+    // auto mode guard
+    if permMode == "auto":                   // bundle.js:+11706115
+        if not autoModeOptIn():
+            error("--bg with auto mode requires opting in first...")  // bundle.js:+11706135
+
+    return parsedArgs
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+9859945, +9860018, +9860026, +9860050, +14191200, +14191243
+Analysis basis: CC v2.1.133 bundle.js:+11705730
 
 ---
 
-### UI Render (JSX Component)
+### Daemon yield handler — implicit (daemonYield)
 
-The command is registered as `local-jsx`, meaning it renders a React component as its output rather than plain text.
+When a foreground or service daemon takes over, background workers are re-adopted.
 
 ```
-function renderBackgroundResult(dispatchResult, sessionState):
-    label = "(backgrounded)"       // displayed in the conversation pane
-    statusCode = 200               // HTTP-style success code used internally
-
-    if sessionState.environment == "production":
-        // Suppress verbose debug output
-        suppressDebugBanner = true
-
-    return JSX <BackgroundResultView
-        label={label}
-        status={statusCode}
-        sessionId={sessionState.sessionId}
-        strategy={dispatchResult.strategy}
-    />
+function onDaemonYield():
+    // Message: "yielding to a foreground/service daemon — bg workers will be re-adopted"
+    // bundle.js:+14174544
+    emit telemetry("tengu_daemon_yield")   // bundle.js:+14174626
+    setState("transient")                  // bundle.js:+14174491
+    // Workers transition to "supervisor" role  // bundle.js:+14174531
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11709264, +11709290, +11711423, +11804706
-
-Session name auto-generation timeout: **120 s** (Analysis basis: CC v2.1.133 bundle.js:+11709071)
+Analysis basis: CC v2.1.133 bundle.js:+14174626
 
 ---
 
-### Background Process Self-Identification
+### Session-state labels observed in dispatch path
 
-Inside the spawned (or dispatched) child process, the process type is identified from the `--bg` flag so that the child can configure itself as a daemon worker.
+The following string constants define session states read or written during backgrounding:
 
-```
-function identifyProcessType(argv):
-    if argv includes "--bg":
-        processType = "bg"       // background daemon worker
-    else if argv includes "--agent":
-        processType = "fleet"    // fleet/spare agent
-    // etc.
-    return processType
-```
+| State label | Meaning | loc\_byte |
+|---|---|---|
+| `"idle"` | Session is idle, safe to background | `11692736` |
+| `"blocked"` | Session is blocked (e.g., awaiting permission) | `11692743` |
+| `"user"` | Session in user-input mode | `11692623` |
+| `"bg"` | Session is running in background | `11692473` |
+| `"repl"` | Session is in REPL mode | `11693251` |
+| `"slash"` | Session is processing a slash command | `11693258` |
+| `"resume"` | Session resuming from prior state | `11693307` |
+| `"prompt"` | Session in prompt mode | `11693398` |
+| `"worktree"` | Worktree-based session | `11693562` |
+| `"built-in"` | Built-in session type | `11693585` |
+| `"none"` | No session type | `11693607` |
+| `"fleet"` | Fleet-managed session | `11692376` |
+| `"spare"` | Spare/pooled session | `11692389` |
 
-Recognised internal role strings: `"fleet"`, `"spare"`, `"bg"`, `"user"`, `"repl"`, `"slash"`.
-
-Analysis basis: CC v2.1.133 bundle.js:+11692376, +11692389, +11692473, +11692623, +11693251, +11693258
-
----
-
-### Conversation History Forwarding
-
-The first 8 messages of the current conversation are sliced and forwarded to the background process so it can resume with context intact.
-
-```
-function forwardConversationHistory(messages):
-    slicedMessages = messages.slice(0, 8)
-    // Serialise and pass to background worker via session file or socket payload
-    return slicedMessages
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+11691140, +11691150
-
----
-
-### Resume-Mode Determination
-
-```
-function determineResumeMode(sessionState):
-    if sessionState.hasExplicitResumeId:
-        return "resume"
-    if sessionState.promptMode:
-        return "prompt"
-    return "continue"
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+11693307, +11693398
+Analysis basis: CC v2.1.133 bundle.js:+11692376
 
 ---
 
@@ -340,20 +391,30 @@ Analysis basis: CC v2.1.133 bundle.js:+11693307, +11693398
 
 | Item | Detail |
 |---|---|
-| Telemetry: `tengu_background` | Fired on every successful background dispatch (dispatch or spawn path). Analysis basis: CC v2.1.133 bundle.js:+11708613 |
-| Telemetry: `tengu_background_already_bg` | Fired when `/background` is invoked from within an already-backgrounded session (no-op path). Analysis basis: CC v2.1.133 bundle.js:+11711110 |
-| Telemetry: `tengu_background_spawn_failed` | Fired when the fallback `spawnSync` of the background worker process fails. Analysis basis: CC v2.1.133 bundle.js:+11708544 |
-| Telemetry: `tengu_bg_dispatch_rescued` | Fired when IPC dispatch fails but the fallback spawn succeeds. Analysis basis: CC v2.1.133 bundle.js:+11694117 |
-| Telemetry: `tengu_mcp_retry_failed_remote` | Fired in the MCP session-list helper called during context preparation; not specific to `/background` success path. Analysis basis: CC v2.1.133 bundle.js:+13870729 |
-| Telemetry: `tengu_config_auth_loss_prevented` | Fired in the config-save guard (GH #3117 safeguard) that runs during session serialisation. Analysis basis: CC v2.1.133 bundle.js:+3108610 |
-| Socket / IPC | Creates or reuses a UNIX socket under the session socket directory. Directory created with `fs.mkdir`. Analysis basis: CC v2.1.133 bundle.js:+11691178 |
-| File system: socket directory | Session socket directory ensured via `Be.mkdir` before dispatch. Analysis basis: CC v2.1.133 bundle.js:+11691178 |
-| File system: stale socket cleanup | Stale socket files are removed with `Be.rm` after detecting a short-alive session. Analysis basis: CC v2.1.133 bundle.js:+11691320, +11694710 |
-| `appState` changes | `sessionStatus` set to `"stopped"`, `sessionLabel` set to `"background session"` on successful detach. Analysis basis: CC v2.1.133 bundle.js:+14191200, +14191243 |
-| Terminal multiplexer | If tmux is detected, `tmux detach-client` is issued via `spawnSync`. Analysis basis: CC v2.1.133 bundle.js:+9860018, +9860026 |
-| AbortSignal | An `AbortSignal.timeout` is set for the overall dispatch flow. Analysis basis: CC v2.1.133 bundle.js:+11708739 |
+| Telemetry: `tengu_background` | Fired on each `/background` invocation (bundle.js:+11708613) |
+| Telemetry: `tengu_background_already_bg` | Fired when session is already running in background (bundle.js:+11711110) |
+| Telemetry: `tengu_background_spawn_failed` | Fired when daemon dispatch fails (bundle.js:+11708544) |
+| Telemetry: `tengu_bg_dispatch` | Fired on successful job dispatch to daemon (bundle.js:+11689072) |
+| Telemetry: `tengu_bg_dispatch_fallback` | Fired when primary dispatch path fails (bundle.js:+11689598) |
+| Telemetry: `tengu_bg_dispatch_rescued` | Fired when fallback dispatch succeeds (bundle.js:+11694117) |
+| Telemetry: `tengu_bg_daemon_cold_start_ask` | Fired when user is prompted to install daemon (bundle.js:+11660126) |
+| Telemetry: `tengu_bg_daemon_cold_start_ask_answer` | Fired with user's install answer (bundle.js:+11663582) |
+| Telemetry: `tengu_bg_daemon_install` | Fired when daemon service is installed (bundle.js:+11659561) |
+| Telemetry: `tengu_bg_daemon_spawn_failed` | Fired when transient daemon spawn fails (bundle.js:+11660560) |
+| Telemetry: `tengu_bg_daemon_service_stale_exec` | Fired when daemon binary path is stale (bundle.js:+11659178) |
+| Telemetry: `tengu_bg_daemon_service_poll_fallthrough` | Fired when daemon poll falls through (bundle.js:+11659802) |
+| Telemetry: `tengu_daemon_yield` | Fired when daemon yields to foreground/service daemon (bundle.js:+14174626) |
+| Telemetry: `tengu_amber_anchor` | Fired in background-service context (bundle.js:+3105007) |
+| Telemetry: `tengu_config_lock_contention` | Fired when config lock is slow to acquire (bundle.js:+3111273) |
+| Telemetry: `tengu_config_stale_write` | Fired on stale config write attempt (bundle.js:+3111409) |
+| Telemetry: `tengu_config_auth_loss_prevented` | Fired when auth loss in config is blocked (bundle.js:+3111752) |
+| appState changes | Session state transitions to `"bg"` (bundle.js:+11692473); terminal detaches |
+| Dispatch file written | A job dispatch file is written atomically to the `jobs/` directory (bundle.js:+3880662) |
+| Control socket | A Unix-domain socket connection is made to the daemon control socket (bundle.js:+10294314) |
+| Daemon may be installed | If no daemon is running, user may be prompted; service may be installed and registered |
+| Environment variables propagated | `CLAUDE_CONFIG_DIR`, `CLAUDE_INTERNAL_FC_OVERRIDES`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_PROFILE`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`, `GCLOUD_PROJECT` are forwarded to the background process (bundle.js:+11706722–11706877) |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Session name auto-generation | A `rename_generate_name` sub-call is triggered with a 120 s timeout to auto-name the backgrounded session. Analysis basis: CC v2.1.133 bundle.js:+10775218, +11709071 |
+| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 
 ---
 
@@ -361,23 +422,23 @@ Analysis basis: CC v2.1.133 bundle.js:+11693307, +11693398
 
 | Version | Change |
 |---|---|
-| v2.1.133 | Initial analysis. Feature present with full daemon-dispatch + spawn-fallback logic, tmux integration, and permission-gate checks. |
+| v2.1.133 | Initial analysis; command documented with full permission guards, daemon lifecycle, dispatch protocol, and telemetry events |
 
 ---
 
 ## Common Mistakes
 
-1. **Invoking `/background` before sending any message.** The command requires at least one conversation turn; otherwise it returns `"Nothing to background yet — send a message first."` (Analysis basis: CC v2.1.133 bundle.js:+11711353)
+1. **Running `/background` before sending any message.** The guard at bundle.js:+11711353 will reject the command with "Nothing to background yet — send a message first." You must have at least one conversation turn before invoking `/background`.
 
-2. **Using `/background` with `--dangerously-skip-permissions` without prior interactive acceptance.** The permission gate blocks the command and instructs the user to run `claude --dangerously-skip-permissions` once interactively first. (Analysis basis: CC v2.1.133 bundle.js:+11705836, +11705882)
+2. **Using `bypassPermissions` mode without interactive acceptance.** If your session was started with `--permission-mode bypassPermissions` but you have never run `claude --dangerously-skip-permissions` interactively, the command will be blocked (bundle.js:+11705973). Run the interactive invocation once to accept the disclaimer.
 
-3. **Using `/background` with `--permission-mode auto` without prior interactive opt-in.** Analogous to the bypass-permissions gate; an interactive run with `claude --permission-mode auto` is required first. (Analysis basis: CC v2.1.133 bundle.js:+11706115, +11706135)
+3. **Using `auto` permission mode without opt-in.** Similarly, `--permission-mode auto` requires a prior interactive `claude --permission-mode auto` invocation (bundle.js:+11706135).
 
-4. **Retrying immediately after a backgrounded session that is still shutting down.** If a short-lived previous session is still in the process of terminating, the command returns `"Previous session is still shutting down — try again in a moment"` rather than spawning a new worker. (Analysis basis: CC v2.1.133 bundle.js:+11694965)
+4. **No daemon running and answering "never" to the install prompt.** Answering "never" at the install prompt prevents backgrounding. Choose "once" to run a transient daemon for the current session without permanently installing the service.
 
-5. **Running `/background` inside a session where persistence is disabled.** Background sessions depend on session persistence to resume; if persistence is disabled the command returns an explicit error. (Analysis basis: CC v2.1.133 bundle.js:+11711177)
+5. **Session persistence disabled.** If the session was started without persistence (e.g., certain CI/ephemeral modes), the command fails immediately (bundle.js:+11711177). There is no workaround other than enabling persistence.
 
-6. **Expecting `/background` to work when already in a background session.** Calling `/background` from within an already-backgrounded worker is a silent no-op (the `tengu_background_already_bg` event is emitted and nothing else happens). (Analysis basis: CC v2.1.133 bundle.js:+11711110)
+6. **Expecting the terminal to remain interactive.** Once `/background` succeeds, the terminal is freed and the session is owned by the daemon. There is no interactive terminal to type into; use `claude jobs list` or daemon status commands to monitor progress.
 
 ---
 
@@ -387,63 +448,158 @@ Analysis basis: CC v2.1.133 bundle.js:+11693307, +11693398
 
 | Identifier | Role |
 |---|---|
-| `NY8` | Top-level command handler function for `/background` |
-| `AV` | Application state accessor / context reader |
-| `vf` | Session state accessor |
-| `xbA` | Permission-gate check dispatcher |
-| `RK` | Gate-result renderer / response builder |
-| `_YH` | Session spawn orchestrator (mkdir → dispatch → fallback) |
-| `lW7` | Permission-mode argument validator |
-| `M` | MCP session-map / context store |
-| `xL` | Socket path builder (joins path components) |
-| `uW7` | IPC dispatch and spawn-fallback engine |
-| `vH` | String coercion / value formatter |
-| `LA` | CLI argument list assembler |
-| `d` | Logger / debug output sink |
-| `qqH` | Config persistence helper |
-| `R6` | Config write function |
-| `e6` | Config read / merge function |
-| `hf6` | Session rename / name-generation initiator |
-| `Vt6` | Session name auto-generator caller |
-| `unH` | Conversation message collector / preparer |
-| `qO8` | Message serialiser for IPC payload |
-| `wv` | Tool-result filter / message transformer |
-| `dq` | Message type discriminator |
-| `NL` | Message list filter |
-| `k` | Locale / string normaliser |
-| `e3` | Conversation history slicer for forwarding |
-| `Ne4` | History entry extractor |
-| `H` | Random / timer utility (Math.random + setTimeout) |
-| `dfH` | File-watcher / stat-cache manager |
-| `v6` | React context value reader |
-| `vW` | Path basename resolver |
-| `r9` | File stat + read cache (with LRU-style Map) |
-| `lP` | Cache entry invalidator (Map.delete) |
-| `Pf` | Watched-path registration helper |
-| `D8` | ENOENT-safe file accessor |
-| `fH` | Error accumulator / logger (push + logError) |
-| `y1` | AbortController / signal set manager |
-| `Qoq` | Signal sentinel / undefined-guard wrapper |
-| `kY8` | JSX result renderer for background outcome |
-| `yy` | Array-check utility (Array.isArray wrapper) |
-| `O` | Stopped-state label store |
-| `d8` | UI state atom / signal store |
-| `uM8` | Tool-result presence checker |
-| `A` | Generic accumulator array |
-| `MC` | Conversation message classifier |
-| `dF` | Message array flattener / normaliser |
-| `ylH` | String prefix tester (startsWith wrapper) |
-| `y$` | Background-label component (renders "(backgrounded)") |
-| `Tm` | Status-code component (renders 200 badge) |
-| `rW7` | Top-level JSX render function for the command UI |
-| `E9` | Daemon process-type resolver |
-| `hr` | Process-type string constants holder |
-| `AqH` | Terminal detach orchestrator |
-| `xu6` | Terminal write helper |
-| `Da9` | Session task-type discriminator |
-| `ot` | Raw readline / socket writer |
-| `HqH` | Tmux availability checker |
-| `qYH` | Environment / build-mode detector |
-| `kH` | String coercion primitive |
-| `Sjq` | Test-environment sentinel |
-| `Sh` | Build-mode flag reader |
+| `NY8` | Top-level background command orchestrator (calls guards, arg builder, daemon, dispatch) |
+| `AV` | Session state accessor |
+| `vf` | Conversation message list accessor |
+| `xbA` | Permission-mode reader |
+| `RK` | AppState updater |
+| `y1` | State store mutation helper |
+| `Qoq` | State store listener/subscriber |
+| `_YH` | Background job setup utility (UUID generation, directory creation) |
+| `lW7` | Resume-flag and permission-flag argument parser |
+| `Ue` | Permission-mode flag set membership checker |
+| `pQ` | Settings loader |
+| `h8` | Settings object (user/local/flag/policy layers) |
+| `R6` | Session record creator/persister |
+| `m5H` | Config file reader with backup rotation |
+| `u2K` | File-watch based state monitor |
+| `ip` | Settings writer |
+| `k` | Config key formatter / normalizer |
+| `M` | MCP server registry / session manager |
+| `iZH` | MCP server connection orchestrator |
+| `zt` | MCP transport factory |
+| `$I` | MCP client wrapper |
+| `AA` | Anthropic API client builder |
+| `so4` | MCP session timestamp recorder |
+| `G98` | MCP server status aggregator |
+| `K8` | MCP debug logger |
+| `gZA` | MCP OAuth flow initiator |
+| `QZA` | MCP OAuth callback handler |
+| `Yl9` | MCP credentials writer |
+| `BZA` | MCP connection teardown |
+| `kJA` | MCP capability filter |
+| `T7` | MCP error logger |
+| `vH` | String coercion / error formatter |
+| `$l9` | MCP state snapshot builder |
+| `_J6` | Port integer parser |
+| `fIA` | Timeout integer parser |
+| `mFq` | MCP update applier |
+| `XM8` | MCP state serializer |
+| `hI` | MCP cleanup helper |
+| `XDq` | Session record timestamper |
+| `J6` | Session registry lookup/create |
+| `Bq6` | Session ID generator |
+| `gq6` | Session metadata builder |
+| `Po` | Session storage reader |
+| `_d6` | Session deduplication guard |
+| `Og7` | MCP server reconciler |
+| `T98` | MCP server capability checker |
+| `r8` | Abort-controller / timeout wrapper |
+| `DlH` | MCP state delta serializer |
+| `xL` | Jobs directory path resolver |
+| `VW` | Base jobs directory builder |
+| `uW7` | Background argument vector builder |
+| `GXq` | Resume-flag prefix extractor |
+| `nW7` | Flag allowlist membership checker |
+| `D` | File watcher / config reload manager |
+| `eDH` | File reader with encoding |
+| `bwq` | Column-width calculator |
+| `E` | Keyboard / input event interceptor |
+| `Bdq` | Heartbeat emitter |
+| `F` | Plugin / tool list filter |
+| `xH` | Tool list builder |
+| `JH` | Orphaned-permission guard |
+| `dW7` | Session-ID flag injector |
+| `EXq` | Extra flag propagator |
+| `N6` | AsyncLocalStorage context reader |
+| `zN6` | Store getter wrapper |
+| `LA` | Logging / analytics helper |
+| `r9` | Jobs-directory stat reader |
+| `p6` | JSON.parse wrapper |
+| `Pf` | Dispatch-file atomic writer |
+| `iY` | Atomic file write (randomBytes + rename) |
+| `SH` | JSON.stringify wrapper |
+| `lP` | Dispatch-file cleanup |
+| `H_H` | Status label formatter |
+| `Uf` | Path redactor / `[REDACTED]` replacer |
+| `OXq` | Argument array mapper |
+| `cW7` | Continuation-flag injector |
+| `vbA` | Daemon job dispatcher (full dispatch protocol) |
+| `MP6` | Service-install prompt handler |
+| `Bm` | Daemon lifecycle manager (ensureDaemonRunning) |
+| `IbA` | Dispatch error classifier |
+| `VIH` | Dispatch socket path resolver |
+| `M$` | Control-socket connector |
+| `DXq` | Dispatch result recorder |
+| `jp` | Job list fetcher |
+| `_Y` | Background-service label emitter |
+| `x5H` | Amber-anchor event emitter |
+| `pW7` | Daemon poll status checker |
+| `LxH` | Daemon-not-running message builder |
+| `TAH` | Daemon status descriptor |
+| `qqH` | Session-record save wrapper |
+| `e6` | Global config reader/writer |
+| `fe8` | Config-with-lock writer |
+| `ql_` | Lock acquisition helper |
+| `w8` | Error constructor helper |
+| `lq6` | Config merge utility |
+| `Me8` | Backup directory builder |
+| `KhH` | Atomic symlink-safe file writer |
+| `fxH` | Config field validator |
+| `jX1` | Config entries iterator |
+| `MxH` | Config timestamp recorder |
+| `Ke8` | Config directory creator |
+| `hf6` | Pre-background hook caller |
+| `Vt6` | Post-background hook caller |
+| `unH` | UI message constructor for background notification |
+| `qO8` | Message metadata builder |
+| `wv` | Background session message renderer |
+| `dq` | Display queue / output writer |
+| `Ff8` | Conversation snapshot builder |
+| `Bf8` | Message attachment processor |
+| `XG` | Full conversation normalizer |
+| `wr4` | Tool-result content mapper |
+| `rd9` | SHA-1 content hasher |
+| `kH` | String-to-buffer helper |
+| `$8` | UUID generator (SG.randomUUID) |
+| `HVH` | Background session orchestrator (NZA + i2q) |
+| `NZA` | Conversation snapshot forwarder |
+| `i2q` | Main query / agent loop |
+| `KX` | Remote-control handler |
+| `URH` | Detach-request processor |
+| `GW` | Terminal detach executor |
+| `NL` | Message filter (type discriminator) |
+| `e3` | Compact-boundary finder |
+| `Ne4` | Compact-boundary selector |
+| `RX` | Boundary slice resolver |
+| `dfH` | Jobs-directory state collector |
+| `vW` | Job directory basename resolver |
+| `fH` | Error/exception logger |
+| `HA` | Error normalizer |
+| `yq` | Log-queue flusher |
+| `J9_` | Log entry formatter |
+| `NJL` | Log ring-buffer manager |
+| `kY8` | Background UI renderer (JSX, guard checks, dispatch initiation) |
+| `yy` | Array-check helper |
+| `uM8` | Tool schema checker |
+| `MC` | Message content discriminator |
+| `dF` | Content-type filter |
+| `ylH` | Prefix-check helper |
+| `y$` | Backgrounded-state JSX renderer |
+| `Tm` | Terminal-state transition renderer |
+| `rW7` | Arbor-resolved main handler for `/background` (AsyncFunction) |
+| `E9` | Daemon-worker role tagger |
+| `hr` | Worker identity setter |
+| `AqH` | Detach-request dispatcher |
+| `xu6` | Detach acknowledgment sender |
+| `Da9` | Detach payload builder |
+| `VZH` | Detach message serializer |
+| `ot` | Readline write helper |
+| `HqH` | Tmux detach-client invoker |
+| `qYH` | Environment discriminator (production/test) |
+| `Sjq` | Test-mode flag reader |
+| `Sh` | Environment label resolver |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

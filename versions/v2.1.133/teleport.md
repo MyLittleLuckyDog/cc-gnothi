@@ -2,7 +2,6 @@
 type: feature-spec
 feature: "teleport"
 cc_version: "2.1.133"
-updated: "2026-05-18"
 tags: ["teleport", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +20,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/teleport` command (alias: `/tp`) resumes a Claude Code session that was previously initiated or saved on claude.ai, bridging the web-based environment with the local CLI. It operates as a `local-jsx` command, meaning it renders a React component within the terminal UI rather than dispatching a plain text handler. Upon successful resumption, it injects a system-level "replace-all" message operation into the current session state to restore the prior conversation context.
+The `/teleport` command (alias `/tp`) resumes a Claude Code session that was originally initiated or saved from claude.ai. It operates as a `local-jsx` command, meaning its handler renders a JSX component inline within the CLI, and uses a multi-step state machine to restore the conversation context — applying a bulk message replacement operation and emitting a "Session resumed successfully" confirmation, or cancelling gracefully if the user opts out.
 
 ---
 
@@ -29,11 +28,21 @@ The `/teleport` command (alias: `/tp`) resumes a Claude Code session that was pr
 
 | Field | Value |
 |---|---|
-| type | `local-jsx` |
-| name | `teleport` |
-| description | Resume a Claude Code session from claude.ai |
-| aliases | `["tp"]` |
-| module_id | `w5q` |
+| `type` | `local-jsx` |
+| `name` | `teleport` |
+| `aliases` | `["tp"]` |
+| `description` | `"Resume a Claude Code session from claude.ai"` |
+| `isHidden` | `null` (not hidden) |
+| `module_id` | `w5q` |
+| `load_inline` | `true` |
+| `loc_byte` | `11059582` |
+| `loc_byte_end` | `11059846` |
+| `loc_line` | `6674` |
+| `arbor_handler.name` | `XO7` |
+| `arbor_handler.fqn` | `claude-2.1.133::XO7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.n_hits` | `1` |
 
 Analysis basis: CC v2.1.133 bundle.js:+11059582
 
@@ -41,195 +50,146 @@ Analysis basis: CC v2.1.133 bundle.js:+11059582
 
 ## Input Branching
 
-The command's JSX component mounts and immediately reads application state to determine whether a resumable session payload is present. Depending on what it finds, it follows one of three primary paths: successful resume, user-initiated cancellation, or an error/empty state.
+The handler navigates at least **14 distinct numbered states** (integer literals `0`–`15` observed at bundle.js:+11058728 through +11059368) plus two named terminal paths ("Session resumed successfully" and "Teleport cancelled"), making a Mermaid flowchart the appropriate representation.
 
 ```mermaid
 flowchart TD
-    A["/teleport or /tp invoked"] --> B[Mount JSX component]
-    B --> C[Read app state via useAppState context]
-    C --> D{App state provider present?}
-    D -- No --> E[Throw ReferenceError:\nuseAppState called outside AppStateProvider]
-    D -- Yes --> F[Call getState to retrieve session payload]
-    F --> G{Session payload present\nand non-empty?}
-    G -- No --> H[Render cancelled / no-op UI\nEmit 'Teleport cancelled' message]
-    G -- Yes --> I[Initialize local useState\nfor component lifecycle tracking]
-    I --> J[Apply message operation:\ntype='replace-all' at positions 6–7\nwith system role]
-    J --> K{Operation succeeds?}
-    K -- Yes --> L[Emit 'Session resumed successfully'\nas system message]
-    K -- No --> M[Handle failure path]
-    L --> N[Pad session log entries\nusing two-space separator]
-    N --> O[Normalize entries via toLowerCase\ntruncated to 40 chars]
-    O --> P[Close internal queues and connections]
-    P --> Q[Unlink temporary sync file]
-    Q --> R[Command complete]
-    H --> R
-    M --> R
+    A(["/teleport invoked"]) --> B[Read appState via L.getState]
+    B --> C{State machine\nstep value}
+
+    C -->|step 0 — init| D[Convert argument to Boolean\ncheck for pending session data]
+    D --> E{Session data\npresent?}
+    E -->|No| F[["Teleport cancelled\n(bundle.js:+11059075)"]]
+    E -->|Yes| G[Advance to step 1]
+
+    G --> H[useState initialisation\nbundle.js:+11058857]
+    H --> I[steps 6–7: build message payload\nbundle.js:+11058880, +11058890]
+
+    I --> J["applyMessageOp  'replace-all'\nbundle.js:+11058905, +11058928"]
+    J --> K{Op result}
+
+    K -->|success| L["Emit system message:\n'Session resumed successfully'\nbundle.js:+11058961, +11059001"]
+    L --> M[steps 8–9: post-resume\ncleanup\nbundle.js:+11059029, +11059059]
+    M --> N[steps 10–15: finalise\ncomponent state\nbundle.js:+11059161–11059368]
+    N --> O([Done — session active])
+
+    K -->|failure / user cancel| P["Emit cancel message:\n'Teleport cancelled'\nbundle.js:+11059075"]
+    P --> Q[steps 10–11: rollback\nbundle.js:+11059161, +11059169]
+    Q --> R([Done — cancelled])
 ```
 
 ---
 
 ## Behavioral Spec
 
-### Context Guard — App State Access
+### Handler Entry — `teleportCommandHandler` (bundle symbol `XO7`)
 
-Before any session data is read, the command verifies it is rendered inside an `<AppStateProvider />` by consuming the React context. If the context is absent, execution halts immediately with a `ReferenceError`.
+The handler is resolved via `module_id → w5q → XO7` (Arbor `resolution_path: module_id`, `n_hits: 1`). It is an `AsyncFunction`.
 
-```
-function guardedAppStateAccess(context):
-    value = IfH.useContext(context)
-    if value is undefined or null:
-        raise ReferenceError(
-            "useAppState/useSetAppState cannot be called outside of an <AppStateProvider />"
-        )
-    return value
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+3587674 (context read), +3587706 (ReferenceError throw), +3587721 (error string literal)
-
----
-
-### Session Payload Retrieval
-
-After the context guard passes, the component calls `getState` on the global store (`L`) to obtain the current session snapshot. The result is coerced to a Boolean to determine emptiness.
+Analysis basis: CC v2.1.133 bundle.js:+11059582
 
 ```
-function retrieveSessionPayload(store):
-    rawPayload = store.getState()
-    hasPayload = Boolean(rawPayload)   // falsy check: null, undefined, empty string
-    if not hasPayload:
-        return EMPTY
-    return rawPayload
+async function teleportCommandHandler(commandInput, context):
+
+    // 1. Acquire application state
+    appState = getAppState()                    // L.getState  +11058790
+    sessionPayload = parseInput(commandInput)   // Boolean coercion +11058782, value 0 +11058769
+
+    // 2. Validate that a teleport payload is present
+    if NOT sessionPayload:
+        emitMessage("Teleport cancelled", role="system")   // +11059075
+        return CANCELLED
+
+    // 3. Initialise local React state for the JSX component
+    [stepIndex, setStepIndex] = useState(initialStep=1)    // +11058857, literal 1 +11058833
+
+    // 4. Build message replacement payload  (step indices 6 and 7)
+    messagesBatch = buildMessageBatch(sessionPayload, stepIndex=6, stepIndex=7)
+                                                           // +11058880, +11058890
+
+    // 5. Apply bulk message replacement
+    result = applyMessageOp(
+        operation = "replace-all",                         // +11058928
+        messages  = messagesBatch,                         // +11058905
+        source    = "localCommand"                         // +11059325
+    )
+
+    // 6a. Success path (steps 8, 9, 10–15)
+    if result.ok:
+        emitMessage("Session resumed successfully", role="system")
+                                                           // +11058961, +11059001
+        runPostResumeCleanup(steps=[8, 9])                 // +11059029, +11059059
+        finaliseComponentState(steps=[10,11,12,13,14,15])  // +11059161–+11059368
+        return SUCCESS
+
+    // 6b. Failure / user cancellation path (steps 8, 9, 10, 11)
+    else:
+        emitMessage("Teleport cancelled", role="system")   // +11059075
+        rollback(steps=[10, 11])                           // +11059161, +11059169
+        return CANCELLED
 ```
 
-- `Boolean` coercion applied at: Analysis basis: CC v2.1.133 bundle.js:+11058782
-- `getState` call: Analysis basis: CC v2.1.133 bundle.js:+11058790
-- Coercion offset (literal `0` used as empty index sentinel): Analysis basis: CC v2.1.133 bundle.js:+11058769
+### Context Guard — `requireAppStateContext` (bundle symbol `MAA`)
 
----
+Called transitively via `Y5q → _K → MAA`. Reads the React context provided by `<AppStateProvider />` and throws a `ReferenceError` if the component is rendered outside that provider.
 
-### Component Lifecycle State
-
-A local React state variable is initialized with the value `1`, representing the component's initial "pending" phase. Subsequent state transitions (numeric phases 8–15) govern rendering stages.
+Analysis basis: CC v2.1.133 bundle.js:+3587674, +3587706, +3587721
 
 ```
-function initComponentState():
-    [phase, setPhase] = useState(initialValue=1)
-    return (phase, setPhase)
+function requireAppStateContext():
+    ctx = React.useContext(AppStateContext)          // IfH.useContext +3587674
+    if ctx is undefined:
+        throw ReferenceError(
+            "useAppState/useSetAppState cannot be " +
+            "called outside of an <AppStateProvider />"
+        )                                           // +3587706, +3587721
+    return ctx
 ```
 
-- `useState` call: Analysis basis: CC v2.1.133 bundle.js:+11058857
-- Initial value `1`: Analysis basis: CC v2.1.133 bundle.js:+11058833
-- Phase constants observed: `6`, `7`, `8`, `9`, `10`, `11`, `12`, `13`, `14`, `15`, `16`
+### Session Store — `getOrBuildSessionMap` (bundle symbol `L`)
 
-Analysis basis: CC v2.1.133 bundle.js:+11058880 (phase 6), +11058890 (phase 7), +11059029 (phase 8), +11059059 (phase 9), +11059161 (phase 10), +11059169 (phase 11), +11059207 (phase 12), +11059218 (phase 13), +11059229 (phase 14), +11059368 (phase 15), +11058728 (phase 16)
+Used by the handler to fetch current session state. Internally maps over known session keys and pads string identifiers to a fixed width.
 
----
-
-### Message Operation — Replace-All Injection
-
-On a successful payload retrieval, the command applies a `"replace-all"` message operation to the session at message positions 6 and 7. The injected message carries the role `"system"`. This replaces any prior messages in the conversation view with the restored session context from claude.ai.
+Analysis basis: CC v2.1.133 bundle.js:+14179329, +14179342, +14179363
 
 ```
-function injectRestoredSession(messageQueue, payload):
-    operation = {
-        type: "replace-all",       // literal: "replace-all"
-        startIndex: 6,
-        endIndex: 7,
-        role: "system",            // literal: "system"
-        content: payload
-    }
-    messageQueue.applyMessageOp(operation)
-```
-
-- `applyMessageOp` call: Analysis basis: CC v2.1.133 bundle.js:+11058905
-- `"replace-all"` literal: Analysis basis: CC v2.1.133 bundle.js:+11058928
-- Position `6`: Analysis basis: CC v2.1.133 bundle.js:+11058880
-- Position `7`: Analysis basis: CC v2.1.133 bundle.js:+11058890
-- `"system"` role literal: Analysis basis: CC v2.1.133 bundle.js:+11059001
-
----
-
-### Success Notification
-
-After the message operation completes, the component emits a human-readable confirmation as a `"localCommand"` typed system message.
-
-```
-function emitSuccessMessage(messageQueue):
-    messageQueue.push({
-        type: "localCommand",
-        role: "system",
-        content: "Session resumed successfully"
-    })
-```
-
-- `"Session resumed successfully"` literal: Analysis basis: CC v2.1.133 bundle.js:+11058961
-- `"localCommand"` type literal: Analysis basis: CC v2.1.133 bundle.js:+11059325
-
----
-
-### Cancellation Path
-
-When no valid session payload is found (or when the user dismisses the prompt), the component emits a cancellation notice and exits without modifying session state.
-
-```
-function emitCancellation(messageQueue):
-    messageQueue.push({
-        type: "localCommand",
-        role: "system",
-        content: "Teleport cancelled"
-    })
-```
-
-- `"Teleport cancelled"` literal: Analysis basis: CC v2.1.133 bundle.js:+11059075
-
----
-
-### Session Log Normalization
-
-After a successful resume, session log entries are post-processed: each entry is padded to a uniform width using a two-space separator, then normalized to lowercase and truncated to a maximum of 40 characters.
-
-```
-function normalizeLogEntries(entries):
-    result = []
+function getOrBuildSessionMap(store):
+    entries = store.map(buildEntry)              // K.map  +14179329
     for entry in entries:
-        padded = entry.padEnd(width, separator="  ")   // two-space pad
-        normalized = padded.toLowerCase()
-        truncated = normalized[0 : 40]                 // max 40 chars
-        result.append(truncated)
-    return result
+        label = entry.key.padEnd(40, " ")        // padEnd(40) +14181334; "  " pad char +14179363
+    return entries
 ```
 
-- `padEnd` call with `"  "` (two spaces): Analysis basis: CC v2.1.133 bundle.js:+14179342, +14179363
-- `toLowerCase` call: Analysis basis: CC v2.1.133 bundle.js:+14181260
-- Truncation length `40`: Analysis basis: CC v2.1.133 bundle.js:+14181334
+### File-Handle Lifecycle — `manageTempHandles` (bundle symbol `K`)
 
----
+Manages temporary file descriptors created during the teleport operation. Ensures handles are cleaned up whether the operation succeeds or fails.
 
-### Async Queue and File Cleanup
-
-The implementation manages an internal async work queue. On completion (success or cancellation), outstanding queue entries are finalized, network/IPC connections are closed, and any temporary synchronization file created during the teleport handshake is deleted from disk.
+Analysis basis: CC v2.1.133 bundle.js:+14161309, +14161318, +14161332
 
 ```
-function cleanup(workQueue, connectionSet, tempFilePath):
-    // Drain in-flight async tasks
-    for task in workQueue.activeTasks:
-        workQueue.add(task)
-        task.finally(lambda: workQueue.delete(task))
+function manageTempHandles(handleSet):
+    handleSet.add(newHandle)                     // q.add  +14161309
 
-    // Close IPC/network connections
-    connectionSet.close()
-    workQueue.close()
-
-    // Remove temporary handshake file
-    fs.unlinkSync(tempFilePath)
+    try:
+        performTransfer(handleSet)               // f  +14161253 (via K→f)
+    finally:
+        closeAllHandles()                        // f.finally → _.close, q.close
+                                                 // +14161318, +14167103, +14167113
+        handleSet.delete(closedHandle)           // q.delete +14161332
 ```
 
-- `q.add`: Analysis basis: CC v2.1.133 bundle.js:+14161309
-- `f.finally`: Analysis basis: CC v2.1.133 bundle.js:+14161318
-- `q.delete`: Analysis basis: CC v2.1.133 bundle.js:+14161332
-- `_.close`: Analysis basis: CC v2.1.133 bundle.js:+14167103
-- `q.close`: Analysis basis: CC v2.1.133 bundle.js:+14167113
-- `unlinkSync`: Analysis basis: CC v2.1.133 bundle.js:+14137065
+### Handle Normalisation — `normaliseHandleKey` (bundle symbol `_`)
+
+Normalises a file-handle key to lower-case and removes a temporary file link from the filesystem.
+
+Analysis basis: CC v2.1.133 bundle.js:+14181260, +14137065
+
+```
+function normaliseHandleKey(key):
+    normalised = key.toLowerCase()              // f.toLowerCase  +14181260
+    fs.unlinkSync(tempPath(normalised))         // Ydq.unlinkSync +14137065
+    return normalised
+```
 
 ---
 
@@ -237,13 +197,16 @@ function cleanup(workQueue, connectionSet, tempFilePath):
 
 | Item | Detail |
 |---|---|
-| Telemetry | None — no `tengu_*` events found in the implementation |
-| Hook registration | Consumes `useContext` (React) for `AppStateProvider`; uses `useState` for internal phase tracking |
-| appState changes | Reads global store via `getState`; applies a `"replace-all"` message operation to the active session message list |
-| Message emissions | Emits `"Session resumed successfully"` (system/localCommand) on success; emits `"Teleport cancelled"` (system/localCommand) on cancellation or empty payload |
-| File system | Calls `unlinkSync` to delete a temporary handshake/sync file after session restoration completes |
-| Async queues | Registers and drains an internal async work queue; closes IPC/network connections on teardown |
-| Log normalization | Post-processes session log entries: pad → lowercase → truncate to 40 characters |
+| Telemetry | None detected in depth-2 traversal (`telemetry: []`) |
+| React state | `useState` initialised with step value `1` (bundle.js:+11058857, +11058833); step index advances through values `0–15` |
+| Message store mutation | `applyMessageOp("replace-all", …)` performs a bulk replacement of the entire conversation message list (bundle.js:+11058905, +11058928) |
+| System message emitted (success) | `"Session resumed successfully"` with `role: "system"` (bundle.js:+11058961, +11059001) |
+| System message emitted (cancel) | `"Teleport cancelled"` with `role: "system"` (bundle.js:+11059075) |
+| `source` tag on op | `"localCommand"` (bundle.js:+11059325) identifies the mutation as originating from a local CLI command |
+| Filesystem side effect | `unlinkSync` on a temporary file path during handle cleanup (bundle.js:+14137065) |
+| AppStateProvider guard | `ReferenceError` thrown if rendered outside `<AppStateProvider />` (bundle.js:+3587721) |
+| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 
 ---
 
@@ -251,21 +214,17 @@ function cleanup(workQueue, connectionSet, tempFilePath):
 
 | Version | Change |
 |---|---|
-| v2.1.133 | Initial analysis — command registered as `local-jsx`, alias `tp`, module `w5q` |
+| v2.1.133 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Invoking `/teleport` outside a session context**: Because the command relies on `AppStateProvider` being present in the React tree, running it in an environment where the provider is absent will throw a `ReferenceError` with the message `"useAppState/useSetAppState cannot be called outside of an <AppStateProvider />"`. This is a hard error, not a graceful fallback.
-
-2. **Expecting a prompt for a session URL**: The command does not appear to interactively request a claude.ai session URL from the user. The session payload is expected to already be present in the global app state at the time of invocation — likely pre-populated by an external handshake mechanism. Invoking `/teleport` without a prior handshake will result in the `"Teleport cancelled"` path.
-
-3. **Confusing `/tp` scope**: The alias `/tp` is a registered first-class alias, not a shorthand that can be combined with other flags. It behaves identically to `/teleport`.
-
-4. **Assuming telemetry capture**: Unlike many other Claude Code commands, `/teleport` emits **no** `tengu_*` telemetry events. Monitoring dashboards that rely on telemetry events will not receive signals from this command's execution.
-
-5. **Expecting partial session merge**: The message operation type is `"replace-all"`, not an append or merge. Invoking `/teleport` will **replace** messages at the target positions entirely with the restored session content — any locally-accumulated messages in those slots will be overwritten.
+1. **Invoking `/teleport` without a valid claude.ai session payload** — The command coerces its argument to `Boolean` at step `0`; if the result is falsy the operation immediately emits `"Teleport cancelled"` and exits without modifying the conversation state.
+2. **Using `/teleport` outside an `<AppStateProvider />`** — The context guard (`MAA`) throws a `ReferenceError` synchronously; this would appear as an unhandled error in the CLI rendering layer.
+3. **Assuming idempotency** — The `"replace-all"` message operation replaces the *entire* message list, not just appends. Running `/teleport` twice in the same session will overwrite the previously restored messages.
+4. **Confusing the alias** — `/tp` is a registered alias and is fully equivalent to `/teleport`; there is no behavioural difference between the two invocation forms.
+5. **Expecting telemetry confirmation** — No `tengu_*` telemetry events are emitted by this command; do not rely on server-side event logs to confirm a successful teleport in observability pipelines.
 
 ---
 
@@ -275,12 +234,16 @@ function cleanup(workQueue, connectionSet, tempFilePath):
 
 | Identifier | Role |
 |---|---|
-| `XO7` | Module export container for the teleport command module (`w5q`) |
-| `Y5q` | Primary JSX component function implementing the `/teleport` command |
-| `_K` | App state hook wrapper — calls `MAA` to retrieve context value |
-| `MAA` | Core `useAppState` / `useSetAppState` implementation; enforces `AppStateProvider` guard |
-| `L` | Global store object exposing `getState` and session map operations |
-| `K` | Async work queue manager — handles task addition, deletion, and finalization |
-| `f` | Connection/resource object exposing `close`, async task lifecycle (`finally`), and queue delegation |
-| `q` | Secondary queue or connection set used for IPC/network teardown and `unlinkSync` dispatch |
-| `_` | Log entry normalizer — applies `toLowerCase` and truncation to session log strings |
+| `XO7` | `teleportCommandHandler` — top-level async handler for `/teleport`; Arbor-resolved entry point (fqn: `claude-2.1.133::XO7`) |
+| `Y5q` | `teleportJsxComponent` — JSX component that owns local React state and orchestrates the step machine |
+| `_K` | `appStateAccessor` — thin wrapper that calls the context guard and returns app state |
+| `MAA` | `requireAppStateContext` — React context reader; throws `ReferenceError` outside `<AppStateProvider />` |
+| `L` | `getOrBuildSessionMap` — builds/fetches the session key map, pads labels to width 40 |
+| `K` | `manageTempHandles` — add/close/delete temporary file handles around the transfer operation |
+| `q` | `tempHandleSet` — the mutable set of open temporary file handles |
+| `f` | `performTransfer` — executes the actual data transfer; calls `_.close` and `q.close` in `finally` |
+| `_` | `normaliseHandleKey` — lower-cases a handle key and unlinks the associated temp file |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

@@ -2,7 +2,6 @@
 type: feature-spec
 feature: "radio"
 cc_version: "2.1.133"
-updated: "2026-05-18"
 tags: ["radio", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +20,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/radio` command launches **Claude FM**, a lo-fi music stream hosted on YouTube Live, directly in the user's default browser. When invoked, it resolves the stream URL, attempts a platform-specific browser-open call, and returns a short text message — either a confirmation that the browser is opening or a fallback message containing the raw URL if the open attempt fails.
+`/radio` is a local slash command that opens the Claude FM lo-fi radio stream (a fixed YouTube Live URL) in the user's default system browser. It presents a brief status message on success and falls back to printing the URL directly if the browser cannot be launched. The command takes no user-supplied arguments and performs no interaction with the Claude AI backend.
 
 ---
 
@@ -29,11 +28,20 @@ The `/radio` command launches **Claude FM**, a lo-fi music stream hosted on YouT
 
 | Field | Value |
 |---|---|
-| type | `local` |
-| name | `radio` |
-| description | `Listen to Claude FM lo-fi radio` |
-| supportsNonInteractive | `false` |
-| module\_id | `OOq` |
+| `type` | `local` |
+| `name` | `radio` |
+| `description` | `Listen to Claude FM lo-fi radio` |
+| `supportsNonInteractive` | `false` |
+| `module_id` | `OOq` |
+| `load_inline` | `true` |
+| `loc_byte` | `11323581` |
+| `loc_byte_end` | `11323786` |
+| `loc_line` | `7104` |
+| `arbor_handler.name` | `oY7` |
+| `arbor_handler.fqn` | `claude-2.1.133::oY7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.133 bundle.js:+11323581
 
@@ -41,106 +49,160 @@ Analysis basis: CC v2.1.133 bundle.js:+11323581
 
 ## Input Branching
 
-The command accepts no user-supplied arguments. All branching is internal and depends on (a) URL scheme validation and (b) the host operating system.
+The command has three distinct runtime branches driven by the host operating system, plus a fallback branch on browser-open failure. A Mermaid flowchart is used accordingly.
 
 ```mermaid
 flowchart TD
-    A["/radio invoked"] --> B["Validate URL scheme\n(http: or https:)"]
-    B -- "invalid scheme" --> C["Throw Error\n(URL rejected)"]
-    B -- "valid scheme" --> D{"Detect OS\nprocess.platform"}
-    D -- "darwin (macOS)" --> E["Spawn: open <URL>"]
-    D -- "win32 (Windows)" --> F["Spawn: rundll32 url,OpenURL <URL>"]
-    D -- "other (Linux / BSD / …)" --> G["Spawn: xdg-open <URL>"]
-    E & F & G --> H{"Exit code == 0?"}
-    H -- "success (exit 0)" --> I["Return text:\n'Opening Claude FM in your browser…'"]
-    H -- "failure (exit ≠ 0)" --> J["Return text:\n'Couldn't open the browser. Listen at:\nhttps://www.youtube.com/live/AUQKjgKQF7w'"]
+    A["/radio invoked"] --> B["Validate target URL\n(http: or https: scheme check)"]
+    B -- "Invalid scheme" --> C["Throw / reject with Error"]
+    B -- "Valid URL" --> D{"Detect host platform"}
+    D -- "darwin (macOS)" --> E["Spawn 'open' with URL"]
+    D -- "win32 (Windows)" --> F["Spawn 'rundll32 url,OpenURL' with URL"]
+    D -- "other (Linux/etc.)" --> G["Spawn 'xdg-open' with URL"]
+    E --> H{"Browser opened\nsuccessfully?"}
+    F --> H
+    G --> H
+    H -- "Yes" --> I["Return text message:\n'Opening Claude FM in your browser…'"]
+    H -- "No" --> J["Return fallback text:\n'Couldn't open the browser. Listen at: <URL>'"]
 ```
 
-Analysis basis:
-- URL scheme check: CC v2.1.133 bundle.js:+7365727, +7365749, +7365677
-- Platform detection: CC v2.1.133 bundle.js:+7365999, +7366015
-- Windows launcher: CC v2.1.133 bundle.js:+7366099, +7366111
-- macOS launcher: CC v2.1.133 bundle.js:+7366173
-- Linux launcher: CC v2.1.133 bundle.js:+7366180
-- Success/failure branch: CC v2.1.133 bundle.js:+7366247
+Analysis basis: CC v2.1.133 bundle.js:+7365677, +7365727, +7365749, +7365999, +7366015, +11323304, +11323360, +11323373, +11323441
 
 ---
 
 ## Behavioral Spec
 
-### Command Entry Point
+### Handler Entry Point — `radioCommandHandler` (`oY7`)
+
+The Arbor-resolved handler is `oY7` (an `AsyncFunction`), reached via `module_id → OOq`. It is the primary entry point for the `/radio` command.
+
+Analysis basis: CC v2.1.133 bundle.js:+11323301
 
 ```
-function radioCommandHandler(context):
-    TARGET_URL = "https://www.youtube.com/live/AUQKjgKQF7w"
-    result = openUrl(TARGET_URL)
-    if result.success:
-        return textResponse("Opening Claude FM in your browser…")
-    else:
-        return textResponse(
-            "Couldn't open the browser. Listen at: " + TARGET_URL
-        )
+async function radioCommandHandler(context):
+    targetUrl = "https://www.youtube.com/live/AUQKjgKQF7w"
+
+    try:
+        openUrlInBrowser(targetUrl)
+        return { type: "text", content: "Opening Claude FM in your browser…" }
+    catch browserError:
+        return {
+            type: "text",
+            content: "Couldn't open the browser. Listen at: " + targetUrl
+        }
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11323301, +11323304, +11323360, +11323373, +11323441
+Analysis basis: CC v2.1.133 bundle.js:+11323304, +11323360, +11323373, +11323441
 
 ---
 
-### URL Validation
+### URL Validation — `urlSchemeValidator` (`rG4`)
+
+Before any platform command is spawned, the target URL is checked to ensure its scheme is either `"http:"` or `"https:"`. Any other scheme causes an `Error` to be thrown and the open attempt is aborted.
+
+Analysis basis: CC v2.1.133 bundle.js:+7365677, +7365727, +7365749
 
 ```
-function validateUrl(rawUrl):
-    parsed = parseUrl(rawUrl)
-    if parsed.scheme not in ["http:", "https:"]:
-        throw Error("Unsupported URL scheme")
-    return parsed
+function urlSchemeValidator(url):
+    scheme = extractScheme(url)   // e.g. "https:"
+    if scheme is not in ["http:", "https:"]:
+        throw new Error("Unsafe or unsupported URL scheme")
+    return url
 ```
-
-Only `http:` and `https:` schemes are accepted. Any other scheme causes the function to throw a native `Error` before a child process is spawned.
-
-Analysis basis: CC v2.1.133 bundle.js:+7365727, +7365749, +7365677
 
 ---
 
-### Platform-Specific Browser Launch
+### Platform Browser Launcher — `openUrlInBrowser` (`ML`)
+
+`ML` is the cross-platform URL-open utility called by the handler. It inspects `process.platform` and dispatches to the appropriate system command.
+
+Analysis basis: CC v2.1.133 bundle.js:+7365964, +7366048
 
 ```
-function openUrl(url):
-    validateUrl(url)                   // throws on bad scheme
+async function openUrlInBrowser(url):
+    urlSchemeValidator(url)        // guard — throws on bad scheme
 
     platform = process.platform
 
     if platform == "darwin":
-        command = "open"
-        args    = [url]
+        spawnSystemCommand("open", [url])
     else if platform == "win32":
-        command = "rundll32"
-        args    = ["url,OpenURL", url]
-    else:                              // Linux and everything else
-        command = "xdg-open"
-        args    = [url]
-
-    exitCode = spawnSync(command, args)
-
-    return { success: (exitCode == 0) }
+        spawnSystemCommand("rundll32", ["url,OpenURL", url])
+    else:
+        spawnSystemCommand("xdg-open", [url])
 ```
 
-The exit-code comparison uses the numeric literal `0` for success and the numeric literal `1` as the representative non-zero failure sentinel in the conditional branch.
+Literal constants used:
 
-Analysis basis: CC v2.1.133 bundle.js:+7365964, +7365999, +7366015, +7366099, +7366111, +7366173, +7366180, +7366247
+| Constant | Purpose | Location |
+|---|---|---|
+| `"http:"` | Allowed URL scheme | bundle.js:+7365727 |
+| `"https:"` | Allowed URL scheme | bundle.js:+7365749 |
+| `"darwin"` | macOS platform identifier | bundle.js:+7365999 |
+| `"win32"` | Windows platform identifier | bundle.js:+7366015 |
+| `"rundll32"` | Windows browser-open binary | bundle.js:+7366099 |
+| `"url,OpenURL"` | Windows rundll32 argument | bundle.js:+7366111 |
+| `"open"` | macOS browser-open binary | bundle.js:+7366173 |
+| `"xdg-open"` | Linux/other browser-open binary | bundle.js:+7366180 |
+| `"https://www.youtube.com/live/AUQKjgKQF7w"` | Claude FM stream URL | bundle.js:+11323304 |
 
 ---
 
-### Child-Process Spawn Helper
+### Output Message Construction — `buildTextResult` (`Y8`, `N6`)
 
-The spawn helper (`spawnAsync` / `spawnSync` — reached as call target `Y8` → `GA`, `N6`) internally caps the maximum output buffer or timeout.
+`Y8` assembles the final result object returned to the CLI renderer. It calls `N6` to retrieve ambient context (e.g., current store state) and wraps the message string with the `"text"` type tag.
 
-- Numeric constant `10` is present at CC v2.1.133 bundle.js:+989065 — likely a timeout or retry ceiling.
-- Numeric constant `0` is present at CC v2.1.133 bundle.js:+989099 — likely the default initial value for an output accumulator or exit-code check.
+Analysis basis: CC v2.1.133 bundle.js:+989231, +919985
 
-<!-- TODO: exact semantics of the 10 / 0 constants inside the spawn helper not determined at depth-2 traversal; needs --depth 4 -->
+```
+function buildTextResult(messageString):
+    storeContext = getContextFromStore()   // N6 → zN6 → store lookup
+    return { type: "text", content: messageString }
+```
 
-Analysis basis: CC v2.1.133 bundle.js:+989065, +989099, +989120, +989231
+---
+
+### Background Spare / Memory Sampling — `backgroundSpareManager` (`GA`, `Y`)
+
+`GA` and its recursive sub-function `Y` are called as part of the broader command-dispatch infrastructure triggered when any local command runs. These functions manage background spare process readiness and perform periodic memory sampling:
+
+- `Y` calls `Date.now()` for timestamps and checks free memory via `hP8.freemem`.
+- A polling interval of **2000 ms** is used (bundle.js:+14156750).
+- Memory figures are scaled by **1 000 000** (bundle.js:+989587).
+- A limit of **10** items and a floor of **0** appear in the queue logic (bundle.js:+989065, +989099).
+- The string `"windows"` (bundle.js:+14156620) is used inside `Y` for a separate platform check in the spare-process path (distinct from the `"win32"` check in `ML`).
+
+Analysis basis: CC v2.1.133 bundle.js:+989120, +989763, +14156454
+
+```
+function backgroundSpareManager():
+    // Fires telemetry, manages spare agent pool
+    emit("tengu_bg_spare_enable")        // upon enabling spare
+    scheduleRecurringMemoryCheck(intervalMs = 2000, function memoryCheckTick():
+        freeMemory = system.freemem()
+        scaledMB   = freeMemory / 1_000_000
+        updateSparePoolState(scaledMB)
+        emit("tengu_bg_spare_spawn")     // upon spawning a spare
+        reschedule(memoryCheckTick, 2000)
+    )
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+14156457, +14156817, +14156750, +989587
+
+---
+
+### Error Logging — `errorLogger` (`fH`)
+
+If the browser spawn fails, `fH` is reached via the catch path in `GA`. It records the error at severity `"error"` (bundle.js:+912836), pushes to an internal error ring-buffer (`cyH.push`), and forwards to the global log-error sink (`yQ.logError`).
+
+Analysis basis: CC v2.1.133 bundle.js:+989942, +912461
+
+```
+function errorLogger(err):
+    logEntry = buildLogEntry(level = "error", error = err)
+    errorRingBuffer.push(logEntry)
+    globalLogger.logError(logEntry)
+```
 
 ---
 
@@ -148,14 +210,15 @@ Analysis basis: CC v2.1.133 bundle.js:+989065, +989099, +989120, +989231
 
 | Item | Detail |
 |---|---|
-| Telemetry | None — `telemetry` array is empty; no `tengu_*` events are fired by this command. |
-| Hook registration | None detected at depth-2 traversal. |
-| appState changes | None detected at depth-2 traversal. |
-| Child process | Spawns one short-lived OS process (`open`, `rundll32`, or `xdg-open`) to open the browser. |
-| Network | No direct network call from the CLI process; the browser handles the YouTube Live connection. |
-| Sound / media | Audio plays inside the browser, not inside the CLI process itself. |
-| Target URL (hardcoded) | `https://www.youtube.com/live/AUQKjgKQF7w` (CC v2.1.133 bundle.js:+11323304, +11323441) |
-| Interactive-only | `supportsNonInteractive: false` — the command is not available in non-interactive / piped mode. (CC v2.1.133 bundle.js:+11323581) |
+| Telemetry — `tengu_bg_spare_enable` | Fired when the background spare process feature is enabled (bundle.js:+14156457) |
+| Telemetry — `tengu_bg_spare_spawn` | Fired when a new background spare process is spawned (bundle.js:+14156817) |
+| Browser process | Spawns a detached OS subprocess (`open` / `rundll32` / `xdg-open`) to open the YouTube URL |
+| appState changes | No direct appState mutations attributable to the command logic itself |
+| Hook registration | None observed within depth-2 traversal |
+| Sound | None — the command only opens the stream URL; audio playback is handled by the external browser |
+| Store read | `N6 → zN6 → ON6.getStore` reads the ambient async-local context store (bundle.js:+919934) |
+| Error ring-buffer | Failed browser-open errors are pushed to `cyH` and forwarded to `yQ.logError` (bundle.js:+912821, +912861) |
+| `supportsNonInteractive` | `false` — command should not be invoked in non-interactive / piped sessions |
 
 ---
 
@@ -163,17 +226,17 @@ Analysis basis: CC v2.1.133 bundle.js:+989065, +989099, +989120, +989231
 
 | Version | Change |
 |---|---|
-| v2.1.133 | Initial analysis — command registered as `local`, targets YouTube Live stream for Claude FM lo-fi radio. |
+| v2.1.133 | Initial analysis — `/radio` command opens Claude FM lo-fi stream at fixed YouTube Live URL |
 
 ---
 
 ## Common Mistakes
 
-1. **Running in non-interactive mode**: Because `supportsNonInteractive` is `false`, invoking `/radio` inside a piped or headless workflow will fail or be silently unavailable. Use an interactive terminal session.
-2. **Expecting audio from the CLI process itself**: The command only opens a browser tab; the CLI produces no sound directly. If the default browser is not configured or is suppressed (e.g., a server environment), the fallback message is returned instead.
-3. **Assuming cross-platform parity**: On Linux the command delegates to `xdg-open`, which must be installed and correctly configured. Minimal container images often lack `xdg-open`, causing the fallback message to appear.
-4. **Providing arguments**: The command registration accepts no arguments. Any text typed after `/radio` is ignored; the hardcoded YouTube URL is always used.
-5. **Expecting telemetry**: Unlike most Claude Code commands, `/radio` emits no telemetry events. Do not rely on telemetry pipelines to audit its usage.
+1. **Expecting AI-generated output.** `/radio` is a purely local utility command. It does not invoke the Claude model and returns only a short static status string.
+2. **Running in non-interactive mode.** `supportsNonInteractive` is `false`; attempting to use `/radio` in a piped or scripted non-interactive session is not supported and may be silently ignored or cause an error.
+3. **Assuming the URL is configurable.** The Claude FM URL (`https://www.youtube.com/live/AUQKjgKQF7w`) is hardcoded in the bundle (bundle.js:+11323304). There is no argument or environment variable to override it.
+4. **Expecting in-terminal audio.** The command opens the stream in the default system browser; it does not play audio inside the terminal.
+5. **Conflating the `"win32"` and `"windows"` platform strings.** The URL-open path uses `"win32"` (the Node.js `process.platform` value), while the background spare-process path uses a separate `"windows"` string. These are two distinct checks in different subsystems.
 
 ---
 
@@ -183,7 +246,19 @@ Analysis basis: CC v2.1.133 bundle.js:+989065, +989099, +989120, +989231
 
 | Identifier | Role |
 |---|---|
-| `oY7` | Radio command handler — top-level function registered as the `/radio` command implementation |
-| `ML` | URL opener — orchestrates URL validation and platform-specific child-process launch |
-| `rG4` | URL scheme validator — parses the URL and throws `Error` on non-http(s) schemes |
-| `Y8` | Child-process spawn wrapper — spawns the OS browser-open command and returns exit code |
+| `oY7` | Radio command async handler (Arbor-resolved entry point) |
+| `ML` | Cross-platform URL browser-open utility |
+| `rG4` | URL scheme validator (allows `http:`/`https:` only) |
+| `Y8` | Text result builder / command output assembler |
+| `GA` | Background spare process manager (outer controller) |
+| `sJH` | Spare process initialisation / configuration helper |
+| `Y` | Recursive memory-sampling and spare-pool tick function |
+| `qPL` | String coercion / conversion utility |
+| `fH` | Error logger (ring-buffer + global sink) |
+| `N6` | Ambient context / store accessor |
+| `zN6` | Inner store-get helper (reads from `ON6.getStore`) |
+| `LA` | Context lookup finaliser called by `N6` |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "heapdump"
 cc_version: "2.1.133"
-updated: "2026-05-18"
+updated: "2026-05-31"
 tags: ["heapdump", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/heapdump` command is a hidden diagnostic slash command that captures a comprehensive snapshot of the Claude Code process's memory state and writes the output to the user's Desktop directory. It collects Node/Bun runtime memory metrics, generates a V8 heap snapshot file, performs a diagnostic analysis of memory composition, and returns a formatted text report with actionable guidance. The command is designed for internal debugging of potential memory leaks and performance regressions.
+The `/heapdump` command is a hidden diagnostic slash command that captures a full JavaScript heap snapshot and a rich memory-statistics report, then writes both to the user's Desktop directory. It is intended for developer/maintainer use only and supports non-interactive (headless) invocation. On completion it emits a human-readable summary describing which memory region (JS heap vs. native) dominates and whether any obvious leak indicators were detected.
 
 ---
 
@@ -29,12 +29,21 @@ The `/heapdump` command is a hidden diagnostic slash command that captures a com
 
 | Field | Value |
 |---|---|
-| type | `local` |
-| name | `heapdump` |
-| description | `Dump the JS heap to ~/Desktop` |
-| supportsNonInteractive | `true` |
-| isHidden | `true` |
-| module_id | `D$q` |
+| `type` | `local` |
+| `name` | `heapdump` |
+| `description` | `"Dump the JS heap to ~/Desktop"` |
+| `supportsNonInteractive` | `true` |
+| `isHidden` | `true` |
+| `module_id` | `D$q` |
+| `load_inline` | `true` |
+| `loc_byte` | `11280031` |
+| `loc_byte_end` | `11280194` |
+| `loc_line` | `7085` |
+| `arbor_handler.name` | `fY7` |
+| `arbor_handler.fqn` | `claude-2.1.133::fY7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.n_hits` | `0` |
 
 Analysis basis: CC v2.1.133 bundle.js:+11280031
 
@@ -42,316 +51,210 @@ Analysis basis: CC v2.1.133 bundle.js:+11280031
 
 ## Input Branching
 
-The command's top-level handler (the command entry point, `fY7`) delegates immediately to the core execution function (`O$q`). The core function branches across several sub-phases: metrics collection, platform-aware Desktop path resolution, file writing, and result formatting. The output formatter (`MY7`) branches on whether the dominant memory type is JS heap or native.
+The command itself takes no user-supplied arguments; branching is driven entirely by runtime state (platform detection, memory ratios, and Bun vs. V8 runtime). Four distinct paths exist in the implementation.
 
 ```mermaid
 flowchart TD
-    A["/heapdump invoked"] --> B["Collect memory metrics\n(collectMemoryMetrics)"]
-    B --> C["Format metrics table\n(formatMetricsTable)"]
-    C --> D["Resolve Desktop path\n(resolveDesktopPath)"]
-    D --> E{"Platform?"}
-    E -- "windows / WSL" --> F["Resolve WSL Windows Desktop\n(/mnt/c/Users/...)"]
-    E -- "darwin / linux" --> G["Resolve ~/Desktop"]
-    F --> H["Write JSON diagnostics file\n(WiH.writeFile)"]
+    A(["/heapdump invoked"]) --> B[Collect memory statistics via collectMemoryStats]
+    B --> C[Resolve Desktop output directory via resolveDesktopPath]
+    C --> D[Write JSON statistics file]
+    D --> E{Runtime environment?}
+    E -->|Bun runtime| F[Generate heap snapshot via Bun.generateHeapSnapshot\nrun GC via Bun.gc\nwrite .heapsnapshot file]
+    E -->|V8 / Node runtime| G[Generate heap snapshot via v8 module\nwrite .heapsnapshot file]
+    F --> H[Emit telemetry: tengu_heap_dump]
     G --> H
-    H --> I["Serialize diagnostics to JSON\n(serializeToJson)"]
-    I --> J["Write .heapsnapshot file\n(writeHeapSnapshot)"]
-    J --> K["Run Bun GC\n(Bun.gc)"]
-    K --> L["Fire telemetry event\n(tengu_heap_dump)"]
-    L --> M["Format output lines\n(formatOutputLines)"]
-    M --> N{"Heap dominant?"}
-    N -- "JS heap > native" --> O["Append '— most memory is JS heap'\nmessage"]
-    N -- "native > JS heap" --> P["Append '— most memory is native'\nmessage"]
-    O --> Q["Append .heapsnapshot instructions"]
-    P --> Q
-    Q --> R["Return text result to UI"]
+    H --> I[Build summary via buildSummary]
+    I --> J{Native memory > JS heap?}
+    J -->|Yes — possible native addon leak| K["Append warning:\n'Native memory > heap — leak may be in\nnative addons (node-pty, sharp, etc.)'"]
+    J -->|No — JS heap dominates| L["Append hint:\n'— most memory is JS heap\n(inspect the .heapsnapshot)'"]
+    J -->|Roughly equal / no obvious indicators| M["Append note:\n'(no obvious leak indicators)'"]
+    K --> N[Return formatted text result to caller]
+    L --> N
+    M --> N
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11278900, +11277643, +11279019, +11279343, +11279403
+Analysis basis: CC v2.1.133 bundle.js:+11278900 (handler entry `fY7`), +11277643 (statistics collection), +11278182 (snapshot writer), +11279019 (summary builder)
 
 ---
 
 ## Behavioral Spec
 
-### Phase 1 — Memory Metrics Collection (`collectMemoryMetrics`)
+### 1. Top-level Handler (`fY7`)
+
+The Arbor-resolved handler is `fY7` (AsyncFunction, resolved via `module_id` → `D$q`).
 
 ```
-async function collectMemoryMetrics():
-    memUsage     = process.memoryUsage()           # RSS, heapTotal, heapUsed, external, arrayBuffers
-    heapStats    = v8.getHeapStatistics()           # V8 heap breakdown
-    resourceUsage = process.resourceUsage()         # CPU time, maxRSS, etc.
-    uptimeSec    = process.uptime()                 # seconds since process start
-    heapSpaces   = v8.getHeapSpaceStatistics()      # per-space breakdown
-
-    # Linux-only: open file descriptor count
-    if /proc/self/fd is readable:
-        fdList    = await fs.readdir("/proc/self/fd")
-        fdCount   = fdList.length
-
-    # Linux-only: native/smaps memory
-    if /proc/self/smaps_rollup is readable:
-        smapsText = await fs.readFile("/proc/self/smaps_rollup", "utf8")
-        # parse Rss, Pss, etc. from smapsText
-
-    activeHandles   = process._getActiveHandles().length
-    activeRequests  = process._getActiveRequests().length
-
-    # Convert raw bytes to MiB for display
-    # Conversion divisor: 1 048 576 bytes per MiB
-    heapUsedMiB  = memUsage.heapUsed  / 1048576
-    rssMiB       = memUsage.rss       / 1048576
-
-    # Uptime formatted in hours
-    # Divisor: 3600 seconds per hour, displayed with 1 decimal place
-    uptimeHours  = (uptimeSec / 3600).toFixed(1)
-
-    # Leak heuristic: native memory > JS heap
-    nativeMiB    = rssMiB - heapUsedMiB
-    if nativeMiB > heapUsedMiB:
-        leakWarning = "Native memory > heap - leak may be in native addons (node-pty, sharp, etc.)"
-
-    # Heap-space saturation heuristic
-    for each space in heapSpaces:
-        usedRatio = space.space_used_size / space.space_size * 100
-        if usedRatio > 500:                        # threshold: 500 %
-            flag space as anomalous
-
-    return metrics record
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+11275144, +11275168, +11275194, +11275220, +11275245, +11275287, +11275324, +11275375, +11275437, +11275476, +11275681, +11275676, +11275828, +11275914, +11276047, +11276069
-
-**Key numeric constants**
-
-| Constant | Purpose | Source byte |
-|---|---|---|
-| `1 048 576` | Bytes-to-MiB divisor | bundle.js:+11275681 |
-| `3 600` | Seconds-to-hours divisor | bundle.js:+11275676 |
-| `100` | Percentage multiplier for heap-space ratio | bundle.js:+11275828 |
-| `500` | Anomalous heap-space saturation threshold (%) | bundle.js:+11276069 |
-| `1` | Decimal places passed to `toFixed` for MiB values | bundle.js:+11276047 |
-
-**Leak hint string**: `"Native memory > heap - leak may be in native addons (node-pty, sharp, etc.)"` (bundle.js:+11275914)
-
-**No-leak fallback string**: `"No obvious leak indicators. Check heap snapshot for retained objects."` (bundle.js:+11277033)
-
----
-
-### Phase 2 — Platform-Aware Desktop Path Resolution (`resolveDesktopPath`)
-
-```
-function resolveDesktopPath():
-    home = os.homedir()
-
-    platform = detectPlatform()    # returns "darwin", "linux", "windows", or "macos"
-
-    if platform == "windows":
-        # WSL path: scan /mnt/c/Users for the first non-system profile
-        excluded = ["Public", "Default", "Default User", "All Users"]
-        candidates = listDir("/mnt/c/Users")
-        userDir = first candidate not in excluded
-        desktopPath = join("/mnt/c/Users", userDir, "Desktop")
-    else:
-        # macOS / Linux
-        desktopPath = join(home, "Desktop")
-
-    return desktopPath
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+955363, +955370, +955406, +955416, +955434, +955638, +955682, +955701, +955721, +955746
-
-**Platform label constants**
-
-| Literal | Purpose | Source byte |
-|---|---|---|
-| `"Desktop"` | Subdirectory appended to home | bundle.js:+955416 |
-| `"windows"` | Platform identifier for WSL branch | bundle.js:+955434 |
-| `"/mnt/c/Users"` | WSL Windows user root | bundle.js:+955638 |
-| `"Public"` | Excluded Windows profile | bundle.js:+955682 |
-| `"Default"` | Excluded Windows profile | bundle.js:+955701 |
-| `"Default User"` | Excluded Windows profile | bundle.js:+955721 |
-| `"All Users"` | Excluded Windows profile | bundle.js:+955746 |
-| `"macos"` | Platform label (internal) | bundle.js:+11276768 |
-| `"darwin"` | `process.platform` string for macOS | bundle.js:+11277187 |
-
----
-
-### Phase 3 — Diagnostics JSON File Write (`writeDiagnosticsJson`)
-
-```
-function writeDiagnosticsJson(desktopPath, metrics):
-    # Serialize the full metrics record, including:
-    #   - version metadata (package name, version, build timestamp, commit hash)
-    #   - process uptime
-    #   - memoryUsage fields
-    #   - heapStatistics fields
-    #   - heapSpaceStatistics array
-    #   - resourceUsage fields
-    #   - active handle / request counts
-    #   - smaps data (Linux only)
-    #   - fd count (Linux only)
-    #   - leak heuristic flags
-
-    jsonPayload = JSON.stringify(metrics)           # via serializeToJson helper
-
-    filename = buildFilename(desktopPath)           # timestamp-based filename
-    await fs.writeFile(filename, jsonPayload, "utf8")
-```
-
-**Embedded version constants written into the JSON payload**
-
-| Literal | Purpose | Source byte |
-|---|---|---|
-| `"@anthropic-ai/claude-code"` | Package name field | bundle.js:+11277335 |
-| `"2.1.133"` | Version field | bundle.js:+11277425 |
-| `"https://code.claude.com/docs/en/overview"` | Docs URL field | bundle.js:+11277374 |
-| `"https://github.com/anthropics/claude-code/issues"` | Issues URL field | bundle.js:+11277452 |
-| `"2026-05-07T18:26:46Z"` | Build timestamp | bundle.js:+11277514 |
-| `"cba57ffec4f5d5c279b5f66ea9d7a2544fa410ec"` | Commit hash | bundle.js:+11277545 |
-| `"report the issue at https://github.com/anthropics/claude-code/issues"` | Support note | bundle.js:+11277252 |
-
-Analysis basis: CC v2.1.133 bundle.js:+11278091, +11277939, +11278048
-
-**Metrics table column padding**: two-space separator (`"  "`) used between label and value columns.
-Analysis basis: CC v2.1.133 bundle.js:+14179363
-
----
-
-### Phase 4 — Heap Snapshot Generation (`writeHeapSnapshot`)
-
-```
-function writeHeapSnapshot(desktopPath):
-    # Generate snapshot via Bun JSC API
-    snapshot = Bun.generateHeapSnapshot("v8", "arraybuffer")
-
-    # Write raw binary arraybuffer to disk synchronously
-    fs.writeFileSync(join(desktopPath, snapshotFilename), snapshot)
-
-    # Trigger a full garbage-collection cycle after capture
-    Bun.gc(true)
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+11278580, +11278600, +11278657
-
-**Heap snapshot format constants**
-
-| Literal | Purpose | Source byte |
-|---|---|---|
-| `"v8"` | Snapshot format passed to `Bun.generateHeapSnapshot` | bundle.js:+11278625 |
-| `"arraybuffer"` | Output encoding passed to `Bun.generateHeapSnapshot` | bundle.js:+11278630 |
-
-The snapshot file format is compatible with Chrome DevTools Memory panel (`.heapsnapshot`).
-
----
-
-### Phase 5 — Telemetry Emission (`emitTelemetry`)
-
-```
-function emitTelemetry(metrics):
-    fire event "tengu_heap_dump" with:
-        trigger  = "manual"       # literal
-        exitCode = 0              # literal; indicates success
-```
-
-Analysis basis: CC v2.1.133 bundle.js:+11278233, +11277619, +11277630
-
----
-
-### Phase 6 — Output Formatting (`formatOutputLines`)
-
-```
-function formatOutputLines(metrics, desktopPath, snapshotPath):
-    lines = []
-
-    # Build the metrics table header and rows
-    # Column widths computed via Math.max across all row labels (padEnd alignment)
-    for each metric row:
-        lines.push(label.padEnd(maxLabelWidth, " ") + "  " + value)
-
-    # Memory composition annotation
-    # Threshold: 1 073 741 824 bytes (1 GiB) used as scale reference
-    if jsHeapBytes > nativeBytes:
-        lines.push("— most memory is JS heap (inspect the .heapsnapshot)")
-    else:
-        lines.push("— most memory is native (NOT in the .heapsnapshot)")
-
-    # Leak indicator line
-    if noLeakIndicators:
-        lines.push("  (no obvious leak indicators)")
-
-    # DevTools guidance (always appended)
-    lines.push(
+async function heapdumpHandler(context):
+    statsReport  = await collectAndWriteStats(context)
+    summaryLines = buildSummary(statsReport)
+    summaryLines.push(
         "Open the .heapsnapshot in Chrome DevTools → Memory → Load to inspect retainers."
     )
-
-    # Label column width computed per table using Math.max, step 8
-    # (alignment constant: 8)
-
-    return lines.join("\n")
+    return { type: "text", content: summaryLines.join("\n") }
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11279019, +11279046, +11279168, +11279275, +11279343, +11279403, +11279540, +11279675, +11279949, +11279056
-
-**Output string literals**
-
-| Literal | Purpose | Source byte |
-|---|---|---|
-| `"— most memory is JS heap (inspect the .heapsnapshot)"` | JS-heap-dominant annotation | bundle.js:+11279343 |
-| `"— most memory is native (NOT in the .heapsnapshot)"` | Native-dominant annotation | bundle.js:+11279403 |
-| `"  (no obvious leak indicators)"` | Clean-bill note | bundle.js:+11279540 |
-| `"Open the .heapsnapshot in Chrome DevTools → Memory → Load to inspect retainers."` | DevTools guidance | bundle.js:+11279056 |
-| `"auto-1.5GB"` | V8 heap-size limit label (included in metrics table) | bundle.js:+11278299 |
-| `1 073 741 824` | 1 GiB reference constant used in output logic | bundle.js:+11279949 |
-| `8` | Column alignment step size | bundle.js:+11279675 |
-
-**Return type**: `"text"` — the command returns a plain-text message, not a React/JSX component.
-Analysis basis: CC v2.1.133 bundle.js:+11278932
+Analysis basis: CC v2.1.133 bundle.js:+11278900, +11279046, +11279168
 
 ---
 
-### Error Handling (`handleError`)
+### 2. Memory Statistics Collector (`collectMemoryStats` / `LY7`)
+
+Gathers all memory metrics in a single async pass. Uses Linux-specific `/proc` paths when available and falls back gracefully.
 
 ```
-function handleError(err):
-    # Wrap raw errors into a normalized error object
-    normalized = Error(String(err))
+async function collectMemoryStats():
+    stats = {}
 
-    # Push error into the shared error display channel (cyH)
-    # Log via yQ.logError at level "error"
-    logError("error", normalized)
+    // Node/Bun built-in metrics
+    stats.memoryUsage      = process.memoryUsage()
+    stats.heapStatistics   = v8module.getHeapStatistics()         // Qz8 = v8 module
+    stats.resourceUsage    = process.resourceUsage()
+    stats.uptime           = process.uptime()
+    stats.heapSpaceStats   = v8module.getHeapSpaceStatistics()
 
-    # Surface error string to the caller for display in the CLI output
-    return normalized
+    // Active handles / requests (internal Node diagnostics)
+    stats.activeHandles    = process._getActiveHandles().length
+    stats.activeRequests   = process._getActiveRequests().length
+
+    // Linux /proc entries (best-effort)
+    try:
+        fdEntries          = await fs.readdir("/proc/self/fd")     // loc_byte 11275375/11275387
+        stats.openFdCount  = fdEntries.length
+    catch: stats.openFdCount = null
+
+    try:
+        smaps              = await fs.readFile(                    // loc_byte 11275437/11275450
+                                 "/proc/self/smaps_rollup", "utf8")
+        stats.smapsRollup  = parseSmaps(smaps)
+    catch: stats.smapsRollup = null
+
+    // bun:jsc module (available only under Bun runtime)          // loc_byte 11275535
+    try:
+        jscStats           = require("bun:jsc").getHeapStatistics()
+        stats.jscHeap      = jscStats
+    catch: stats.jscHeap = null
+
+    // Compute native memory delta
+    // Scale: 1 048 576 bytes per MiB (loc_byte 11275681)
+    // Time window cap: 3 600 seconds (loc_byte 11275676)
+    stats.nativeDeltaMiB   = computeNativeDelta(stats)
+
+    // Leak heuristic threshold: 100 MiB above heap (loc_byte 11275828)
+    if stats.nativeDeltaMiB > 100:
+        stats.leakWarning  =
+            "Native memory > heap - leak may be in native addons (node-pty, sharp, etc.)"
+                                                                    // loc_byte 11275914
+
+    return stats
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+11278402, +11278415, +912461, +912821, +912861
+Analysis basis: CC v2.1.133 bundle.js:+11277643 (call to `LY7`), +11275144–11275729 (body of `LY7`)
 
 ---
 
-### Log-Level / Debug Output (`logLine`)
+### 3. Desktop Path Resolver (`resolveDesktopPath` / `Rq_`)
 
-The implementation calls a general-purpose log-line helper (`v6`) at multiple points.
-Log level `"debug"` is used for internal trace output.
-Analysis basis: CC v2.1.133 bundle.js:+11277643, +11276190, +162555
+Determines the correct Desktop folder across platforms.
+
+```
+function resolveDesktopPath(platform):
+    homeDir = os.homedir()                               // ky8.homedir — loc_byte 955370
+
+    if platform == "windows":                            // loc_byte 955434
+        // WSL path: /mnt/c/Users/<username>/Desktop   // loc_byte 955638
+        // Skips: Public, Default, "Default User",
+        //        "All Users"                           // loc_byte 955682–955746
+        return deriveWindowsDesktop(homeDir)
+
+    // macOS / Linux default
+    return path.join(homeDir, "Desktop")                 // loc_byte 955406/955416
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+11277939 (call to `Rq_`), +955363–955855 (body of `Rq_`)
 
 ---
 
-### Metrics Table Formatting Detail (`formatMetricsTable`)
+### 4. Stats File Writer (`collectAndWriteStats` / `O$q`)
+
+Orchestrates stat collection, path resolution, and writing both output files.
 
 ```
-function formatMetricsTable(rows):
-    # rows: array of [label, value] pairs
-    maxWidth = Math.max(...rows.map(r => r[0].length))
-    # Align to next multiple of 8
-    alignedWidth = Math.ceil(maxWidth / 8) * 8
+async function collectAndWriteStats(context):
+    stats      = await collectMemoryStats()              // LY7
+    desktopDir = resolveDesktopPath(platform)            // Rq_
+    outputDir  = path.join(desktopDir, ...)              // KRA.join — loc_byte 11278048
 
-    return rows.map(([label, value]):
-        paddedLabel = label.padEnd(alignedWidth, " ")
-        return paddedLabel + "  " + value
-    ).join("\n")
+    // Write JSON stats report (permissions mode 0o600 = 384 decimal)
+    // loc_byte 11278091, mode value loc_byte 11278126
+    await fs.writeFile(outputPath, toJSON(stats), { mode: 384 })
+
+    emitTelemetry("tengu_heap_dump")                     // loc_byte 11278233
+
+    // Generate heap snapshot
+    await writeHeapSnapshot(outputDir)                   // KY7
+
+    return stats
 ```
 
-Analysis basis: CC v2.1.133 bundle.js:+14179329, +14179342, +11279275, +11279675
+Analysis basis: CC v2.1.133 bundle.js:+11277643–11278415 (body of `O$q`)
+
+---
+
+### 5. Heap Snapshot Writer (`writeHeapSnapshot` / `KY7`)
+
+Branches on runtime identity to invoke the appropriate snapshot API.
+
+```
+async function writeHeapSnapshot(outputDir):
+    if runtime == "bun":
+        // Bun path                                     // loc_byte 11278600
+        snapshot = Bun.generateHeapSnapshot()
+        Bun.gc(true)                                    // force GC — loc_byte 11278657
+        fs.writeFileSync(snapshotPath, snapshot)        // $$q.writeFileSync — loc_byte 11278580
+
+    else:
+        // V8/Node path — format: "v8", encoding: "arraybuffer"
+        // loc_byte 11278625 / 11278630
+        v8.writeHeapSnapshot(snapshotPath)
+
+    // Heap memory auto-threshold label: "auto-1.5GB"   // loc_byte 11278299
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+11278182 (call to `KY7`), +11278580–11278657 (body of `KY7`)
+
+---
+
+### 6. Summary Builder (`buildSummary` / `MY7`)
+
+Produces the human-readable output returned to the user.
+
+```
+function buildSummary(stats):
+    lines = []
+    jsHeapMiB    = stats.memoryUsage.heapUsed / 1_073_741_824  // 1 GiB constant — loc_byte 11279949
+    nativeMiB    = stats.nativeDeltaMiB
+
+    // Columns formatted with Math.max padding (loc_byte 11279275)
+    // Column width: 8 characters (loc_byte 11279675)
+
+    if nativeMiB > jsHeapMiB:
+        lines.push("— most memory is native (NOT in the .heapsnapshot)")
+                                                         // loc_byte 11279403
+    else:
+        lines.push("— most memory is JS heap (inspect the .heapsnapshot)")
+                                                         // loc_byte 11279343
+
+    if not stats.leakWarning:
+        lines.push("  (no obvious leak indicators)")     // loc_byte 11279540
+
+    // GiH appended — platform label "macos" or "darwin" (loc_byte 11276768 / 11277187)
+    // Fallback: "No obvious leak indicators. Check heap snapshot for retained objects."
+    //           (loc_byte 11277033)
+
+    return lines
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+11279019 (call to `MY7`), +11279275–11279587 (body of `MY7`)
 
 ---
 
@@ -359,15 +262,14 @@ Analysis basis: CC v2.1.133 bundle.js:+14179329, +14179342, +11279275, +11279675
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_heap_dump` fired once per invocation (bundle.js:+11278233) |
-| Files written | One JSON diagnostics file and one `.heapsnapshot` binary file, both on `~/Desktop` (or WSL Windows Desktop) |
-| Bun GC | `Bun.gc(true)` is called synchronously after heap snapshot generation (bundle.js:+11278657) |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Error channel | Errors are pushed into the shared error display array and logged via `yQ.logError` (bundle.js:+912821, +912861) |
-| Active handles/requests | Counted via `process._getActiveHandles()` and `process._getActiveRequests()` — read-only, no mutation (bundle.js:+11275287, +11275324) |
-| Return type | `"text"` plain-text response (bundle.js:+11278932) |
+| Telemetry | `tengu_heap_dump` (loc_byte 11278233) — fired once per invocation after stats file is written. All other `tengu_bg_*` events in the traversal originate from shared background-dispatch infrastructure, not from `/heapdump` itself. |
+| File I/O — stats JSON | Written to `~/Desktop/<name>.json` with Unix permission mode `0o600` (decimal 384, loc_byte 11278126) |
+| File I/O — heap snapshot | Written to `~/Desktop/<name>.heapsnapshot` via `Bun.generateHeapSnapshot` (Bun) or `v8.writeHeapSnapshot` (Node) |
+| GC side effect | Under Bun runtime, `Bun.gc(true)` is called immediately after snapshot generation (loc_byte 11278657), forcing a full garbage collection |
+| `/proc` reads | Attempts `readdir("/proc/self/fd")` and `readFile("/proc/self/smaps_rollup")` on Linux; errors are silently swallowed (loc_byte 11275375, 11275450) |
+| `appState` changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Sound | None observed |
+| Hook registration | None observed |
 
 ---
 
@@ -375,18 +277,23 @@ Analysis basis: CC v2.1.133 bundle.js:+14179329, +14179342, +11279275, +11279675
 
 | Version | Change |
 |---|---|
-| v2.1.133 | Initial analysis; command confirmed present, hidden, and non-interactive-capable |
+| v2.1.133 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Running on a platform without a Desktop directory**: On headless Linux servers `~/Desktop` typically does not exist. The command will fail to write files. Create the directory manually (`mkdir -p ~/Desktop`) before invoking `/heapdump`.
-2. **Expecting output in the working directory**: Both the `.heapsnapshot` and the JSON diagnostics file are always written to the Desktop path, never to the current working directory or the project root.
-3. **Ignoring the native-vs-heap annotation**: When the output reads `"— most memory is native (NOT in the .heapsnapshot)"`, opening the `.heapsnapshot` in Chrome DevTools will not show the dominant allocation. Investigate native addons (e.g., `node-pty`, `sharp`) instead.
-4. **Not running on Bun**: Heap snapshot generation calls `Bun.generateHeapSnapshot`. Running Claude Code under plain Node.js will cause this phase to throw.
-5. **Misreading the JSON diagnostics file as the heap snapshot**: The JSON file contains numeric metrics and metadata; the `.heapsnapshot` file is the binary V8 snapshot. Only the `.heapsnapshot` can be loaded into Chrome DevTools → Memory.
-6. **WSL path resolution edge cases**: On WSL, the command scans `/mnt/c/Users` and skips `Public`, `Default`, `Default User`, and `All Users`. If the Windows user profile name matches one of these (unlikely but possible for `Default`-prefixed names), path resolution may pick the wrong directory.
+1. **Expecting output in the current working directory.** The command always writes to `~/Desktop` (or the WSL equivalent), never to the project directory. If the Desktop directory does not exist on a headless Linux system the write will fail with `ENOENT`.
+
+2. **Running on a system without a Desktop folder.** CI environments and Docker containers typically lack `~/Desktop`. Create the directory manually before invoking the command, or the stats file and snapshot will not be produced.
+
+3. **Inspecting the `.heapsnapshot` with a text editor.** The heap snapshot is a large JSON graph format intended for Chrome DevTools (Memory tab → Load Profile). Opening it as text is rarely useful; the command's own summary output is the first place to look for actionable information.
+
+4. **Confusing native-memory warnings with JS leaks.** The heuristic threshold of 100 MiB (loc_byte 11275828) only flags when native allocations exceed the JS heap by that margin. The warning text explicitly names the likely culprits (`node-pty`, `sharp`, etc.) — the `.heapsnapshot` itself will **not** contain native allocations.
+
+5. **Calling the command in an environment where Bun APIs are unavailable and expecting Bun output.** Under a standard Node.js runtime the `Bun.generateHeapSnapshot` / `Bun.gc` path is skipped entirely; the V8 code path is used instead and the snapshot format differs slightly.
+
+6. **Assuming the command is visible in `/help`.** The registration sets `isHidden: true`, so the command does not appear in user-facing help listings and must be typed in full.
 
 ---
 
@@ -396,19 +303,53 @@ Analysis basis: CC v2.1.133 bundle.js:+14179329, +14179342, +11279275, +11279675
 
 | Identifier | Role |
 |---|---|
-| `fY7` | Command entry-point function; orchestrates output assembly and delegates to `O$q` |
-| `O$q` | Core execution function; coordinates all phases (metrics → path → write → telemetry → format) |
-| `v6` | General-purpose log-line / debug output helper |
-| `LY7` | Memory metrics collection function (`collectMemoryMetrics`) |
-| `k` | Log-level / debug-output routing helper (uses `"debug"` level) |
-| `L` | Metrics table formatting function (`formatMetricsTable`; uses `padEnd`) |
-| `Rq_` | Desktop path resolution function (`resolveDesktopPath`) |
-| `F6` | Path join / filesystem utility helper |
-| `SH` | JSON serialization helper (wraps `JSON.stringify`) |
-| `KY7` | Heap snapshot write function (`writeHeapSnapshot`; calls `Bun.generateHeapSnapshot`, `Bun.gc`) |
-| `d` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> (called from `O$q` at bundle.js:+11278231) |
-| `HA` | Error normalization helper (wraps `Error(String(raw))`) |
-| `fH` | Error dispatch / surface helper; pushes to error channel and calls `yQ.logError` |
-| `MY7` | Output line formatting function (`formatOutputLines`; uses `Math.max`, `GiH`) |
-| `GiH` | Sub-helper called within output formatting (role: <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->) |
-| `A` | Output lines accumulator array (used via `A.push` and `A.join`) |
+| `fY7` | Top-level heapdump handler (AsyncFunction; Arbor-resolved entry point) |
+| `O$q` | Stats-collection + file-write orchestrator (`collectAndWriteStats`) |
+| `LY7` | Memory statistics gatherer (`collectMemoryStats`) |
+| `KY7` | Heap snapshot writer (`writeHeapSnapshot`; calls `Bun.generateHeapSnapshot` or V8) |
+| `MY7` | Human-readable summary builder (`buildSummary`) |
+| `Rq_` | Desktop path resolver (`resolveDesktopPath`; handles macOS/Linux/WSL) |
+| `v6` | Shared utility — likely path/string helper (called from `O$q` and `LY7`) |
+| `a6` | Shared utility — called from `LY7` and `Rq_`; role unclear at depth-2 |
+| `G` | Shared formatting/rendering helper (called from `LY7`) |
+| `AJ6` | Sub-utility called by `G` |
+| `jP8` | Sub-utility called by `G` and `P` |
+| `P` | Connection/transport layer (called from `LY7`; involves `Promise.all`) |
+| `fH` | Error-logging helper (called from `P`, `O$q`, `Rq_`, and `w`) |
+| `HA` | Error constructor wrapper (called from `P` and `O$q`) |
+| `j` | IPC/stream object (buffer concat, index-of, off, setTimeout, subarray operations) |
+| `X` | Buffer/stream accumulator (used by `j`) |
+| `w` | Background session dispatcher (spawns processes, manages memory, kills sessions) |
+| `ff` | Stream finalizer called from `j` |
+| `md7` | Terminal/session multiplexer message handler |
+| `vH` | String converter utility |
+| `k` | Telemetry dispatch / log-level router (emits `"debug"` level) |
+| `Ztq` | Sub-router called by `k` |
+| `xcA` | Sub-utility called by `Ztq` |
+| `H` | General-purpose collection / set-like object (also calls `Math.random`, `setTimeout`) |
+| `SH` | JSON serializer wrapper (`JSON.stringify`) |
+| `A` | Accumulator array used by `fY7` for summary lines |
+| `Uf` | String sanitizer / redactor (inserts `"[REDACTED]"` tokens) |
+| `rnA` | Sub-utility called by `Uf` (maps over token list) |
+| `_` | Lodash-style utility (get, set, values, lastIndexOf, slice, toLowerCase) |
+| `LkH` | File-write helper |
+| `UnA` | Low-level stream writer called by `LkH` |
+| `vtq` | Rotating/append log-file writer |
+| `uNH` | Buffered async writer (uses `setImmediate`, `setTimeout`, join queues) |
+| `aHH` | Log-line formatter |
+| `F6` | Path or format utility (called from `vtq`, `Rq_`, `O$q`) |
+| `dG8` | Date/time formatter |
+| `_iA` | Path joiner utility |
+| `AiA` | File rotation handler (stat, rename, unlink) |
+| `Vtq` | Log-file append/rotate handler |
+| `y1` | Active-set tracker (add/delete/assign) |
+| `L` | Column-padding formatter (map + `padEnd`) |
+| `K` | File-descriptor lifecycle manager (add, delete, finally) |
+| `q` | Temp-file cleaner (unlinkSync on close) |
+| `f` | Async file handle (close, finally) |
+| `d` | Generic disposal/cleanup helper |
+| `GiH` | Platform label emitter (appended to summary by `MY7`) |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

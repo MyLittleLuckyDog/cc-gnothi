@@ -1,13 +1,11 @@
 ---
 type: feature-spec
 feature: "extra-usage"
-cc_version: 2.1.133
-updated: "2026-05-18"
+cc_version: "2.1.133"
 tags: ["extra-usage", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.132
-analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.133 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +13,14 @@ license: "AGPL-3.0-only"
 
 # `/extra-usage`
 
-> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.132
+> Analysis basis: CC v2.1.133 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.133
 
 ---
 
 ## Overview
 
-The `/extra-usage` command allows users to configure extra API usage so that Claude Code can continue operating when subscription usage limits are hit. Depending on the user's account type and organizational role, it either navigates to a usage management page, submits an admin approval request, or initiates a new login flow. The command adapts its behavior to the subscription tier (`pro`/`max`) and organizational context (team/enterprise, admin role) detected at runtime.
+`/extra-usage` allows a Claude Code user to configure or request extra API usage capacity so that work can continue when usage limits have been reached. When invoked, the command inspects the user's subscription tier and organizational role, checks for existing requests, and either sends a new limit-increase request to an admin, opens a browser-based usage settings page, or notifies the user that no action is needed. If the user is not authenticated via OAuth, the command may initiate a login flow before proceeding.
 
 ---
 
@@ -32,319 +30,318 @@ The `/extra-usage` command allows users to configure extra API usage so that Cla
 |---|---|
 | type | `local-jsx` |
 | name | `extra-usage` |
-| description | Configure extra usage to keep working when limits are hit |
-| module_id | `_Z9` |
-| loc_line | 3011 |
+| description | `Configure extra usage to keep working when limits are hit` |
+| loc_byte | `8043940` |
+| loc_byte_end | `8044145` |
+| loc_line | `3011` |
+| module_id | `iZ9` |
+| load_inline | `true` |
+| arbor_handler.name | `sz6` |
+| arbor_handler.fqn | `claude-2.1.133::sz6` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.132 bundle.js:+8033291
+Analysis basis: CC v2.1.133 bundle.js:+8043940
 
 ---
 
 ## Input Branching
 
-The command's top-level dispatch logic (rooted in the command handler `Fz6`) forks across several branches based on account state, subscription type, and organizational role.
+The command has more than three distinct execution branches (unlimited org, non-admin user, pending/dismissed request, successful new request, and browser-open fallback), so a Mermaid flowchart is used.
 
 ```mermaid
 flowchart TD
-    A["/extra-usage invoked"] --> B{User authenticated?}
-    B -- No --> C[Initiate login flow\n'Starting new login following /extra-usage'\nbundle.js:+8032518]
-    B -- Yes --> D{Subscription tier?}
-    D -- pro or max --> E{Org type?}
-    D -- Other / unknown --> F[Open usage settings URL\nbundle.js:+7988287]
-    E -- team or enterprise --> G{User role?}
-    E -- personal --> F
-    G -- admin / billing / owner / primary_owner --> H{Already unlimited\nextra usage?}
-    G -- non-admin --> I[Display message:\n'Please contact your admin\nto manage extra usage settings.'\nbundle.js:+7987606]
-    H -- Yes --> J[Display message:\n'Your organization already has\nunlimited extra usage. No request needed.'\nbundle.js:+7987449]
-    H -- No --> K[Check eligibility via\napi_admin_request_eligibility\nbundle.js:+7985961]
-    K --> L{Existing pending or\ndismissed request?}
-    L -- Yes --> M[Display message:\n'You have already submitted\na request for extra usage to your admin.'\nbundle.js:+7987789]
-    L -- No --> N[POST api_admin_request_create\nbundle.js:+7985386]
-    N --> O{limit_increase\nor enable?}
-    O -- increase --> P[Display:\n'Request sent to your admin\nto increase extra usage.'\nbundle.js:+7987978]
-    O -- enable --> Q[Display:\n'Request sent to your admin\nto enable extra usage.'\nbundle.js:+7988032]
-    F --> R{Admin user?}
-    R -- Yes --> S[Open admin settings URL\nhttps://claude.ai/admin-settings/usage\nbundle.js:+7988246]
-    R -- No --> T[Open user settings URL\nhttps://claude.ai/settings/usage\nbundle.js:+7988287]
-    S --> U[Report 'browser-opened'\nbundle.js:+7988354]
-    T --> U
+    A(["/extra-usage invoked"]) --> B{User authenticated\nvia OAuth?}
+    B -- No --> C[Initiate login flow\n'Starting new login following /extra-usage...']
+    C --> D{Login result}
+    D -- Interrupted --> E[Emit 'Login interrupted'\nand exit]
+    D -- Successful --> F[Emit 'Login successful'\nand continue]
+    F --> G
+    B -- Yes --> G{Fetch org subscription tier}
+    G --> H{Tier is 'pro' or 'max'?}
+    H -- Neither --> I[Check user role\nin organization]
+    I --> J{Role is admin/billing/owner\n/primary_owner?}
+    J -- No --> K[Display: 'Please contact your admin\nto manage extra usage settings.']
+    J -- Yes --> L[Call eligibility API\n'api_admin_request_eligibility']
+    H -- Yes\n'pro'/'max' --> L
+    L --> M{Org already has\nunlimited extra usage?}
+    M -- Yes --> N[Display: 'Your organization already has\nunlimited extra usage. No request needed.']
+    M -- No --> O[Fetch existing requests\n'api_admin_request_list']
+    O --> P{Existing request with\nstatus 'pending' or 'dismissed'?}
+    P -- Yes --> Q[Display: 'You have already submitted\na request for extra usage...']
+    P -- No --> R[Create new request\n'api_admin_request_create'\ntype='limit_increase']
+    R --> S{Currently has\nsome extra usage?}
+    S -- Yes --> T[Display: 'Request sent to your admin\nto increase extra usage.']
+    S -- No --> U[Display: 'Request sent to your admin\nto enable extra usage.']
+    T --> V[Open browser to admin\nor personal usage settings]
+    U --> V
+    V --> W{User is admin?}
+    W -- Yes --> X[Open 'https://claude.ai/admin-settings/usage']
+    W -- No --> Y[Open 'https://claude.ai/settings/usage']
+    X --> Z([Done])
+    Y --> Z
+    N --> Z
+    Q --> Z
+    K --> Z
+    E --> Z
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+8032251, +8032281, +8032295, +8032335, +8032343, +8032413
+Analysis basis: CC v2.1.133 bundle.js:+8042900, +8042984, +7998098, +7998255, +7998438, +7998627, +7998681, +7998895, +7998936
 
 ---
 
 ## Behavioral Spec
 
-### Authentication Check and Login Flow
+### Main Handler (`sz6`) — Async Entry Point
 
-When the command is invoked and no authenticated session is detected, the command handler triggers a new login flow.
+The handler is an `AsyncFunction` resolved via `module_id → iZ9` by the Arbor symbol graph.
 
 ```
-function handleUnauthenticated():
-    display("Starting new login following /extra-usage. Exit with Ctrl-C to use existing account.")
-    initiate loginFlow()
-    on loginFlow success:
-        display("Login successful")
-        emit telemetry event tengu_ember_latch
-        invoke onChangeAPIKey callback
-    on loginFlow interruption:
-        display("Login interrupted")
+async function handleExtraUsage(context):
+
+    planTier = getSubscriptionPlanInfo()         // checks for "pro" / "max"
+    experimentFlags = fetchExperimentFlags()     // J6: Growthbook experiment state
+
+    isAuthenticated = checkOAuthStatus()         // Z5H / C_ / F7
+    if not isAuthenticated:
+        print("Starting new login following /extra-usage. " +
+              "Exit with Ctrl-C to use existing account.")
+        result = awaitLogin()                    // A.onChangeAPIKey listener
+        if result == INTERRUPTED:
+            print("Login interrupted")
+            return
+        print("Login successful")
+
+    usageStatus = fetchUsageData()              // mL8 orchestrates API calls below
+    renderOrDispatch(usageStatus, planTier)     // H (JSX renderer)
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+8032518, +8032641, +8032660, +8032618, +8032298
+Analysis basis: CC v2.1.133 bundle.js:+8042900, +8043062, +8043097, +8043167, +8043267, +8043290, +8043309
 
 ---
 
-### Subscription Tier Detection
-
-The subscription type resolver examines the user's current subscription and maps it to a known tier string.
+### Authentication Check (`checkOAuthStatus` — `Z5H` / `C_` / `F7`)
 
 ```
-function resolveSubscriptionTier(userState):
-    knownTypes = [
-        "stripe_subscription",
-        "stripe_subscription_contracted",
-        "apple_subscription",
-        "google_play_subscription"
-    ]
-    if userState.subscriptionType in knownTypes:
-        tier = userState.tier  // "pro" or "max"
-        return tier
-    return null
+function checkOAuthStatus():
+    authState = readCurrentAuthState()          // rY: reads env / file descriptors
+    hasOAuth  = Boolean(authState.oauthToken)  // wU wraps Boolean()
+    return hasOAuth
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+8032262, +8032273, +2883978, +2884005, +2884043, +2884069
+The authentication layer (`rY`) reads credential sources in priority order:
+1. `ANTHROPIC_API_KEY` environment variable (bundle.js:+2874043)
+2. `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR` file descriptor (bundle.js:+1997795)
+3. `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR` file descriptor (bundle.js:+1997651)
+4. OAuth token from stored session
+
+Error constant: `"ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required"` (bundle.js:+2874464).
+
+Analysis basis: CC v2.1.133 bundle.js:+2889734, +2889756, +2889310
 
 ---
 
-### Organization Role Check
-
-For team and enterprise organizations, the command checks whether the current user holds an elevated role before allowing admin-level actions.
+### Experiment / Feature-Flag Fetch (`fetchExperimentFlags` — `J6`)
 
 ```
-function isAdminRole(userRole):
-    elevatedRoles = ["admin", "billing", "owner", "primary_owner"]
-    return userRole in elevatedRoles
+function fetchExperimentFlags():
+    flags = loadGrowthbookFlags()              // Bq6, gq6
+    processed = deduplicateAndEmit(flags)      // _d6: checks Ut8 Set, b5H Map
+    for each flag in processed:
+        if not alreadySeen(flag.id):           // Ut8.has / Ut8.add
+            sessionEntry = b5H.get(flag.id)   // b5H.get
+            createExperimentEvent(sessionEntry) // pt8 → Xo.emit "growthbook_experiment"
+            markSeen(flag.id)                  // pq6.add
+    return flags
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+1977758, +1977766, +1977776, +1977784
+Experiment events use the string `"GrowthbookExperimentEvent"` (bundle.js:+3085163) and are emitted as `"growthbook_experiment"` (bundle.js:+3085590). Random bytes of length 32 encoded as `"hex"` are used for session token generation (bundle.js:+3116761, +3116774).
+
+Analysis basis: CC v2.1.133 bundle.js:+8042944, +3091299, +3091336, +3089099
 
 ---
 
-### Eligibility Check (Admin Path)
+### API Layer Orchestrator (`usageOrchestrator` — `mL8`)
 
-For admin-role users in team/enterprise orgs, the command queries the eligibility endpoint before attempting to create a request.
+`mL8` is the central coordinator for all HTTP calls made by `/extra-usage`. It delegates to several sub-functions:
 
 ```
-function fetchEligibility(orgUuid, authToken):
-    endpoint = resolveEndpoint("api_admin_request_eligibility")
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": buildUserAgent(),
-        "x-organization-uuid": orgUuid
-    }
-    timeout = 5000  // ms
-    response = httpGET(endpoint, headers, timeout)
-    return response
+async function usageOrchestrator(authContext):
+
+    // Step 1: Validate subscription plan type
+    planInfo = getAccountPlan(authContext)       // ab → C_, U9, R6
+    if planInfo.type in ["team", "enterprise"]:  // literals +7997937, +7997949
+        checkRoleEligibility(planInfo)
+
+    // Step 2: Check admin request eligibility
+    eligibility = fetchEligibility(authContext)  // TZ9: GET api_admin_request_eligibility
+
+    // Step 3: List existing admin requests
+    existingRequests = listRequests(authContext) // EZ9: GET api_admin_request_list
+
+    // Step 4: If appropriate, create a new request
+    newRequest = createRequest(authContext)      // GZ9: POST api_admin_request_create
+
+    // Step 5: Handle errors via isAxiosError check
+    handleErrors(response)                       // Oy4
+
+    // Step 6: Open browser
+    openUsagePage(isAdmin)                       // ML → Y8 → GA
 ```
 
-Timeout constant: 5000 ms (bundle.js:+7986665)
-
-Analysis basis: CC v2.1.132 bundle.js:+7985961, +7986055, +7986591, +7986606, +7986625, +7986665
+Analysis basis: CC v2.1.133 bundle.js:+7997926, +7997966, +7997994, +7998187, +7998347, +7998541, +7998755, +7999053
 
 ---
 
-### Existing Request Detection
-
-Before submitting a new admin request, the command checks whether a request with status `pending` or `dismissed` already exists.
+### Eligibility Check (`fetchEligibility` — `TZ9`)
 
 ```
-function hasExistingRequest(requestList):
-    for request in requestList:
-        if request.status == "pending" or request.status == "dismissed":
-            return true
-    return false
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+7987720, +7987730, +7987789
-
----
-
-### Admin Request List Fetch
-
-```
-function fetchAdminRequestList(orgUuid, authToken):
-    endpoint = resolveEndpoint("api_admin_request_list")
-    headers = buildHeaders(orgUuid, authToken)
-    response = httpGET(endpoint, headers)
+async function fetchEligibility(auth):
+    orgUuid = getOrganizationUUID()              // Rz; error if absent: +6443033
+    headers = buildHeaders(orgUuid)              // includes "x-organization-uuid" +7996704
+                                                 // "anthropic-version": "2023-06-01" +6443913
+    response = httpClient.get(
+        endpoint: "api_admin_request_eligibility",  // literal +7996610
+        headers: headers
+    )                                            // X8.get +7996841
+    if response indicates unlimited usage:
+        return { unlimited: true,
+                 message: "Your organization already has unlimited extra usage. No request needed." }
+                                                 // literal +7998098
     return response.data
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+7985649
+If the user is on a `team` or `enterprise` plan but lacks an eligible role (`admin`, `billing`, `owner`, `primary_owner` — literals at +1983239, +1983247, +1983257, +1983265), the message `"Please contact your admin to manage extra usage settings."` is shown (bundle.js:+7998255).
+
+Analysis basis: CC v2.1.133 bundle.js:+7996607, +7996687, +7996698, +7996704, +7996734, +7996841
 
 ---
 
-### Admin Request Creation
+### List Existing Requests (`listRequests` — `EZ9`)
 
 ```
-function createAdminRequest(orgUuid, authToken, requestType):
-    endpoint = resolveEndpoint("api_admin_request_create")
-    headers = buildHeaders(orgUuid, authToken)
-    body = { type: "limit_increase" }  // requestType determined by org state
-    response = httpPOST(endpoint, headers, body)
-    if response.type == "limit_increase":
-        display("Request sent to your admin to increase extra usage.")
+async function listRequests(auth):
+    orgUuid = getOrganizationUUID()
+    response = httpClient.get(
+        endpoint: "api_admin_request_list",   // literal +7996298
+        headers: buildHeaders(orgUuid)
+    )                                         // X8.get +7996548
+    pendingOrDismissed = response.data.filter(
+        r => r.status == "pending" or r.status == "dismissed"
+    )                                         // literals +7998369, +7998379
+    if pendingOrDismissed.length > 0:
+        return { alreadyRequested: true,
+                 message: "You have already submitted a request for extra usage to your admin." }
+                                              // literal +7998438
+    return { alreadyRequested: false, existing: response.data }
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+7996295, +7996368, +7996379, +7996415, +7996548, +7998369, +7998379
+
+---
+
+### Create Admin Request (`createRequest` — `GZ9`)
+
+```
+async function createRequest(auth):
+    orgUuid = getOrganizationUUID()
+    payload = { type: "limit_increase" }      // literal +7998191
+    response = httpClient.post(
+        endpoint: "api_admin_request_create", // literal +7996035
+        body: payload,
+        headers: buildHeaders(orgUuid)
+    )                                         // X8.post +7996231
+    if currentlyHasSomeExtraUsage:
+        print("Request sent to your admin to increase extra usage.")  // +7998627
     else:
-        display("Request sent to your admin to enable extra usage.")
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+7985386, +7987542, +7987978, +7988032
-
----
-
-### Error Handling for API Calls
-
-The command wraps HTTP calls with an Axios error classifier and a generic error boundary.
-
-```
-function handleAPIError(error):
-    if isAxiosError(error):
-        if error.status == 500:
-            extractAndDisplay(error.response, "detail")
-        else:
-            logError(error, "error")
-    else:
-        raise error
-```
-
-HTTP 500 status constant: 500 (bundle.js:+7986946)
-
-Analysis basis: CC v2.1.132 bundle.js:+7986863, +7986946, +7987152, +911916, +911941
-
----
-
-### 401 Token Refresh and Retry
-
-The HTTP fetch layer implements a single 401-triggered token refresh and retry.
-
-```
-function fetchWithRefresh(request, authState):
-    response = httpRequest(request)
-    if response.status == 401:
-        refreshedToken = refreshAuthToken(authState)
-        retryResponse = httpRequest(request, refreshedToken)
-        logInfo(" (401→refresh→retry succeeded)")
-        return retryResponse
+        print("Request sent to your admin to enable extra usage.")    // +7998681
     return response
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+7986733
+Analysis basis: CC v2.1.133 bundle.js:+7996032, +7996107, +7996118, +7996154, +7996231
 
 ---
 
-### API Usage Fetch
-
-A separate usage-fetch call retrieves the current usage data for display.
+### Browser Open (`openUsagePage` — `ML` / `Y8` / `GA`)
 
 ```
-function fetchAPIUsage(orgUuid, authToken):
-    endpoint = resolveEndpoint("api_usage_fetch")
-    headers = buildHeaders(orgUuid, authToken)
-    response = httpGET(endpoint, headers)
-    return response.data
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+7986290
-
----
-
-### Browser URL Opening
-
-When redirecting the user to a web settings page, the command selects the appropriate URL based on admin status and opens it using a platform-specific method.
-
-```
-function openBrowserURL(isAdmin):
+function openUsagePage(isAdmin):
     if isAdmin:
-        url = "https://claude.ai/admin-settings/usage"
+        url = "https://claude.ai/admin-settings/usage"   // literal +7998895
     else:
-        url = "https://claude.ai/settings/usage"
+        url = "https://claude.ai/settings/usage"         // literal +7998936
 
     platform = process.platform
-    if platform == "darwin":
-        exec("open", url)
-    elif platform == "win32":
-        exec("rundll32", "url,OpenURL", url)
+    if platform == "darwin":                              // literal +7365999
+        exec("open", url)                                // literal +7366173
+    elif platform == "win32":                            // literal +7366015
+        exec("rundll32", "url,OpenURL", url)             // literals +7366099, +7366111
     else:
-        exec("xdg-open", url)
+        exec("xdg-open", url)                            // literal +7366180
 
-    report("browser-opened")
+    emit("browser-opened")                               // literal +7999003
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+7988246, +7988287, +7988354, +7355523, +7355558, +7355574, +7355658, +7355670, +7355732, +7355739
+URL scheme validation accepts only `"http:"` and `"https:"` protocols (bundle.js:+7365727, +7365749). An error is thrown for any other scheme.
+
+Analysis basis: CC v2.1.133 bundle.js:+7999053, +7366048, +7365964, +7365677
 
 ---
 
-### Telemetry Latch (Login Path)
-
-When a new login is completed following `/extra-usage`, the command fires a single telemetry event and invokes the API key change callback.
+### HTTP Client and Retry Logic (`nQH` / `lV` / `FP`)
 
 ```
-function onLoginSuccess(apiKey):
-    emit("tengu_ember_latch")
-    invokeCallback(onChangeAPIKey, apiKey)
+async function makeApiRequest(config):
+    headers = {
+        "Content-Type": "application/json",   // +7997240, +7997255
+        "User-Agent": buildUserAgent(),        // +7997274
+        ...authHeaders
+    }
+    try:
+        response = await httpClient.request(config, headers, timeout=5000)  // +7997314
+    catch error:
+        if isAxiosError(error) and error.status == 401:
+            // Refresh token then retry once
+            refreshToken()
+            response = await httpClient.request(config, headers)
+            log(" (401→refresh→retry succeeded)")         // literal +7997382
+        elif isAxiosError(error) and error.status in [500]:
+            handleServerError(error.response.data.detail) // +7997595, +7997801
+        else:
+            rethrow(error)
+    return response
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+8032298, +8032618
+Request caching uses a 300,000 ms (5-minute) TTL (bundle.js:+1989872). The `Ea8` Map stores cached responses; `tQ` manages get/set/delete on this cache (bundle.js:+2885589, +2885640, +2885663).
+
+Analysis basis: CC v2.1.133 bundle.js:+7997221, +7997255, +7997274, +7997314, +7997382
 
 ---
 
-### Random Delay Utility
-
-A jitter utility is used in retry or polling paths within the implementation.
+### Organization UUID Resolution (`getOrganizationUUID` — `Rz`)
 
 ```
-function randomDelay(maxMs):
-    delayMs = Math.random() * maxMs  // maxMs constant: 2 (used as multiplier)
-    setTimeout(resolve, delayMs)
+async function getOrganizationUUID(auth):
+    org = await fetchCurrentOrganization()    // A7 → Va8
+    if not auth.isWebSession:
+        throw Error("Claude Code web sessions require authentication with a Claude.ai account..." )
+                                              // literal +6442794
+    uuid = org.uuid
+    if not uuid:
+        throw Error("Unable to get organization UUID")  // literal +6443033
+    return uuid
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+12264285, +12264322, +12264283
+Analysis basis: CC v2.1.133 bundle.js:+6442739, +6442750, +6442788, +6443010
 
 ---
 
-### API Key Environment Variable Resolution
+### Feature Flag (`tengu_ember_latch`) Check
 
-The command checks for an `ANTHROPIC_API_KEY` environment variable and an `apiKeyHelper` configuration value when resolving credentials.
+At the start of the handler, `sz6` fires a telemetry event `tengu_ember_latch` (bundle.js:+8042947) and reads the result of `J6` (experiment state). This appears to gate the command under an internal A/B or feature-flag experiment before any API calls are made.
 
-```
-function resolveAPIKey(config):
-    envKey = process.env["ANTHROPIC_API_KEY"]
-    if envKey != null and envKey != "":
-        return envKey
-    helperKey = config["apiKeyHelper"]
-    return helperKey
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+2866642, +2866652, +2866677
-
----
-
-### Telemetry Traffic Classification
-
-The network layer classifies outbound telemetry as `essential-traffic` or `no-telemetry`, with a `default` fallback.
-
-```
-function classifyTraffic(requestType):
-    if requestType == "essential":
-        return "essential-traffic"
-    elif requestType == "disabled":
-        return "no-telemetry"
-    else:
-        return "default"
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+910466, +910525, +910599
+Analysis basis: CC v2.1.133 bundle.js:+8042947
 
 ---
 
@@ -352,13 +349,18 @@ Analysis basis: CC v2.1.132 bundle.js:+910466, +910525, +910599
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_ember_latch` — emitted on successful login completion following `/extra-usage` (bundle.js:+8032298) |
-| Hook registration | `onChangeAPIKey` callback invoked after login success (bundle.js:+8032618) |
-| appState changes | Auth state updated on login completion; API key stored |
-| Browser | Opens `https://claude.ai/admin-settings/usage` (admin) or `https://claude.ai/settings/usage` (non-admin) via platform-native launcher (bundle.js:+7988246, +7988287) |
-| Network | HTTP GET to `api_usage_fetch`, `api_admin_request_eligibility`, `api_admin_request_list`; HTTP POST to `api_admin_request_create` |
-| Error logging | Axios errors logged via `EQ.logError` with severity `"error"` (bundle.js:+911941) |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry: `tengu_ember_latch` | Fired at command entry (bundle.js:+8042947); likely a feature-gate experiment latch |
+| Telemetry: `tengu_feature_ok` | Fired on successful feature flag resolution (bundle.js:+907381) |
+| Telemetry: `tengu_feature_bad` | Fired on failed feature flag resolution (bundle.js:+907437) |
+| Growthbook experiment event | Emitted via `Xo.emit` as `"growthbook_experiment"` for each unseen experiment flag (bundle.js:+3085544, +3085590) |
+| `browser-opened` event | Emitted after OS browser launch (bundle.js:+7999003) |
+| Request cache (`Ea8` Map) | Stores API responses with 300,000 ms TTL; reads and writes during HTTP calls (bundle.js:+1989872) |
+| Seen-experiments set (`Ut8`) | Tracks which Growthbook experiment IDs have been processed in this session (bundle.js:+3089099, +3089139) |
+| Processed-experiments set (`pq6`) | Secondary deduplication set for experiment event emission (bundle.js:+3091411) |
+| Login state change listener | `A.onChangeAPIKey` registered when unauthenticated login flow is triggered (bundle.js:+8043267) |
+| Error log (`yQ.logError`) | Errors during HTTP fetch are pushed to in-memory error log and logged (bundle.js:+912861) |
+| Request history buffer (`AN6`) | Rolling buffer of recent requests managed by `NJL` (shift/push, bundle.js:+912141, +912153) |
+| Sound | None detected in depth-2 traversal |
 
 ---
 
@@ -366,18 +368,21 @@ Analysis basis: CC v2.1.132 bundle.js:+910466, +910525, +910599
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis |
+| v2.1.133 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Running `/extra-usage` as a non-admin member of a team/enterprise org** — the command will display "Please contact your admin to manage extra usage settings." and take no further action. Only users with roles `admin`, `billing`, `owner`, or `primary_owner` can submit requests.
-2. **Expecting immediate effect after submitting a request** — the POST to `api_admin_request_create` only sends a request to the org admin; actual approval and enablement is performed outside Claude Code.
-3. **Submitting a duplicate request** — if a `pending` or `dismissed` request already exists for the organization, the command will display "You have already submitted a request for extra usage to your admin." and refuse to create another.
-4. **Assuming the browser will open for all account types** — browser-based URL opening is only triggered for personal/non-enterprise accounts or when the admin path is taken. Team/enterprise admins are routed through the in-CLI request flow.
-5. **Interrupting login with Ctrl-C** — if the user exits the login flow started by `/extra-usage`, the session remains unauthenticated and the command's intent is not fulfilled. The message "Login interrupted" is displayed.
-6. **Setting `ANTHROPIC_API_KEY` in the environment while also having `apiKeyHelper` configured** — the environment variable takes precedence; the `apiKeyHelper` value is ignored when `ANTHROPIC_API_KEY` is non-empty (bundle.js:+2866652).
+1. **Running `/extra-usage` without OAuth authentication** — The command requires an OAuth session (not just an API key). If only `ANTHROPIC_API_KEY` is set, the command will launch the full login flow before proceeding. Ensure you have authenticated via `/login` first.
+
+2. **Expecting an instant result on `team`/`enterprise` plans as a non-admin** — If your role is not `admin`, `billing`, `owner`, or `primary_owner`, the command will display the contact-your-admin message and exit without making any API request to create a limit-increase.
+
+3. **Re-running the command after a pending request** — If a previous request with status `"pending"` or `"dismissed"` exists, `/extra-usage` will inform you that a request is already on record and will not create a duplicate.
+
+4. **Assuming the browser opens immediately** — The browser-open step (`ML`) happens only after the create-request API call succeeds. Network errors (especially HTTP 500) are handled separately and may prevent the browser from opening.
+
+5. **Confusing the `"pro"`/`"max"` plan check with the role check** — Users on `pro` or `max` plans bypass the role eligibility check and proceed directly to the eligibility API call. Only `team`/`enterprise` plan users are subject to the role filter.
 
 ---
 
@@ -387,31 +392,90 @@ Analysis basis: CC v2.1.132 bundle.js:+910466, +910525, +910599
 
 | Identifier | Role |
 |---|---|
-| `Fz6` | Top-level command handler for `/extra-usage` |
-| `F9` | Authentication state reader / session resolver |
-| `wx_` | Auth state accessor (sub-call of session resolver) |
-| `Yx_` | Auth token accessor (sub-call of session resolver) |
-| `nY` | API key and subscription type resolver |
-| `TZ` | Subscription tier classifier |
-| `j6` | Request deduplication / in-flight tracker |
-| `hq6` | Request set initializer |
-| `Rq6` | Request queue processor |
-| `Oo` | In-flight request state accessor |
-| `uQ6` | Request deduplication check and registration |
-| `R6` | HTTP request executor with timestamp and retry |
-| `w5H` | Subscription type to tier mapping utility |
-| `g7` | Combined subscription + request resolver |
-| `R_` | Auth-aware fetch wrapper |
-| `kq` | Traffic classification / network policy resolver |
-| `h1_` | Traffic class tag applicator |
-| `JL8` | Main extra-usage workflow orchestrator |
-| `Qb` | Role-gated action dispatcher |
-| `IQH` | Usage fetch with 401-refresh-retry logic |
-| `fH` | Error handler with logging and telemetry push |
-| `ST9` | Admin request list fetcher |
-| `hT9` | Admin request eligibility fetcher |
-| `yT9` | Admin request creator (POST) |
-| `pN4` | Axios error classifier |
-| `LL` | Cross-platform browser URL opener |
-| `H` | Random jitter / delay utility |
-| `A` | App-level callback registry (holds `onChangeAPIKey`) |
+| `sz6` | Main async handler for `/extra-usage` (Arbor-resolved entry point) |
+| `U9` | Authentication state reader (reads env vars and file descriptors for API key / OAuth token) |
+| `zu_` | Sub-helper called by authentication state reader (credential path A) |
+| `Ou_` | Sub-helper called by authentication state reader (credential path B) |
+| `rY` | Credential resolution orchestrator (reads ANTHROPIC_API_KEY, file descriptors, OAuth) |
+| `HK` | Low-level credential value extractor |
+| `kH` | String coercion / normalization utility |
+| `NS` | OAuth token source handler (claude-desktop path) |
+| `zx6` | Sub-helper under OAuth token source |
+| `o96` | API-key string formatter / helper |
+| `Gr` | OAuth token file descriptor reader (OAUTH_TOKEN_FILE_DESCRIPTOR) |
+| `Wx` | Flag-settings reader (`flagSettings` literal) |
+| `_O` | API key resolution logic (ANTHROPIC_API_KEY env, apiKeyHelper, none fallback) |
+| `Ta8` | Sub-helper under API key resolver |
+| `rT` | Sub-helper under API key resolver |
+| `ZaH` | VSCode context detector (`claude-vscode` literal) |
+| `xB8` | API key file descriptor reader (API_KEY_FILE_DESCRIPTOR) |
+| `R6` | Conversation / session record constructor (uses Date.now) |
+| `OS` | History slicer (`.slice` with max 20 entries) |
+| `XZ` | Plan-tier constant or helper (reads `"pro"` / `"max"` literals) |
+| `J6` | Growthbook experiment flag fetcher and emitter |
+| `Bq6` | Growthbook flag loader (sub-helper A) |
+| `gq6` | Growthbook flag loader (sub-helper B) |
+| `Po` | Growthbook flag processor |
+| `jo` | Experiment event formatter |
+| `Ex` | Experiment dispatcher / router |
+| `_d6` | Experiment deduplicator (checks/updates `Ut8` Set and `b5H` Map) |
+| `pt8` | Experiment event creator and emitter (emits `growthbook_experiment` via `Xo.emit`) |
+| `ePH` | Client-side telemetry helper (`CS`) |
+| `pU` | Session token generator (32 random bytes, hex-encoded) |
+| `SH` | JSON serializer wrapper |
+| `O2K` | Experiment payload builder |
+| `ct8` | Cached experiment fetch helper |
+| `I71` | Experiment cache reader |
+| `mA` | Database accessor (`db`) |
+| `LX1` | Experiment list transformer |
+| `CyH` | JWL set membership checker |
+| `Z5H` | OAuth status check orchestrator |
+| `F7` | OAuth-check sub-path (reads `rY` and `R6`) |
+| `C_` | Boolean auth state wrapper |
+| `wU` | `Boolean()` wrapper for auth flag |
+| `yq` | Telemetry / network tag reader (`essential-traffic`, `no-telemetry`, `default`) |
+| `J9_` | Tag resolution helper |
+| `mL8` | API call orchestrator for extra-usage (coordinates TZ9, EZ9, GZ9, ML, etc.) |
+| `ab` | Account plan / role checker (checks `team`/`enterprise`, `admin`/`billing`/`owner`/`primary_owner`) |
+| `nQH` | Core HTTP request executor with retry/error handling |
+| `h9` | API base-URL resolver |
+| `A` | Base URL constant holder |
+| `hH` | Environment-based URL selector (feature-ok path) |
+| `uH` | Environment-based URL selector (feature-bad path) |
+| `GE` | Auth-state to request-config mapper |
+| `z8H` | Cache TTL checker using `Date.now` (300,000 ms window) |
+| `q_` | OAuth endpoint builder / validator |
+| `q1_` | OAuth endpoint sub-helper |
+| `PwL` | OAuth URL pattern helper |
+| `lV` | 401/403 error handler with token-refresh retry |
+| `H` | Retry back-off helper (Math.random + setTimeout) |
+| `tQ` | Response cache manager (`Ea8` Map get/set/delete) |
+| `FP` | Request auth-header injector (OAuth token or API key path) |
+| `HX` | Header builder that delegates to `_O` |
+| `k` | HTTP request builder / dispatcher (sets headers, calls `Uf`) |
+| `Ztq` | Request signing / finalization helper |
+| `Uf` | URL path constructor (uses `.lastIndexOf`, `.slice`, `[REDACTED]`) |
+| `LkH` | URL normalization helper |
+| `vtq` | File-based request body handler (Buffer.byteLength, gE6) |
+| `b7` | Response body parser |
+| `fH` | HTTP response handler (logs errors via `yQ.logError`, manages `cyH` and `AN6` buffer) |
+| `HA` | Error normalizer (wraps with Error + String) |
+| `NJL` | Rolling request-history buffer manager (`AN6.shift` / `AN6.push`) |
+| `TZ9` | Eligibility API fetcher (`api_admin_request_eligibility` GET) |
+| `Rz` | Organization UUID resolver |
+| `A7` | Organization fetcher sub-helper |
+| `SV` | Auth-session validator for web sessions |
+| `R5` | Request header builder (includes `x-organization-uuid`) |
+| `zAH` | Anthropic-version header builder (`2023-06-01`) |
+| `EZ9` | Admin request list fetcher (`api_admin_request_list` GET) |
+| `GZ9` | Admin request creator (`api_admin_request_create` POST, `limit_increase`) |
+| `Oy4` | Axios error type checker and HTTP error classifier |
+| `ML` | Browser-open orchestrator |
+| `rG4` | URL scheme validator (allows only `http:` and `https:`) |
+| `Y8` | Platform-specific browser launcher (darwin/win32/linux) |
+| `GA` | Browser launch executor (spawns `open`, `rundll32`, or `xdg-open`) |
+| `N6` | Child-process spawner with timeout (10 retries, 1,000,000 ms max) |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

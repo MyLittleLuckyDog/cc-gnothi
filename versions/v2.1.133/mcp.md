@@ -1,13 +1,12 @@
 ---
 type: feature-spec
 feature: "mcp"
-cc_version: 2.1.133
-updated: "2026-05-18"
+cc_version: "2.1.133"
+updated: "2026-05-31"
 tags: ["mcp", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.132
-analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.133 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +14,16 @@ license: "AGPL-3.0-only"
 
 # `/mcp`
 
-> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.132
+> Analysis basis: CC v2.1.133 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.133
 
 ---
 
 ## Overview
 
-The `/mcp` command provides in-session management of Model Context Protocol (MCP) servers. It allows the user to enable, disable, reconnect, or inspect servers by name, and takes effect immediately without requiring a session restart. The command trims and normalizes its input before branching on a recognized sub-command keyword.
+The `/mcp` command provides interactive management of Model Context Protocol (MCP) servers registered with Claude Code. It supports enabling, disabling, and reconnecting individual or all MCP servers, and renders its output as an inline JSX component rather than plain text. The command is executed immediately upon invocation (`immediate: true`) and dispatches to sub-actions based on the trimmed argument string.
+
+---
 
 ## Registration
 
@@ -33,136 +34,161 @@ The `/mcp` command provides in-session management of Model Context Protocol (MCP
 | description | `Manage MCP servers` |
 | argumentHint | `[enable\|disable [server-name]]` |
 | immediate | `true` |
-| module_id | `RAq` |
+| module_id | `z_q` |
+| load_inline | `true` |
+| loc_byte | `10683817` |
+| loc_byte_end | `10683989` |
+| loc_line | `6431` |
+| arbor_handler.name | `rK7` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.fqn | `claude-2.1.133::rK7` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.132 bundle.js:+10666767
+Analysis basis: CC v2.1.133 bundle.js:+10683817
 
 ---
 
 ## Input Branching
 
-The command handler trims whitespace from the raw argument string, converts the first token to lowercase, and routes execution to a sub-feature based on the result.
+The handler parses the trimmed argument string and dispatches across five distinct branches (`no-redirect`, `reconnect`, `enable`, `disable`, and `all`/default listing), requiring a Mermaid flowchart.
 
 ```mermaid
 flowchart TD
-    A([User types /mcp ARGS]) --> B[Trim whitespace from ARGS]
-    B --> C[Extract first token, toLowerCase]
-    C --> D{First token?}
-    D -->|empty / no token| E[Show MCP server list / status panel]
-    D -->|reconnect| F[Slice remainder as server-name\nIncrement reconnect counter\nClose existing transports\nReconnect named server]
-    D -->|enable| G[Slice remainder as server-name\nEnable server or all]
-    D -->|disable| H[Slice remainder as server-name\nDisable server or all]
-    F --> I[Invoke close on primary transport]
-    F --> J[Invoke close on secondary transport]
-    F --> K[Trigger reconnect handler]
-    G -->|server-name = 'all'| L[Enable all configured servers]
-    G -->|specific name| M[Enable named server]
-    H -->|server-name = 'all'| N[Disable all configured servers]
-    H -->|specific name| O[Disable named server]
-    L & M & N & O --> P([Return JSX result panel])
-    E --> P
-    K --> P
-```
+    A(["/mcp called with raw args"]) --> B["Trim whitespace from args\n(bundle.js:+10683288)"]
+    B --> C{Trimmed arg\nvalue?}
 
-Analysis basis: CC v2.1.132 bundle.js:+10666238 (trim), +10666270 (no-redirect flag), +10666347 (reconnect literal), +10666362 (counter increment), +10666414 (slice for server-name), +10666460 (enable literal), +10666477 (disable literal), +10666576 (all literal)
+    C -->|"no-redirect"| D["Render MCP server list\nwithout redirect behavior\n(bundle.js:+10683320)"]
+
+    C -->|"reconnect"| E["Slice args to extract\nserver name token\n(bundle.js:+10683464)"]
+    E --> F["Iterate active server connections\n(lowercase comparison)\n(bundle.js:+14181260)"]
+    F --> G["Close existing stdio/socket\nconnections for matched server\n(bundle.js:+14167103, +14167113)"]
+    G --> H["Remove temp socket file\nif present\n(bundle.js:+14137065)"]
+    H --> I["Re-establish connection via\nconnection manager\n(bundle.js:+14167253)"]
+    I --> J["Track connection in active\nset; clean up on finish\n(bundle.js:+14161309, +14161332)"]
+
+    C -->|"enable [server-name]"| K["Enable named server\nor prompt for selection\n(bundle.js:+10683510)"]
+
+    C -->|"disable [server-name]"| L["Disable named server\nor prompt for selection\n(bundle.js:+10683527)"]
+
+    C -->|"all  or  empty / other"| M["List all registered MCP\nservers and their status\n(bundle.js:+10683626)"]
+
+    D --> Z([Return JSX component])
+    J --> Z
+    K --> Z
+    L --> Z
+    M --> Z
+```
 
 ---
 
 ## Behavioral Spec
 
-### Input Normalization
+### 1. Argument Normalization
+
+The handler is the async function `rK7` (Arbor resolution: `module_id` path from module `z_q`).
 
 ```
-function normalizeInput(rawArgs):
-    trimmed = trim(rawArgs)                     // whitespace stripped both ends
-    firstToken = split(trimmed)[0].toLowerCase()
-    remainder  = slice(trimmed, len(firstToken)).trim()
-    return (firstToken, remainder)
+async function mcpCommandHandler(rawArgs):
+    trimmedArgs = trim(rawArgs)           // bundle.js:+10683288
+    subcommand  = firstToken(trimmedArgs)
+    remainder   = trimmedArgs after subcommand
+
+    dispatch(subcommand, remainder)
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+10666238 (trim call), +14153948 (toLowerCase call)
+Analysis basis: CC v2.1.133 bundle.js:+10683288
 
 ---
 
-### Reconnect Sub-command
+### 2. `no-redirect` Sub-command
 
-When the first token is `"reconnect"`, the handler:
-
-1. Reads the remainder string as the target server name.
-2. Increments an internal reconnect attempt counter (starting value `0`, increment step `1`).
-3. Calls close on the primary transport connection.
-4. Calls close on the secondary transport connection.
-5. Invokes the reconnect handler to re-establish the named server's MCP session.
+When the trimmed argument equals the literal `"no-redirect"` the command renders the MCP server list view in a mode that suppresses any automatic redirect/navigation side-effect.
 
 ```
-function handleReconnect(serverName):
-    reconnectCounter = reconnectCounter + 1      // step = 1
-    primaryTransport.close()
-    secondaryTransport.close()
-    invokeReconnectHandler(serverName)
+if subcommand == "no-redirect":           // bundle.js:+10683320
+    return renderMcpListComponent(redirectEnabled=false)
 ```
 
-The `no-redirect` flag is set during this flow, preventing the session from being redirected to a different endpoint during reconnection.
-
-Analysis basis: CC v2.1.132 bundle.js:+10666270 ("no-redirect"), +10666347 ("reconnect"), +10666362 (increment by 1), +14139789 (initial value 0), +14139791 (primary close), +14139801 (secondary close), +14139941 (reconnect handler invocation)
+Analysis basis: CC v2.1.133 bundle.js:+10683320
 
 ---
 
-### Enable Sub-command
+### 3. `reconnect` Sub-command
 
-When the first token is `"enable"`, the remainder is interpreted as the server name to enable.
+When the argument begins with `"reconnect"`, the handler slices the remaining argument string to obtain the target server name, then tears down and rebuilds the server's transport connection.
 
 ```
-function handleEnable(serverName):
-    if serverName == "all":
-        for each configuredServer in mcpServerList:
-            setServerEnabled(configuredServer, enabled=true)
-    else:
-        setServerEnabled(serverName, enabled=true)
-    return renderStatusPanel()
+if subcommand == "reconnect":
+    serverName = slice(trimmedArgs, 1)    // bundle.js:+10683464
+    targetName = serverName.toLowerCase() // bundle.js:+14181260
+
+    for each activeConnection in connectionRegistry:
+        if activeConnection.name.toLowerCase() == targetName:
+            activeConnection.stdioHandle.close()   // bundle.js:+14167103
+            activeConnection.socketHandle.close()  // bundle.js:+14167113
+
+            if tempSocketFile exists:
+                filesystem.unlinkSync(tempSocketFile)  // bundle.js:+14137065
+
+            newConnection = establishConnection(activeConnection.config)
+            // bundle.js:+14167253
+
+            activeConnectionSet.add(newConnection)      // bundle.js:+14161309
+            newConnection.finally(() =>
+                activeConnectionSet.delete(newConnection)  // bundle.js:+14161332
+            )
+
+    return renderMcpStatusComponent()
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+10666460 ("enable"), +10666576 ("all")
+The numeric literal `40` found at bundle.js:+14181334 likely represents a display truncation or timeout constant used inside the connection manager; the numeric literal `0` at bundle.js:+14167101 likely represents the initial index or a zero-length check within the same loop.
+
+Analysis basis: CC v2.1.133 bundle.js:+10683464, +14181260, +14167103, +14167113, +14137065, +14167253, +14161309, +14161332
 
 ---
 
-### Disable Sub-command
+### 4. `enable` Sub-command
 
-When the first token is `"disable"`, the remainder is interpreted as the server name to disable.
+When the argument is `"enable"` optionally followed by a server name, the handler enables the specified MCP server. If no server name is provided, it is inferred to present a selection prompt (exact prompt UI is <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->).
 
 ```
-function handleDisable(serverName):
-    if serverName == "all":
-        for each configuredServer in mcpServerList:
-            setServerEnabled(configuredServer, enabled=false)
-    else:
-        setServerEnabled(serverName, enabled=false)
-    return renderStatusPanel()
+if subcommand == "enable":                // bundle.js:+10683510
+    targetServer = remainder or promptUserForSelection()
+    setServerEnabled(targetServer, enabled=true)
+    return renderMcpStatusComponent()
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+10666477 ("disable"), +10666576 ("all")
+Analysis basis: CC v2.1.133 bundle.js:+10683510
 
 ---
 
-### Display Limit
+### 5. `disable` Sub-command
 
-The status/list panel renders at most **40** items.
+Symmetric to `enable`: disables the named server or prompts for selection when the name is omitted.
 
-Analysis basis: CC v2.1.132 bundle.js:+14154022 (literal `40`)
+```
+if subcommand == "disable":               // bundle.js:+10683527
+    targetServer = remainder or promptUserForSelection()
+    setServerEnabled(targetServer, enabled=false)
+    return renderMcpStatusComponent()
+```
+
+Analysis basis: CC v2.1.133 bundle.js:+10683527
 
 ---
 
-### File Cleanup on Transport Close
+### 6. Default / `all` — Server Listing
 
-When a transport is torn down (as part of reconnect or disable), a file-system unlink operation is performed to remove the transport's socket or lock file.
+Any other argument value (including the explicit literal `"all"` or an empty string) causes the handler to render the full MCP server roster with their current statuses.
 
 ```
-function teardownTransport(transport):
-    transport.close()
-    fileSystem.unlinkSync(transport.socketPath)
+else:                                     // bundle.js:+10683626
+    serverList = getAllRegisteredServers()
+    return renderMcpListComponent(servers=serverList, redirectEnabled=true)
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+14110155 (unlinkSync call)
+Analysis basis: CC v2.1.133 bundle.js:+10683626
 
 ---
 
@@ -170,12 +196,13 @@ Analysis basis: CC v2.1.132 bundle.js:+14110155 (unlinkSync call)
 
 | Item | Detail |
 |---|---|
-| Telemetry | None — no `tengu_*` events found in depth-2 traversal |
-| Hook registration | `immediate: true` — the command handler is invoked synchronously without waiting for a confirmation prompt |
-| appState changes | Enable/disable sub-commands mutate the per-server enabled flag in the MCP server configuration store |
-| Reconnect counter | An internal numeric counter is incremented on each `reconnect` invocation (initial value `0`, step `1`) |
-| Transport file cleanup | `unlinkSync` is called on the transport socket/lock file when a transport is closed during reconnect |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | No `tengu_*` events detected in this command's implementation at depth ≤ 2 |
+| Transport teardown | `reconnect` closes both stdio and socket handles before reconnecting (bundle.js:+14167103, +14167113) |
+| Filesystem mutation | `reconnect` calls `unlinkSync` on the server's temporary socket file when present (bundle.js:+14137065) |
+| Connection registry | `reconnect` adds the new connection to the active-connection `Set` and registers a `finally` cleanup to remove it (bundle.js:+14161309, +14161332) |
+| Server enabled-state | `enable` / `disable` mutate the persistent server configuration stored in app state |
+| Render type | Output is a JSX component (`local-jsx`), rendered inline in the CLI TUI rather than as plain text |
+| Execution timing | `immediate: true` — the handler fires before the normal prompt submission cycle |
 
 ---
 
@@ -183,17 +210,17 @@ Analysis basis: CC v2.1.132 bundle.js:+14110155 (unlinkSync call)
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis — enable, disable, reconnect sub-commands; `all` wildcard; 40-item display cap; file cleanup on transport teardown |
+| v2.1.133 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Omitting the server name after `reconnect`/`enable`/`disable`**: Without a server name (and without using `all`), the remainder string is empty; behavior for an empty target name is <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
-2. **Expecting telemetry events**: This command emits no `tengu_*` telemetry events; integration tests that assert on analytics events will find nothing.
-3. **Assuming non-immediate behavior**: Because `immediate: true` is set, the command fires without a secondary confirmation step, so UX flows that expect a prompt between input and execution will not match observed behavior.
-4. **Case-sensitivity on the sub-command keyword**: Only the first token is lowercased before matching; the server name in the remainder is passed through as-is (case-sensitive).
-5. **Expecting `all` to work with `reconnect`**: The `all` wildcard literal is only observed in the enable/disable branch paths; whether it is accepted by `reconnect` is <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
+1. **Omitting the server name with `reconnect`**: The argument parser slices the token at index `1` (bundle.js:+10683464); passing `/mcp reconnect` with no trailing server name will cause the slice to yield an empty string, likely matching no server and silently doing nothing.
+2. **Expecting plain-text output**: Because `type` is `local-jsx`, the response renders as a React component inside the TUI. Scripts or tooling that scrape raw text from the CLI output will not capture the MCP status table correctly.
+3. **Case sensitivity**: Server-name matching during `reconnect` is done via `.toLowerCase()` on both sides (bundle.js:+14181260), so the lookup is case-insensitive — but `enable` / `disable` argument handling may differ; <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
+4. **Assuming `all` forces a reconnect**: The literal `"all"` at bundle.js:+10683626 is handled by the listing branch, not by reconnect. To reconnect every server you must invoke `/mcp reconnect <name>` once per server.
+5. **Conflating `no-redirect` with a standard sub-command**: `no-redirect` is an internal rendering flag, not an end-user workflow; invoking it intentionally from user scripts is unsupported and may produce unexpected UI states.
 
 ---
 
@@ -203,7 +230,12 @@ Analysis basis: CC v2.1.132 bundle.js:+14110155 (unlinkSync call)
 
 | Identifier | Role |
 |---|---|
-| `EL7` | Top-level command handler function — normalizes input and dispatches to sub-command branches |
-| `_` | Input-routing helper — performs toLowerCase and delegates to enable/disable/reconnect logic |
-| `f` | Transport teardown function — calls close on primary and secondary transports, invokes reconnect handler |
-| `q` | File-system cleanup function — performs `unlinkSync` on the transport socket/lock file path |
+| `rK7` | Main async handler for the `/mcp` command (AsyncFunction; Arbor FQN: `claude-2.1.133::rK7`) |
+| `_` | Inner utility / argument-processing closure; performs `.toLowerCase()` comparison on server names |
+| `f` | Active-connection object; holds `.close()` methods for stdio and socket handles, and delegates to connection manager `K` |
+| `q` | Transport/socket resource associated with an active connection; exposes `.close()`, `.add()`, `.delete()`, and `unlinkSync` paths |
+| `K` | Connection manager function; responsible for establishing a new transport connection and tracking it in the active-connection `Set` |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.
