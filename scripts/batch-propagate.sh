@@ -20,7 +20,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Sorted list of all versions present under versions/.
-mapfile -t ALL < <(ls "$REPO_ROOT/versions" | sed 's/^v//' | sort -V)
+# (`mapfile`/`readarray` requires bash 4+; macOS still ships 3.2 by default.)
+ALL=()
+while IFS= read -r v; do
+  ALL+=("$v")
+done < <(ls "$REPO_ROOT/versions" | sed 's/^v//' | sort -V)
 
 # Adjacent pairs (prev, curr) where curr lies inside [START..END].
 PAIRS=()
