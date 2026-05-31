@@ -59,37 +59,15 @@ fi
 mkdir -p "$VERSIONS_DIR"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
-
-validate_output() {
-  local file="$1"
-  local cmd="$2"
-
-  if ! grep -q "^bundle_verified: true" "$file"; then
-    echo "FAIL [$cmd]: missing bundle_verified: true" >&2
-    return 1
-  fi
-
-  if python3 -c "
-import sys, re
-text = open('$file').read()
-if re.search(r'[가-힣ᄀ-ᇿ㄰-㆏]', text):
-    sys.exit(1)
-" 2>/dev/null; then
-    : # no Korean, OK
-  else
-    echo "FAIL [$cmd]: Korean text found in output" >&2
-    return 1
-  fi
-
-  for section in "## Overview" "## Registration" "## Behavioral Spec"; do
-    if ! grep -q "^$section" "$file"; then
-      echo "FAIL [$cmd]: missing section '$section'" >&2
-      return 1
-    fi
-  done
-
-  return 0
-}
+#
+# After PRs #10 / #11 / #12 the three analyze modes (standard batch,
+# `--cmd`, `--from-version`) all delegate to `scripts/analyze-batch.js`,
+# which carries validate / SKIP / placeholder substitution / prompt_body
+# directly. The old bash helpers `analyze_command` and `validate_output`
+# are removed here. `copy_from_version` stays — `--from-version` still
+# uses it for the COPY classification, and its fallback (missing source
+# spec) now delegates to analyze-batch.js as a single-command driver
+# call.
 
 copy_from_version() {
   local cmd="$1"
@@ -104,7 +82,12 @@ copy_from_version() {
 
   if [[ ! -f "$src" ]]; then
     echo "WARN  [$cmd]: no verified spec in v${from_ver} — will analyze"
-    analyze_command "$cmd" || true
+    node "$SCRIPT_DIR/analyze-batch.js" \
+      --bundle "$BUNDLE" \
+      --version "$VERSION" \
+      --out-dir "$VERSIONS_DIR" \
+      --depth "$DEPTH" \
+      --commands "$cmd" || true
     return 0
   fi
 
@@ -123,107 +106,14 @@ open(dst, "w").write(content)
   echo "COPY  [$cmd]: v${from_ver} → v${VERSION}"
 }
 
-analyze_command() {
-  local cmd="$1"
-  local out_path="$VERSIONS_DIR/${cmd}.md"
-
-  if [[ -f "$out_path" ]] && grep -q "^bundle_verified: true" "$out_path"; then
-    echo "SKIP [$cmd]: already verified"
-    return 0
-  fi
-
-  echo "START [$cmd]"
-
-  # Extract AST data for this command
-  local json_data
-  if ! json_data="$(node "$SCRIPT_DIR/extract-ast.js" \
-    --cmd "$cmd" \
-    --bundle "$BUNDLE" \
-    --index "$INDEX_PATH" \
-    --depth "$DEPTH" \
-    2>/tmp/cc-gnothi-${cmd}-ast-err.log)"; then
-    echo "ERROR [$cmd]: AST extraction failed (see /tmp/cc-gnothi-${cmd}-ast-err.log)"
-    return 1
-  fi
-
-  if [[ -z "$json_data" ]]; then
-    echo "ERROR [$cmd]: AST extraction produced no output"
-    return 1
-  fi
-
-  if [[ "$DRY_RUN" == "true" ]]; then
-    echo "DRY-RUN [$cmd]: AST OK ($(echo "$json_data" | wc -c) bytes) → would call API → $out_path"
-    return 0
-  fi
-
-  # Build optional prompt-body block — injected only when a _raw/${cmd}.txt
-  # dump exists for this command (currently prompt-type registrations:
-  # init, init-verifiers, review, insights, team-onboarding, statusline...).
-  # Carries the actual text the command sends to the agent at invocation, so
-  # the Behavioral Spec can be grounded in what is really instructed.
-  #
-  # Built with printf (not heredoc) to avoid backtick-triggered command
-  # substitution inside markdown code spans.
-  local prompt_body_block=""
-  if [[ -f "$VERSIONS_DIR/_raw/${cmd}.txt" ]]; then
-    local _raw_content
-    _raw_content="$(cat "$VERSIONS_DIR/_raw/${cmd}.txt")"
-    prompt_body_block="$(printf '%s\n' \
-      '' \
-      '---' \
-      '' \
-      '## Pre-Extracted Prompt Body' \
-      '' \
-      "The block below is the actual prompt that the /${cmd} command sends to" \
-      "the agent at invocation, extracted from the v${VERSION} bundle's" \
-      'getPromptForCommand method (with 1-hop into referenced functions and' \
-      'top-level variables). Use it to ground the Behavioral Spec in what the' \
-      'command actually tells the agent. Do NOT quote it verbatim beyond short' \
-      'fragments needed for citation (bundle is (c) Anthropic PBC).' \
-      '' \
-      "$_raw_content")"
-  fi
-
-  # Build prompt: template variables + embed JSON data + optional prompt body
-  local prompt
-  prompt="$(sed \
-    -e "s|{COMMAND}|${cmd}|g" \
-    -e "s|{VERSION}|${VERSION}|g" \
-    -e "s|{TODAY}|${TODAY}|g" \
-    "$PROMPT_TEMPLATE" \
-  | sed "s|{AST_JSON}|PLACEHOLDER_AST_JSON|" \
-  | sed "s|{PROMPT_BODY}|PLACEHOLDER_PROMPT_BODY|")"
-  prompt="${prompt/PLACEHOLDER_AST_JSON/$json_data}"
-  prompt="${prompt/PLACEHOLDER_PROMPT_BODY/$prompt_body_block}"
-
-  # Write prompt to temp file (avoids shell arg length limits)
-  local prompt_file tmp
-  prompt_file="$(mktemp /tmp/cc-gnothi-${cmd}-prompt-XXXX.txt)"
-  echo "$prompt" > "$prompt_file"
-  tmp="$(mktemp /tmp/cc-gnothi-${cmd}-XXXX.md)"
-
-  if node "$SCRIPT_DIR/call-api.js" --prompt-file "$prompt_file" > "$tmp" \
-       2>/tmp/cc-gnothi-${cmd}-err.log; then
-    rm -f "$prompt_file"
-    if validate_output "$tmp" "$cmd"; then
-      mv "$tmp" "$out_path"
-      echo "OK    [$cmd] → $out_path"
-    else
-      mv "$tmp" "/tmp/cc-gnothi-${cmd}-FAILED.md"
-      echo "FAIL  [$cmd]: validation failed (saved to /tmp/cc-gnothi-${cmd}-FAILED.md)"
-      return 1
-    fi
-  else
-    rm -f "$prompt_file"
-    echo "ERROR [$cmd]: API call failed (see /tmp/cc-gnothi-${cmd}-err.log)"
-    rm -f "$tmp"
-    return 1
-  fi
-}
-
-export -f analyze_command validate_output copy_from_version
+# All analyze paths now delegate to scripts/analyze-batch.js (one
+# long-lived client + pinned X-Session-Id), so the cross-process
+# function exports the old xargs-P self-invoke needed are gone.
+# Keep the env exports for any extra-shell tooling that still
+# expects them.
 export VERSION BUNDLE VERSIONS_DIR TODAY PROMPT_TEMPLATE DRY_RUN DEPTH SCRIPT_DIR INDEX_PATH REPO_ROOT
-# Note: CLAUDE_GATEWAY_URL / ANTHROPIC_API_KEY inherited from environment if set
+# Note: CLAUDE_GATEWAY_URL / ANTHROPIC_API_KEY / CC_GNOTHI_SESSION_ID
+# inherited from environment if set.
 
 # Backfill PR #3/#4 + Arbor rows on the way out. The prompt template marks
 # them REQUIRED, but the script also runs deterministically at exit time so
