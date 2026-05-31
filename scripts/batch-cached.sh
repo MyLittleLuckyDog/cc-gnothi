@@ -30,9 +30,13 @@
 
 set -uo pipefail
 
-START_VER=${1:?usage: batch-cached.sh <start-ver> <end-ver> [parallel=4]}
+START_VER=${1:?usage: batch-cached.sh <start-ver> <end-ver> [parallel=2]}
 END_VER=${2:?}
-PARALLEL=${3:-4}
+# parallel=2 default. parallel=4 hit the gateway's max_concurrent ceiling and
+# stacked requests behind it long enough to cross the SDK request timeout —
+# half of v2.1.139's ANALYZE batch came back as "Request timed out". 2 keeps
+# in-flight headroom while still cutting wall time vs single-instance.
+PARALLEL=${3:-2}
 DEPTH=${DEPTH:-4}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -196,14 +200,13 @@ open('$dst', 'w').write(content)
   # 7) inject Registration backfill rows
   node "$SCRIPT_DIR/inject-spec-fields.js" --version "$curr" 2>&1 | sed 's/^/  inject: /'
 
-  # 8) validate (S-6 in wrapper form — grep-level only, real inline is S-8 follow-up)
-  unverified=0; korean=0; total=0
-  while IFS= read -r f; do
-    total=$((total + 1))
-    grep -q '^bundle_verified: true' "$f" || unverified=$((unverified + 1))
-    grep -q '[가-힣ᄀ-ᇿ㄰-㆏]' "$f"     && korean=$((korean + 1))
-  done < <(find "$out_dir" -name '*.md' -not -name '_*' -maxdepth 1)
-  echo "  validate: $total spec, $unverified unverified, $korean with Korean (target 0/0)"
+  # 8) quick sanity count — analyze-batch.js's validateSpec (PR #10) already
+  # enforced frontmatter / no-Korean / required-headings per cmd. We just
+  # report final spec / verified counts so a downstream eye can see whether
+  # a batch fell short.
+  total=$(find "$out_dir" -maxdepth 1 -name '*.md' -not -name '_*' | wc -l | tr -d ' ')
+  verified=$(grep -l '^bundle_verified: true' "$out_dir"/*.md 2>/dev/null | wc -l | tr -d ' ')
+  echo "  sanity: $total spec, $verified verified"
 
   echo "═══ v$curr done ═══"
 done
