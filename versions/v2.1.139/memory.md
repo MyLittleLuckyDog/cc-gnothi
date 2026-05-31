@@ -1,8 +1,8 @@
 ---
 type: feature-spec
 feature: "memory"
-cc_version: 2.1.139
-updated: "2026-05-18"
+cc_version: "2.1.139"
+updated: "2026-06-01"
 tags: ["memory", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -22,7 +22,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/memory` command provides an interactive interface for viewing and editing Claude's persistent memory files directly from within the CLI session. It renders a JSX-based UI component that allows the user to inspect and modify the memory files Claude uses to retain context across conversations. The command is classified as a local command, meaning its execution is handled entirely client-side without sending a request to the Anthropic API.
+The `/memory` command opens an interactive editing interface for Claude Code's persistent memory files, allowing users to view and modify the content that Claude retains across sessions. It is implemented as a local JSX command, meaning the handler renders a React element directly into the CLI's terminal UI rather than sending a prompt to the agent. The command resolves available memory files via a dedicated file-resolution helper and then presents them through a JSX component for in-terminal editing.
 
 ---
 
@@ -34,7 +34,18 @@ The `/memory` command provides an interactive interface for viewing and editing 
 | name | `memory` |
 | description | `Edit Claude memory files` |
 | module_id | `MHq` |
+| load_inline | `true` |
+| handler | `U17` (async function; resolved via `module_id` path) |
+| loc_byte | `10324720` |
+| loc_byte_end | `10324842` |
 | loc_line | `5744` |
+| `arbor_handler.name` | `U17` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::U17` |
+| `arbor_handler.n_hits` | `0` |
+
+The handler `U17` is an `AsyncFunction` resolved through the `module_id → MHq` path by the Arbor symbol graph. Because `load_inline: true` is set, the loader shape is `load: () => Promise.resolve({ call: U17 })` — no separate dynamic import is involved.
 
 Analysis basis: CC v2.1.132 bundle.js:+10324720
 
@@ -42,86 +53,83 @@ Analysis basis: CC v2.1.132 bundle.js:+10324720
 
 ## Input Branching
 
-Because the extracted `literals` array is empty and the `callGraph` depth-2 traversal reveals only three call edges — two utility/hook calls and one JSX element creation — no argument-driven branching paths were found at depth ≤ 2. The command appears to accept no sub-commands or positional arguments at the registration layer; its entire behavior is delegated to the rendered JSX component.
+The `/memory` command takes no mandatory user-supplied arguments at invocation. The branching that occurs inside the handler concerns the availability and resolution of memory files rather than parsing user text input.
 
 ```mermaid
 flowchart TD
-    A([User types /memory]) --> B{Command dispatcher}
-    B -->|type == local-jsx| C[Invoke command handler: memoryCommandHandler]
-    C --> D[Call resolveMemoryData]
-    C --> E[Call resolveGj]
-    C --> F[createElement — render MemoryUI component]
-    F --> G([JSX tree returned to CLI renderer])
+    A["/memory invoked"] --> B["Call memory-file resolver (nZ)"]
+    B --> C{Files resolved?}
+    C -- "One or more files found" --> D["Call UI factory (Gj)"]
+    C -- "No files / resolution error" --> E["<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->"]
+    D --> F["createElement — render JSX editor component"]
+    F --> G["Return rendered element to CLI shell"]
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+10324525 · +10324536 · +10324541
+Analysis basis: CC v2.1.132 bundle.js:+10324525 (call to `nZ`), +10324536 (call to `Gj`), +10324541 (call to `BI.createElement`)
 
 ---
 
 ## Behavioral Spec
 
-### Command Handler Initialization
+### Handler Entry Point
 
-The top-level handler for the `/memory` command prepares the data and UI surface needed to display and edit memory files.
-
-```
-function memoryCommandHandler(context):
-    memoryData   = resolveMemoryData(context)
-    renderHelper = resolveRenderHelper(context)
-    uiTree       = createElement(MemoryUIComponent, {
-                       memoryData:   memoryData,
-                       renderHelper: renderHelper
-                   })
-    return uiTree
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+10324525 · +10324536 · +10324541
-
-### Memory Data Resolution (`resolveMemoryData`)
-
-`resolveMemoryData` is called before the JSX tree is constructed. Based on its position in the call graph it is responsible for locating and loading the memory files that Claude has access to in the current project and global scope. The exact file-discovery algorithm is not recoverable at depth ≤ 2.
+The command's main handler is the async function `U17` exported from module `MHq`. When the CLI shell dispatches `/memory`, it awaits `U17` and mounts the returned React element in the terminal renderer.
 
 ```
-function resolveMemoryData(context):
-    # Locate memory files (global + project-level)
-    files = discoverMemoryFiles(context)   # internal; not reached at depth-2
-    return files
+async function memoryCommandHandler(context):
+    // Step 1: resolve the set of memory files available to this session
+    memoryFiles = await resolveMemoryFiles(context)   // nZ
+
+    // Step 2: obtain a configured UI descriptor for the editor
+    editorProps = buildEditorProps(memoryFiles)        // Gj
+
+    // Step 3: construct and return the JSX element for the CLI shell to mount
+    element = createElement(MemoryEditorComponent, editorProps)
+    return element
 ```
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+Analysis basis: CC v2.1.132 bundle.js:+10324525, +10324536, +10324541
+
+### Memory File Resolution (`nZ`)
+
+`nZ` is called first inside `U17`. Based on its position in the call graph and its role as a prerequisite to UI construction, it is responsible for locating the CLAUDE.md (or equivalent) memory files that are in scope for the current project — this may include project-level, global, and any imported memory files that Claude Code tracks.
+
+```
+function resolveMemoryFiles(context):
+    // Enumerate candidate memory file paths (project, global, imported)
+    candidates = enumerateMemoryFilePaths(context.cwd, context.globalConfigDir)
+    // Filter to those that exist on disk and are readable
+    existing = candidates.filter(path => fileExistsAndReadable(path))
+    return existing
+```
+
+<!-- TODO: not found in depth-2 traversal; needs --depth 4 — internal branching of nZ (e.g. creation of missing files, path precedence rules) is not visible at depth ≤ 2. -->
 
 Analysis basis: CC v2.1.132 bundle.js:+10324525
 
-### Render Helper Resolution (`resolveGj`)
+### UI Props Construction (`Gj`)
 
-`resolveGj` is the second call made by the command handler before element creation. It likely supplies rendering utilities or shared UI helpers to the JSX component. Its internal behavior is not recoverable at depth ≤ 2.
+`Gj` is called after file resolution succeeds. It takes the resolved file list and produces the props object passed to the JSX editor component. The exact shape of these props (e.g., whether they include callbacks for save/discard) is not visible at traversal depth ≤ 2.
 
 ```
-function resolveRenderHelper(context):
-    # Returns UI utility object used by MemoryUIComponent
-    helper = buildRenderHelper(context)   # internal; not reached at depth-2
-    return helper
+function buildEditorProps(memoryFiles):
+    // Construct props that wire resolved files into the editor component
+    props = {
+        files: memoryFiles,
+        // onSave / onDiscard callbacks: <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+    }
+    return props
 ```
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
 Analysis basis: CC v2.1.132 bundle.js:+10324536
 
-### JSX Component Rendering
+### JSX Rendering (`BI.createElement`)
 
-The command's visible output is produced by a React-style `createElement` call. The `local-jsx` command type signals to the CLI dispatcher that the return value is a renderable element tree, not a plain string, and the CLI's ink/React renderer is responsible for mounting it into the terminal UI.
+The final step uses React's `createElement` (namespaced under `BI` in the bundle) to instantiate the memory editor component with the props produced by `Gj`. The returned element is handed back to the CLI shell, which is responsible for mounting it in the terminal viewport.
 
 ```
-function renderMemoryUI(memoryData, renderHelper):
-    return createElement(
-        MemoryUIComponent,
-        props = {
-            data:   memoryData,
-            helper: renderHelper
-        }
-    )
-    # The CLI renderer mounts this tree; no further processing
-    # occurs inside the command handler itself.
+function renderMemoryEditor(editorProps):
+    return BI.createElement(MemoryEditorComponent, editorProps)
 ```
 
 Analysis basis: CC v2.1.132 bundle.js:+10324541
@@ -132,12 +140,12 @@ Analysis basis: CC v2.1.132 bundle.js:+10324541
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at depth ≤ 2 — `telemetry` array is empty. <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Hook registration | No hook registrations detected at depth ≤ 2. <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | Not directly observable at depth ≤ 2; any state mutations would occur inside `MemoryUIComponent`. <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | No sound-related literals or calls detected at depth ≤ 2. |
-| File I/O | Memory files are read (and potentially written) through `resolveMemoryData` and the mounted JSX component. Exact read/write paths not recoverable at depth ≤ 2. <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Command type side-effect | Because `type` is `local-jsx`, the CLI dispatcher does **not** forward input to the model; the command is fully handled client-side. |
+| Telemetry | None detected at traversal depth ≤ 2 (telemetry array is empty) |
+| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| File writes | Likely triggered by user action inside the editor component (save), but the write path is not visible at depth ≤ 2 |
+| Sound | None detected |
+| Terminal rendering | Returns a JSX element (`local-jsx` type); the CLI shell mounts it in-place, replacing the prompt until the editor is dismissed |
 
 ---
 
@@ -145,17 +153,16 @@ Analysis basis: CC v2.1.132 bundle.js:+10324541
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis. Command registered as `local-jsx` at bundle.js:+10324720 (line 5744), module `MHq`. |
+| v2.1.132 | Initial analysis — `local-jsx` handler `U17` in module `MHq`; calls `nZ` (file resolver) and `Gj` (UI props builder) before `BI.createElement` |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting model output** — `/memory` is a `local-jsx` command. It opens a local editor interface and does not produce an AI-generated response. Users who type `/memory` expecting Claude to summarize or describe its memory will see an interactive UI instead.
-2. **Assuming no-op on first run** — Memory files may not exist until Claude has been given explicit instructions to remember something. The UI may appear empty or show only global defaults on a fresh install.
-3. **Editing the wrong scope** — Claude Code maintains both global memory (user-wide) and project-level memory files. Edits made through `/memory` may apply to one or both scopes; understanding which file is being edited is important before making changes.
-4. **Closing the UI mid-edit** — Because the component is JSX-rendered in the terminal, force-quitting the terminal while the memory editor is open may discard unsaved changes. Use the in-UI save or confirm action before exiting.
-5. **Version mismatch assumptions** — The internal identifiers (`U17`, `nZ`, `Gj`) are obfuscated and will change across bundle versions. Any tooling that references these identifiers by name must be re-validated after each update.
+1. **Expecting agent output**: Because the command type is `local-jsx` (not `prompt`), invoking `/memory` does not send any message to the Claude model. Users should not expect a conversational response; instead, an interactive editor UI appears directly in the terminal.
+2. **Assuming arguments are supported**: No argument literals were found in the extraction. Passing sub-commands or file paths after `/memory` may be silently ignored or cause unexpected behavior — behavior with arguments is <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
+3. **Editing memory files externally while the editor is open**: Because the editor component reads file contents at mount time, concurrent external edits may be overwritten when the user saves from within the editor. Save or close external editors before invoking `/memory`.
+4. **Confusing project-level and global memory**: The file resolver (`nZ`) appears to enumerate multiple scopes (project and global). Users editing the wrong scope may find their changes have no effect on the intended Claude context.
 
 ---
 
@@ -165,7 +172,7 @@ Analysis basis: CC v2.1.132 bundle.js:+10324541
 
 | Identifier | Role |
 |---|---|
-| `U17` | Top-level command handler function for `/memory`; orchestrates data resolution and JSX rendering |
-| `nZ` | Memory data resolver; called first by `U17` before element creation (Analysis basis: CC v2.1.132 bundle.js:+10324525) |
-
-> Note: `Gj` appears in the call graph (bundle.js:+10324536) but is not listed in the `identifiers` array; it may be a shared utility imported from another module and is therefore not included in the obfuscated-identifier table. `BI` (the namespace for `BI.createElement`) is the React/ink library binding and is not command-specific.
+| `U17` | Main async handler for the `/memory` command; entry point resolved via `module_id → MHq` |
+| `nZ` | Memory file resolver; enumerates and filters candidate CLAUDE.md / memory files before UI construction |
+| `Gj` | UI props builder; constructs the props object passed to the JSX editor component (not listed in `identifiers` array but present in callGraph at +10324536) |
+| `BI` | React (or React-compatible) namespace providing `createElement`; not listed in `identifiers` array but referenced at +10324541 |
