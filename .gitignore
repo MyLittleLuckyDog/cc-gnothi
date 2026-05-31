@@ -8,3 +8,11 @@ src/target/
 # tracked product, raw bodies are inputs we pull from the bundle and
 # inject into the analyze prompt — no need to track them in git.
 versions/*/_raw/
+
+# Node.js dependencies
+node_modules/
+
+# Arbor symbol-graph snapshot — produced by `arbor index --save` from
+# analyze-new-version.js (G3-B integration). Repo-local cache; the
+# tracked product is versions/v*/_handlers.json.
+.arbor/
