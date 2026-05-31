@@ -72,8 +72,47 @@ function sleep(ms) {
 
 // ── API call with rate-limit retry ───────────────────────────────────────────
 
+/**
+ * Split a single prompt string into a cacheable prefix and a variable
+ * tail at a marker line.
+ *
+ * The analyze-command.md template puts the per-command JSON after the
+ * "## Source Data" heading; everything above that line is identical
+ * across all commands processed in a batch. Sending the prefix as a
+ * cache_control-marked block lets Anthropic's 5-minute prompt cache
+ * return it at ~10% input cost on subsequent calls (any other
+ * analyze-all.sh invocation within the same window hits the cache for
+ * the prefix and only pays full price for the per-command JSON tail).
+ *
+ * Returns either a string (no marker found, send as-is) or a list of
+ * content blocks. The SDK accepts both shapes for `messages[0].content`.
+ */
+function buildCachedContent(prompt) {
+  const MARKER = '\n## Source Data\n';
+  const idx = prompt.indexOf(MARKER);
+  if (idx < 0) {
+    // Marker missing — older template, prompt isn't shaped for
+    // prefix-caching. Fall back to a single content block.
+    return prompt;
+  }
+  const prefix = prompt.slice(0, idx + MARKER.length);
+  const tail = prompt.slice(idx + MARKER.length);
+  return [
+    {
+      type: 'text',
+      text: prefix,
+      cache_control: { type: 'ephemeral' },
+    },
+    {
+      type: 'text',
+      text: tail,
+    },
+  ];
+}
+
 async function callWithRetry(client, opts, prompt) {
   let attempt = 0;
+  const content = buildCachedContent(prompt);
 
   while (attempt <= MAX_RATE_LIMIT_RETRIES) {
     attempt++;
@@ -81,12 +120,18 @@ async function callWithRetry(client, opts, prompt) {
       const msg = await client.messages.create({
         model: opts.model,
         max_tokens: opts.maxTokens,
-        messages: [{ role: 'user', content: prompt }],
+        messages: [{ role: 'user', content }],
       });
 
       const usage = msg.usage ?? {};
+      const cacheCreate = usage.cache_creation_input_tokens ?? 0;
+      const cacheRead = usage.cache_read_input_tokens ?? 0;
+      const cacheNote = cacheCreate || cacheRead
+        ? ` cache_create=${cacheCreate} cache_read=${cacheRead}`
+        : '';
       log(
         `usage: input=${usage.input_tokens ?? '?'} output=${usage.output_tokens ?? '?'}` +
+        cacheNote +
         ` stop_reason=${msg.stop_reason}`
       );
 
@@ -177,9 +222,18 @@ async function main() {
   const prompt = fs.readFileSync(opts.promptFile, 'utf8');
   log(`model=${opts.model} max_tokens=${opts.maxTokens} prompt=${Math.round(prompt.length / 1024)}KB gateway=${GATEWAY_URL}`);
 
+  // Stable session id keeps the gateway's `inject_metadata` from
+  // producing a fresh `metadata.user_id` per request, which lets
+  // Anthropic's prompt cache return the cached prefix on subsequent
+  // calls across process boundaries (analyze-all.sh launches a fresh
+  // node process per command). Honor an env override so callers can
+  // pin a single session across a batch when wired into a longer-lived
+  // driver script.
+  const sessionId = process.env.CC_GNOTHI_SESSION_ID ?? `cc-gnothi-${opts.model}`;
   const client = new Anthropic.default({
     baseURL: GATEWAY_URL,
     apiKey: API_KEY,
+    defaultHeaders: { 'x-session-id': sessionId },
   });
 
   const text = await callWithRetry(client, opts, prompt);
