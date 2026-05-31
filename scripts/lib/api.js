@@ -78,45 +78,58 @@ function makeClient({
   });
 }
 
+/** Marker drivers can drop into a prompt to mark the cache split. */
+const CACHE_BREAKPOINT_MARKER = '<!-- CACHE_BREAKPOINT -->';
+
 /**
- * Split a prompt into a cacheable prefix + a variable tail at the
- * ` ```json ` fence that opens the per-command JSON payload. The
- * `analyze-command.md` template (the entire instruction body, the
- * Source Data heading, the field-by-field guide) is identical
- * across all commands processed in one batch; only the JSON block
- * that follows changes per call.
+ * Split a prompt into a cacheable prefix + a variable tail.
  *
- * Splitting earlier (`## Source Data\n`) would leave a prefix of
- * ~100 tokens, below Anthropic's 1024-token minimum-cacheable-block
- * floor — cache_create stays 0 and the optimization is silently a
- * no-op. The fence puts ~12k tokens above the cache_control
- * marker, well over the minimum.
+ * Resolution order (first hit wins):
  *
- * Returns either a string (no fence found — send as-is) or a list
- * of content blocks. The SDK accepts both shapes for
- * `messages[0].content`.
+ *   1. Explicit `<!-- CACHE_BREAKPOINT -->` marker the caller
+ *      placed in the prompt. Used by analyze-batch.js so the
+ *      driver can keep `{COMMAND}`/`{VERSION}` placeholders in
+ *      the raw template (cacheable) and append the actual
+ *      substitution values *after* the marker (per-call).
+ *
+ *   2. ` ```json\n` fence — fallback for legacy prompts that
+ *      contain a fenced JSON tail. Keeps backward compat with
+ *      pre-restructure analyze-all.sh callers.
+ *
+ *   3. No marker found → send prompt as a plain string (cache
+ *      disabled). Returning a string is safe because the SDK
+ *      accepts both shapes for `messages[0].content`.
+ *
+ * The 1024-token minimum-cacheable-block floor still applies;
+ * callers are responsible for keeping enough content above the
+ * marker.
  */
 function buildCachedContent(prompt) {
-  // The JSON block opens with a markdown fenced-code line. The
-  // newline keeps us from matching `json` inside the template's
-  // prose.
-  const MARKER = '\n```json\n';
-  const idx = prompt.indexOf(MARKER);
-  if (idx < 0) {
-    return prompt;
+  let idx = prompt.indexOf(CACHE_BREAKPOINT_MARKER);
+  let prefixEnd;
+  if (idx >= 0) {
+    // Marker is informational; strip it so the model doesn't see
+    // an HTML-comment-shaped instruction in the middle of the
+    // prompt. Cache key is the prefix up to (not including) the
+    // marker.
+    prefixEnd = idx;
+  } else {
+    const fenceIdx = prompt.indexOf('\n```json\n');
+    if (fenceIdx < 0) return prompt;
+    prefixEnd = fenceIdx;
   }
-  const prefix = prompt.slice(0, idx);  // template, ends without the fence
-  const tail = prompt.slice(idx);        // starts with the fence, then JSON
+  const prefix = prompt.slice(0, prefixEnd);
+  const tail = idx >= 0
+    // Skip the marker line + its trailing newline (if present).
+    ? prompt.slice(idx + CACHE_BREAKPOINT_MARKER.length).replace(/^\n/, '')
+    : prompt.slice(prefixEnd);
+  if (!tail) {
+    // Pure prefix, no per-call tail — degenerate but valid.
+    return [{ type: 'text', text: prefix, cache_control: { type: 'ephemeral' } }];
+  }
   return [
-    {
-      type: 'text',
-      text: prefix,
-      cache_control: { type: 'ephemeral' },
-    },
-    {
-      type: 'text',
-      text: tail,
-    },
+    { type: 'text', text: prefix, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: tail },
   ];
 }
 
@@ -191,6 +204,7 @@ module.exports = {
   makeClient,
   buildCachedContent,
   callApi,
+  CACHE_BREAKPOINT_MARKER,
   DEFAULT_MODEL,
   DEFAULT_MAX_TOKENS,
   GATEWAY_URL,

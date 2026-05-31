@@ -46,6 +46,7 @@ const { execFileSync } = require('child_process');
 const {
   makeClient,
   callApi,
+  CACHE_BREAKPOINT_MARKER,
   DEFAULT_MODEL,
   DEFAULT_MAX_TOKENS,
 } = require('./lib/api');
@@ -111,10 +112,29 @@ function extractCmdJson(opts, cmd) {
 }
 
 function buildPrompt(template, opts, cmd, cmdJson) {
-  return template
-    .replace(/\{COMMAND\}/g, cmd)
-    .replace(/\{VERSION\}/g, opts.version)
-    + '\n```json\n' + cmdJson + '\n```\n';
+  // Keep the template raw — `{COMMAND}` / `{VERSION}` placeholders
+  // stay in the cached prefix. The per-call substitution values
+  // and the JSON go below the cache breakpoint. Anthropic caches
+  // by content hash; sharing the raw template across all commands
+  // in a batch lets the 2nd call onward hit `cache_read`.
+  //
+  // The substitution block tells the model what to plug in for
+  // each placeholder — a one-shot in-prompt mapping table is
+  // sufficient for the analyze-command.md surface.
+  const substitutions =
+    `Per-call substitutions for the template's placeholders:\n` +
+    `  - {COMMAND} → ${cmd}\n` +
+    `  - {VERSION} → ${opts.version}\n` +
+    `Apply these substitutions wherever the corresponding placeholder appears in the template above, including inside the YAML frontmatter you emit.\n`;
+  return [
+    template,
+    CACHE_BREAKPOINT_MARKER,
+    substitutions,
+    '```json',
+    cmdJson,
+    '```',
+    '',
+  ].join('\n');
 }
 
 async function main() {
