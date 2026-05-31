@@ -111,30 +111,99 @@ function extractCmdJson(opts, cmd) {
   );
 }
 
-function buildPrompt(template, opts, cmd, cmdJson) {
-  // Keep the template raw — `{COMMAND}` / `{VERSION}` placeholders
-  // stay in the cached prefix. The per-call substitution values
-  // and the JSON go below the cache breakpoint. Anthropic caches
-  // by content hash; sharing the raw template across all commands
-  // in a batch lets the 2nd call onward hit `cache_read`.
-  //
-  // The substitution block tells the model what to plug in for
-  // each placeholder — a one-shot in-prompt mapping table is
-  // sufficient for the analyze-command.md surface.
-  const substitutions =
-    `Per-call substitutions for the template's placeholders:\n` +
-    `  - {COMMAND} → ${cmd}\n` +
-    `  - {VERSION} → ${opts.version}\n` +
-    `Apply these substitutions wherever the corresponding placeholder appears in the template above, including inside the YAML frontmatter you emit.\n`;
+/**
+ * Per-command optional Pre-Extracted Prompt Body section. Mirrors
+ * analyze-all.sh's prompt_body_block: when `_raw/${cmd}.txt`
+ * exists for this command (currently only `prompt`-type
+ * registrations like init, init-verifiers, review, insights,
+ * team-onboarding, statusline) it carries the actual text the
+ * command sends to the agent, so the Behavioral Spec can be
+ * grounded in what is really instructed.
+ */
+function loadPromptBodyBlock(outDir, cmd, version) {
+  const rawPath = path.join(outDir, '_raw', `${cmd}.txt`);
+  if (!fs.existsSync(rawPath)) return '';
+  const raw = fs.readFileSync(rawPath, 'utf8');
   return [
+    '',
+    '---',
+    '',
+    '## Pre-Extracted Prompt Body',
+    '',
+    `The block below is the actual prompt that the /${cmd} command sends to`,
+    `the agent at invocation, extracted from the v${version} bundle's`,
+    `getPromptForCommand method (with 1-hop into referenced functions and`,
+    `top-level variables). Use it to ground the Behavioral Spec in what the`,
+    `command actually tells the agent. Do NOT quote it verbatim beyond short`,
+    `fragments needed for citation (bundle is (c) Anthropic PBC).`,
+    '',
+    raw,
+  ].join('\n');
+}
+
+function buildPrompt(template, opts, cmd, cmdJson, today) {
+  // Keep the template raw — every `{COMMAND}` / `{VERSION}` /
+  // `{TODAY}` / `{AST_JSON}` / `{PROMPT_BODY}` placeholder stays
+  // in the cached prefix. The per-call substitution values and
+  // the actual JSON/prompt-body content go below the cache
+  // breakpoint. Anthropic caches by content hash; sharing the
+  // raw template across all commands in a batch lets the 2nd
+  // call onward hit `cache_read`.
+  const promptBody = loadPromptBodyBlock(opts.outDir, cmd, opts.version);
+  const substitutionLines = [
+    `When you emit the spec, substitute the following placeholders found in the template above:`,
+    `  - {COMMAND}   → ${cmd}`,
+    `  - {VERSION}   → ${opts.version}`,
+    `  - {TODAY}     → ${today}`,
+    `  - {AST_JSON}  → the JSON block labeled "AST_JSON content" below`,
+    `  - {PROMPT_BODY} → ${promptBody ? 'the markdown block labeled "PROMPT_BODY content" below' : '(empty — leave the placeholder line out of the spec)'}`,
+    `Apply these substitutions wherever the corresponding placeholder appears in the template above, including inside the YAML frontmatter you emit.`,
+  ];
+  const parts = [
     template,
     CACHE_BREAKPOINT_MARKER,
-    substitutions,
-    '```json',
-    cmdJson,
-    '```',
+    substitutionLines.join('\n'),
     '',
-  ].join('\n');
+    'AST_JSON content:',
+    '```json',
+    cmdJson.trim(),
+    '```',
+  ];
+  if (promptBody) {
+    parts.push('', 'PROMPT_BODY content:', promptBody);
+  }
+  parts.push('');
+  return parts.join('\n');
+}
+
+/**
+ * Mirror of analyze-all.sh's `validate_output`. Returns
+ * `{ ok, reason }` so the driver can quarantine bad outputs
+ * without crashing the whole batch.
+ */
+function validateSpec(text) {
+  if (!/^bundle_verified: true$/m.test(text)) {
+    return { ok: false, reason: 'missing `bundle_verified: true`' };
+  }
+  if (/[가-힣ᄀ-ᇿ㄰-㆏]/.test(text)) {
+    return { ok: false, reason: 'Korean characters present' };
+  }
+  for (const heading of ['## Overview', '## Registration', '## Behavioral Spec']) {
+    if (!new RegExp('^' + heading.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'), 'm').test(text)) {
+      return { ok: false, reason: `missing required heading "${heading}"` };
+    }
+  }
+  return { ok: true };
+}
+
+function isAlreadyVerified(outPath) {
+  if (!fs.existsSync(outPath)) return false;
+  try {
+    const content = fs.readFileSync(outPath, 'utf8');
+    return /^bundle_verified: true$/m.test(content);
+  } catch (_) {
+    return false;
+  }
 }
 
 async function main() {
@@ -176,20 +245,30 @@ async function main() {
   log(`model=${opts.model} session=${sessionId} commands=${commands.length} out=${opts.outDir}`);
 
   const failures = [];
+  let skipped = 0;
   const stats = {
     totalCacheCreate: 0,
     totalCacheRead: 0,
     totalInput: 0,
     totalOutput: 0,
   };
+  const today = new Date().toISOString().slice(0, 10);
   const t0 = Date.now();
 
   for (let i = 0; i < commands.length; i++) {
     const cmd = commands[i];
     const tag = `[${i + 1}/${commands.length} ${cmd}]`;
+    const outPath = path.join(opts.outDir, `${cmd}.md`);
+
+    if (isAlreadyVerified(outPath)) {
+      log(`${tag} SKIP (bundle_verified: true)`);
+      skipped++;
+      continue;
+    }
+
     try {
       const cmdJson = extractCmdJson(opts, cmd);
-      const prompt = buildPrompt(template, opts, cmd, cmdJson);
+      const prompt = buildPrompt(template, opts, cmd, cmdJson, today);
       const { text, usage, stopReason } = await callApi(client, opts, prompt);
 
       const cacheCreate = usage.cache_creation_input_tokens ?? 0;
@@ -199,7 +278,15 @@ async function main() {
       stats.totalInput += usage.input_tokens ?? 0;
       stats.totalOutput += usage.output_tokens ?? 0;
 
-      const outPath = path.join(opts.outDir, `${cmd}.md`);
+      const validation = validateSpec(text);
+      if (!validation.ok) {
+        const failedPath = `/tmp/cc-gnothi-${cmd}-FAILED.md`;
+        fs.writeFileSync(failedPath, text);
+        log(`${tag} FAIL: ${validation.reason} (saved to ${failedPath})`);
+        failures.push(cmd);
+        continue;
+      }
+
       fs.writeFileSync(outPath, text);
       log(
         `${tag} ok ` +
@@ -215,7 +302,8 @@ async function main() {
 
   const wall = ((Date.now() - t0) / 1000).toFixed(1);
   log('──');
-  log(`done in ${wall}s   ok=${commands.length - failures.length}/${commands.length}   failures=${failures.length}`);
+  const ok = commands.length - failures.length - skipped;
+  log(`done in ${wall}s   ok=${ok}/${commands.length}   skipped=${skipped}   failures=${failures.length}`);
   log(`cache_create=${stats.totalCacheCreate}  cache_read=${stats.totalCacheRead}  ` +
       `uncached_input=${stats.totalInput}  output=${stats.totalOutput}`);
   const cacheable = stats.totalCacheCreate + stats.totalCacheRead;
