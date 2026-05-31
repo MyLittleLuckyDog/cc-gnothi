@@ -13,7 +13,9 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { execFileSync, spawnSync } = require('child_process');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -21,6 +23,10 @@ const SCRIPT_DIR = path.dirname(__filename);
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 const DEFAULT_ARTIFACTS = path.resolve(REPO_ROOT, '..', 'caludeCodeAVX2', 'artifacts');
 const DEFAULT_VERSIONS = path.join(REPO_ROOT, 'versions');
+// Arbor binary path. `arbor` on PATH wins; otherwise the cargo-install
+// default. Falls back gracefully (handler resolution is skipped, not
+// fatal) when neither exists.
+const ARBOR_BIN = process.env.ARBOR_BIN || 'arbor';
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -112,7 +118,132 @@ function findPrevVersion(allVersions, targetVersion) {
 
 // ── Document generation ───────────────────────────────────────────────────────
 
-function buildIndexMd(meta, commands, diff, prevVersion) {
+// ── Arbor handler-resolution integration (G3-B) ───────────────────────────────
+
+/**
+ * Run the four-step handler-resolution pipeline against one bundle:
+ *
+ *   1. Stage the bundle in a fresh temp dir (Arbor indexes a directory).
+ *   2. `arbor index <dir> --save`         → produces `.arbor/graph.json`.
+ *   3. `extract-ast.js --build-index ...` → produces cc-gnothi's per-cmd
+ *      byte-range registration index (Pass 3).
+ *   4. `arbor-handler-lookup.js`          → joins the two and returns JSON.
+ *
+ * Returns the parsed handler-lookup JSON `{ totals, per_command,
+ * unresolved, ... }` on success, or `null` if any step failed or
+ * `arbor` isn't installed. **Always graceful**: a missing arbor must
+ * NOT block the rest of the per-version analysis from completing.
+ */
+function runHandlerLookup(version, opts) {
+  const bundlePath = path.join(opts.artifactsDir, `claude-${version}.js`);
+  const versionDir = path.join(opts.versionsDir, `v${version}`);
+
+  // Probe for `arbor`. Skip cleanly if absent — first-time contributors
+  // shouldn't get errors on a missing dev tool.
+  const probe = spawnSync(ARBOR_BIN, ['--version'], { stdio: 'pipe' });
+  if (probe.status !== 0) {
+    console.log(`  arbor handler-lookup: SKIP (${ARBOR_BIN} not on PATH)`);
+    return null;
+  }
+
+  const arborDir = fs.mkdtempSync(path.join(os.tmpdir(), `cc-arbor-${version}-`));
+  const stagedBundle = path.join(arborDir, 'bundle.js');
+  try {
+    fs.copyFileSync(bundlePath, stagedBundle);
+
+    // 2. arbor index --save
+    const idx = spawnSync(ARBOR_BIN, ['index', arborDir, '--save'], {
+      stdio: 'pipe',
+      encoding: 'utf8',
+    });
+    if (idx.status !== 0) {
+      console.warn(`  arbor index failed (exit ${idx.status}); skipping handler resolution.`);
+      if (idx.stderr) console.warn(`    stderr: ${idx.stderr.trim().slice(0, 200)}`);
+      return null;
+    }
+
+    // 3. cc-gnothi build-index against the staged bundle.
+    const buildIdx = spawnSync('node', [
+      path.join(SCRIPT_DIR, 'extract-ast.js'),
+      '--build-index',
+      '--bundle', stagedBundle,
+      '--version', version,
+    ], { stdio: 'pipe', encoding: 'utf8' });
+    if (buildIdx.status !== 0) {
+      console.warn(`  extract-ast --build-index failed; skipping handler resolution.`);
+      if (buildIdx.stderr) console.warn(`    stderr: ${buildIdx.stderr.trim().slice(0, 200)}`);
+      return null;
+    }
+
+    // 4. arbor-handler-lookup (in-process; one Arbor graph load, all cmds).
+    const lookup = spawnSync('node', [
+      path.join(SCRIPT_DIR, 'arbor-handler-lookup.js'),
+      '--bundle', stagedBundle,
+      '--version', version,
+    ], { stdio: 'pipe', encoding: 'utf8' });
+    if (lookup.status !== 0) {
+      console.warn(`  arbor-handler-lookup failed; skipping.`);
+      if (lookup.stderr) console.warn(`    stderr: ${lookup.stderr.trim().slice(0, 200)}`);
+      return null;
+    }
+
+    let json;
+    try {
+      json = JSON.parse(lookup.stdout);
+    } catch (e) {
+      console.warn(`  arbor-handler-lookup output not valid JSON: ${e.message}`);
+      return null;
+    }
+
+    // 5. Persist alongside _index.md so reviewers / downstream tools can
+    // open per-version handler detail without re-running the pipeline.
+    const handlersPath = path.join(versionDir, '_handlers.json');
+    if (!opts.dryRun) {
+      if (!fs.existsSync(versionDir)) fs.mkdirSync(versionDir, { recursive: true });
+      fs.writeFileSync(handlersPath, JSON.stringify(json, null, 2) + '\n');
+      console.log(`  wrote: ${handlersPath}`);
+    } else {
+      console.log(`  (dry-run) would write: ${handlersPath}`);
+    }
+    return json;
+  } finally {
+    // Clean the staging dir (small, but accumulates over many versions).
+    try { fs.rmSync(arborDir, { recursive: true, force: true }); }
+    catch (_) { /* best-effort */ }
+  }
+}
+
+/**
+ * One-line summary of handler-lookup totals for `_index.md`.
+ * Returns the markdown to splice in, or an empty string when arbor was
+ * skipped — the doc just won't show that section in that case.
+ */
+function formatHandlerSummary(handlerResult) {
+  if (!handlerResult || !handlerResult.totals) return '';
+  const t = handlerResult.totals;
+  const total = t.total ?? '?';
+  const resolved = t.handler_resolved ?? 0;
+  const pct = total ? Math.round((resolved / total) * 100) : 0;
+  const direct = t.direct_hit ?? 0;
+  const modid = t.via_module_id ?? 0;
+  const loadid = t.via_load_ident ?? 0;
+  const unresolved = t.no_resolution ?? 0;
+  return `## Handler Resolution (G3-B integration)
+
+| Metric | Value |
+|---|---:|
+| Total commands | ${total} |
+| Handler resolved | **${resolved} / ${total} (${pct}%)** |
+| via direct byte-range (path 1) | ${direct} |
+| via module_id follow (path 2) | ${modid} |
+| via load_ident direct (path 3) | ${loadid} |
+| Unresolved | ${unresolved} |
+
+Per-command detail: [\`_handlers.json\`](_handlers.json).
+`;
+}
+
+function buildIndexMd(meta, commands, diff, prevVersion, handlerSection = '') {
   const today = new Date().toISOString().slice(0, 10);
   const prevStr = prevVersion || 'N/A';
 
@@ -178,7 +309,7 @@ ${docList || '<!-- No new commands this version -->'}
 
 <!-- Populated by automation when new commands are detected. -->
 ${chapterProposals || '<!-- No new commands this version -->'}
-`;
+${handlerSection ? '\n' + handlerSection : ''}`;
 }
 
 function buildFeatureStubMd(meta, cmd) {
@@ -269,9 +400,16 @@ function processVersion(version, opts, allArtifactVersions) {
   console.log(`  Added: ${diff.added.map((c) => c.name).join(', ') || 'none'}`);
   console.log(`  Removed: ${diff.removed.map((c) => c.name).join(', ') || 'none'}`);
 
+  // G3-B: run handler resolution against the bundle. Best-effort —
+  // a missing arbor binary or transient indexing failure must NOT block
+  // the rest of the per-version write. Result is spliced into _index.md
+  // as a one-table summary; full per-command detail goes to _handlers.json.
+  const handlerResult = runHandlerLookup(version, opts);
+  const handlerSection = formatHandlerSummary(handlerResult);
+
   // Write _index.md (always regenerate)
   const indexPath = path.join(versionDir, '_index.md');
-  const indexContent = buildIndexMd(meta, commands, diff, prevVersion);
+  const indexContent = buildIndexMd(meta, commands, diff, prevVersion, handlerSection);
   writeFile(indexPath, indexContent, opts.dryRun);
 
   // Write stub for each new command (skip if already exists with bundle_verified:true)
