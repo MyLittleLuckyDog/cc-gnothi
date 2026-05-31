@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "add-dir"
 cc_version: "2.1.132"
-updated: "2026-05-18"
+updated: "2026-05-31"
 tags: ["add-dir", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/add-dir` slash command adds a new working directory to the current Claude Code session, expanding the set of filesystem paths accessible to Claude's tooling. It resolves and validates the given path, updates tool permission contexts and configuration state, then re-indexes the new directory so that file-aware features (e.g., context loading, `--add-dir` startup flag handling) reflect the expanded working set. The command is registered as a local JSX command and accepts a single `<path>` argument.
+The `/add-dir` command adds a new working directory to the current Claude Code session. It accepts a single path argument, resolves and validates that path, then registers it in session state and refreshes configuration so that subsequent tool calls can access the new directory. The command renders inline JSX feedback (success, error, or "already present" notices) directly in the terminal UI.
 
 ---
 
@@ -33,293 +33,283 @@ The `/add-dir` slash command adds a new working directory to the current Claude 
 | name | `add-dir` |
 | description | `Add a new working directory` |
 | argumentHint | `<path>` |
-| module\_id | `ah1` |
+| module_id | `ah1` |
+| load_inline | `true` |
+| handler (Arbor) | `mbK` (AsyncFunction, resolved via `module_id`) |
+| `loc_byte_end` | `3987420` |
+| `arbor_handler.name` | `mbK` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::mbK` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.132 bundle.js:+3987272
+Analysis basis: CC v2.1.132 bundle.js:+3987272 – +3987420
 
 ---
 
 ## Input Branching
 
-The command entry point (command handler `mbK`) begins by reading app state, then validates and processes the supplied path through path-resolution helper `exH`. Depending on the result, execution follows one of several branches:
+The handler `mbK` processes the user-supplied path through several validation stages before committing any state change. The flowchart below captures the primary decision paths.
 
 ```mermaid
 flowchart TD
-    A([User invokes /add-dir path]) --> B{Path argument provided?}
-    B -- No --> C[Return error:\n'Please provide a directory path.']
-    B -- Yes --> D[Resolve & normalize path\nvia pathResolver]
-    D --> E{Resolution outcome}
-    E -- emptyPath --> F[Return error: empty path]
-    E -- notADirectory --> G[Return error: not a directory]
-    E -- ENOTDIR / EACCES / EPERM --> H[Return error: permission or type error]
-    E -- pathNotFound --> I[Return error: path not found]
-    E -- alreadyInWorkingDirectory --> J[Return notice: already in working directory]
-    E -- success --> K[Resolved absolute path available]
-    K --> L[Read current app state\ngetAppState]
-    L --> M[Check addDirectories list\nfor duplicate]
-    M -- Already present --> J
-    M -- Not present --> N[Update tool permission context\nsetToolPermissionContext]
-    N --> O[Update config: append to addDirectories\nvia configManager set]
-    O --> P[Refresh daemon config\nUA.refreshConfig + tengu_daemon_config_reload]
-    P --> Q[Run gitignore / context loader\ne_A: realpath, mkdir, appendFile]
-    Q --> R[Re-index directory\nQk1: stat, readFile, cache update]
-    R --> S[Update UI / render result\n_a: render added-dir component]
-    S --> T([Display success with bold path\nand permissions hint])
-    E -- Unknown error --> U[Return 'Unknown error' message]
+    A([User invokes /add-dir &lt;path&gt;]) --> B{Path argument\nprovided?}
+    B -- No / empty --> C[Return error:\n'Please provide a directory path.']
+    B -- Yes --> D[Resolve & normalize path\n via path resolution helper]
+    D --> E{Path resolution\nresult?}
+    E -- emptyPath --> C
+    E -- notADirectory --> F[Return error: not a directory]
+    E -- pathNotFound --> G[Return error: path not found]
+    E -- ENOTDIR / EACCES / EPERM --> H[Return error: filesystem error]
+    E -- alreadyInWorkingDirectory --> I[Return notice: already present]
+    E -- success --> J[Append to addDirectories\nin localSettings / session]
+    J --> K[Set tool permission context]
+    J --> L[Call cf: apply permission rules]
+    L --> M[Refresh config via UA.refreshConfig]
+    M --> N[Re-index new directory\nvia Qk1 / file-watcher setup]
+    N --> O[Render success JSX with\nbold path + permissions hint]
+    F --> P([Return JSX to terminal])
+    G --> P
+    H --> P
+    I --> P
+    C --> P
+    O --> P
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+3986017, +3986034, +3579394, +3579492, +3579637, +3579748, +3579824, +3579909, +3986454, +3986719
+Analysis basis: CC v2.1.132 bundle.js:+3985988, +3986034, +3986097, +3579394, +3579492, +3579637, +3579748, +3579824
 
 ---
 
 ## Behavioral Spec
 
-### 1. Command Entry and App-State Acquisition
+### 1. Handler Entry — `mbK`
+
+The top-level async handler is `mbK` (module `ah1`).
 
 ```
-function commandHandler(args, appState):
-    currentState = getAppState()                    // read full app state
-    addDirectoriesList = currentState["addDirectories"]   // list literal "addDirectories"
-    sessionContext     = currentState["session"]          // literal "session"
-    localSettings      = currentState["localSettings"]    // literal "localSettings"
+async function handleAddDir(input):
+    appState  = getAppState()                         // A.getAppState
+    rawPath   = input.trim()
 
-    rawPath = args[0]
-    if rawPath is undefined or rawPath is empty:
+    if rawPath is empty:
         return renderError("Please provide a directory path.")
 
-    result = resolveAndValidatePath(rawPath)
-    if result.status != "success":
-        return renderError(mapStatusToMessage(result.status))
+    resolvedResult = resolveAndValidatePath(rawPath)  // exH
 
-    resolvedPath = result.path
+    switch resolvedResult.status:
+        case "emptyPath":
+            return renderError("Please provide a directory path.")
+        case "notADirectory":
+            return renderError(notADirectory message)
+        case "pathNotFound":
+            return renderError(pathNotFound message)
+        case "ENOTDIR" | "EACCES" | "EPERM":
+            return renderError(filesystem error message)
+        case "alreadyInWorkingDirectory":
+            return renderNotice(already-present message)
+        case "success":
+            resolvedPath = resolvedResult.path
 
-    if addDirectoriesList includes resolvedPath:
-        return renderNotice("alreadyInWorkingDirectory")
+    // Mutate session state
+    appState.localSettings.session.addDirectories += [resolvedPath]  // literal "addDirectories", "localSettings", "session"
 
-    updateToolPermissionContext(localSettings, sessionContext)
-    configManager_set("addDirectories", resolvedPath)
-    removeFromConfig("removeDirectories", resolvedPath)  // mirror cleanup
+    setToolPermissionContext(appState, index=1)       // A.setToolPermissionContext, literal 1
 
-    UA.refreshConfig()
-    // telemetry: tengu_daemon_config_reload fired inside daemon restart sequence
+    applyPermissionRules(appState)                    // cf
 
-    runContextLoader(resolvedPath)
-    reindexDirectory(resolvedPath)
-    renderSuccess(resolvedPath)
+    checkAlreadyInDirectories(appState, resolvedPath) // D.includes
+
+    refreshConfig()                                   // UA.refreshConfig
+
+    reindexNewDirectory(resolvedPath)                 // e_A
+
+    reinitFileWatcher(appState)                       // Qk1
+
+    renderAddDirResult(appState, resolvedPath)        // _a
+    return successJsx
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+3985988, +3986034, +3986081, +3986097, +3986108, +3986140, +3986155, +3986164, +3986192
+Analysis basis: CC v2.1.132 bundle.js:+3985988, +3986017, +3986034, +3986081, +3986097, +3986108, +3986140, +3986155, +3986164, +3986178, +3986192, +3986211, +3986218, +3986252
 
 ---
 
-### 2. Path Resolution and Validation (`pathResolver` / `exH` + `c_`)
+### 2. Path Resolution — `exH` + `c_`
+
+The path resolution helper `exH` wraps the lower-level normalizer `c_` and a filesystem `stat` call.
 
 ```
-function resolveAndValidatePath(rawInput):
-    if rawInput is null or rawInput is empty string:
+async function resolveAndValidatePath(rawPath):
+    if rawPath is empty:
         return { status: "emptyPath" }
 
-    trimmed = rawInput.trim()
+    normalizedPath = normalizePath(rawPath)           // c_
+        // • trims whitespace
+        // • expands leading "~/" using os.homedir()
+        // • normalizes path separators (OZ.normalize)
+        // • resolves to absolute (OZ.resolve / OZ.isAbsolute)
+        // • rejects paths containing null bytes → Error "Path contains null bytes"
+        // • on windows: applies windows-specific path handling
 
-    if trimmed contains null bytes:
-        raise TypeError("Path contains null bytes")
+    statResult = await fs.stat(normalizedPath)        // NZ1.stat
 
-    // Tilde expansion
-    if trimmed starts with "~/":
-        home = os.homedir()
-        trimmed = home + trimmed.slice(2)     // replace "~/" prefix
-
-    // Windows drive-letter normalization
-    if platform is "windows":
-        trimmed = applyWindowsPathNormalization(trimmed)
-
-    // Make absolute
-    if not path.isAbsolute(trimmed):
-        trimmed = path.resolve(currentWorkingDir, trimmed)
-
-    trimmed = path.normalize(trimmed)
-
-    // Filesystem check
-    try:
-        stat = await fs.stat(trimmed)
-    catch error:
-        if error.code == "ENOTDIR" or error.code == "EACCES" or error.code == "EPERM":
+    if stat error:
+        if error.code == "ENOTDIR":
             return { status: "notADirectory" }
-        return { status: "pathNotFound" }
+        if error.code in ["EACCES", "EPERM"]:
+            return { status: "notADirectory" }   // access denied maps to notADirectory
+        if error.code == "ENOENT" or path not found:
+            return { status: "pathNotFound" }
 
-    if not stat.isDirectory():
+    if stat result is not a directory:
         return { status: "notADirectory" }
 
-    // Check already-in-working-directory
-    if currentWorkingDirectories includes trimmed:
+    finalPath = canonicalize(normalizedPath)          // CS → display-safe form
+
+    if finalPath already in appState working directories:
         return { status: "alreadyInWorkingDirectory" }
 
-    return { status: "success", path: trimmed }
+    return { status: "success", path: finalPath }
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+3579394, +3579413, +3579447, +3579492, +3579555, +3579582, +3579597, +3579611, +3579637, +3579748, +3579824, +948592, +948799, +948833, +948855, +948906, +948940, +948953, +948966, +948988, +949028, +949035, +949095, +949159
+Analysis basis: CC v2.1.132 bundle.js:+3579394, +3579413, +3579447, +3579492, +3579555, +3579637, +3579698, +3579748, +3579824, +948593, +948799, +948833, +948855, +948906, +948940, +948966, +948988, +949028, +949095, +949159
 
 ---
 
-### 3. Tool Permission Context Update (`setToolPermissionContext` / `cf`)
+### 3. Permission Rule Application — `cf`
+
+After the path is validated and appended to session state, `cf` applies the existing permission rule context to the newly enlarged working directory set.
 
 ```
-function updateToolPermissionContext(localSettings, session):
-    mode = deriveMode(localSettings, session)
+function applyPermissionRules(appState):
+    // Walk alwaysAllowRules, alwaysDenyRules, alwaysAskRules
+    for each ruleSet in ["alwaysAllowRules", "alwaysDenyRules", "alwaysAskRules"]:
+        rules = appState[ruleSet]
+        processedRules = rules
+            .filter(isValidRule)                          // L.filter / K.has
+            .map(normalizeRule)                           // i4 + CPL (replaceAll escaping)
 
-    if mode == "bypassPermissions" and bypassPermissionsUnavailable:
-        log.debug("Ignoring permission update: setMode 'bypassPermissions' rejected — " +
-                  "mode is not available (disableBypassPermissionsMode set, or session " +
-                  "not launched in bypassPermissions mode)")
-        return
+    // Handle addRules merge
+    mergeRuleSets(appState, "addRules", processedRules)   // _.set, literal "addRules"
 
-    for each rule in newRules:
-        if rule.effect == "allow":
-            appendToConfig("alwaysAllowRules", rule)
-        else if rule.effect == "deny":
-            appendToConfig("alwaysDenyRules", rule)
-        else:
-            appendToConfig("alwaysAskRules", rule)
+    // Handle replaceRules replacement
+    replaceRuleSets(appState, "replaceRules")             // literal "replaceRules"
 
-    applyRuleOperation("addRules" | "replaceRules" | "removeRules", rules)
-    configManager.set("addDirectories", ...)
-    configManager.delete("removeDirectories", ...)
+    // Handle removeRules deletion
+    removeRuleSets(appState, "removeRules")               // _.delete, literal "removeRules"
+
+    // Handle removeDirectories cleanup
+    pruneRemovedDirectories(appState, "removeDirectories") // literal "removeDirectories"
+
+    // Guard: if mode is "bypassPermissions" and session does not allow it:
+    if requestedMode == "bypassPermissions" AND bypassNotAvailable:
+        log warning: "Ignoring permission update: setMode 'bypassPermissions' rejected..."
+        // literal at bundle.js:+3884883
+        return without applying bypassPermissions
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+3986108, +3884795, +3884817, +3884883, +3885159, +3885344, +3885352, +3885384, +3885391, +3885409, +3885507, +3886164, +3886548
+Analysis basis: CC v2.1.132 bundle.js:+3884795, +3884817, +3884883, +3885159, +3885344, +3885352, +3885384, +3885391, +3885409, +3885507, +3886077, +3886164, +3886474, +3886548, +3886776
 
 ---
 
-### 4. Config Persistence and Daemon Reload (`configManager` / `D`)
+### 4. Configuration Refresh — `UA.refreshConfig`
+
+After state mutation, the configuration subsystem is reloaded to pick up the new directory entry.
 
 ```
-function persistAndReload(resolvedPath):
-    // Read existing config from disk (UTF-8)
-    raw = fs.readFile(configPath, "utf8")
-    if error.code == "ENOENT":
-        config = {}
-    else:
-        config = JSON.parse(raw)
-
-    // Append resolved path to addDirectories array
-    config["addDirectories"] = deduplicate(
-        (config["addDirectories"] ?? []) + [resolvedPath]
-    )
-
-    // Write back via supervisor channel
-    supervisor.write(config)
-
-    // Stop current watcher, apply updated config, restart watcher
-    watcher.stop()
-    watcher.updateConfig(config)
-    watcher.start()
-
-    // Emit heartbeat / reload signal
-    emitEvent("heartbeat")
-
-    // Fire telemetry
-    emit("tengu_daemon_config_reload")
+function refreshConfig():
+    UA.refreshConfig()
+    // Internally triggers reload of:
+    //   policySettings, flagSettings, userSettings, projectSettings
+    // File encoding: "utf-8"
+    // Reads config with fs.readFile, normalizes to NFC unicode
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11571580, +11571595, +11571615, +11571623, +14142462, +14142479, +14142681, +14142755, +14142875, +14142884, +14142902, +14143004, +14143049, +14143060, +14143278, +14143280
+Analysis basis: CC v2.1.132 bundle.js:+3986192, +1159426, +1159448, +1159978, +1160030, +1160093, +11785748
 
 ---
 
-### 5. Context / Gitignore Loader (`e_A`)
+### 5. Directory Re-indexing — `e_A`
+
+The new directory is indexed for context retrieval after being added.
 
 ```
-function runContextLoader(resolvedPath):
-    // Normalize unicode: NFC form
-    normalizedPath = resolvedPath.normalize("NFC")
-
-    realPath = await fs.realpath(normalizedPath)
-
-    // Locate or create .claudeignore / context file
-    contextFilePath = path.join(realPath, contextFileName)
-
-    try:
-        existing = await fs.readFile(contextFilePath, encoding)
-    catch:
-        // File does not exist — create parent directories (mode 0o700 / 0o600)
-        await fs.mkdir(path.dirname(contextFilePath), { recursive: true, mode: 448 })
-        await fs.appendFile(contextFilePath, initialContent, { mode: 384 })
-
-    loadContextEntries(realPath)
+async function reindexNewDirectory(resolvedPath):
+    // Normalize path to production/test environment
+    // Use yK.realpath to canonicalize symlinks
+    // NFC-normalize the resolved string
+    // Create directory structure if missing: yK.mkdir (mode 448 / 0o700)
+    // Append index metadata: yK.appendFile (mode 384 / 0o600)
+    // Read existing index: yK.readFile (utf8)
+    // Join with D$.join / D$.dirname for sub-path construction
+    // On ENOENT: treat as fresh directory (no pre-existing index)
+    // Emit fH (error reporter) on unexpected read failures
 ```
 
-File creation mode `448` (octal `0o700`) and `384` (octal `0o600`) are used for directory and file creation respectively.
-
-Analysis basis: CC v2.1.132 bundle.js:+11785688, +11785722, +11785748, +11785768, +11785774, +11785795, +11785831, +11785860, +11785956, +11785965, +11785998, +11786037, +11786065
+File permission constants:
+- Directory creation mode: **448** (`0o700`) — Analysis basis: CC v2.1.132 bundle.js:+11785998
+- File append mode: **384** (`0o600`) — Analysis basis: CC v2.1.132 bundle.js:+11786065
 
 ---
 
-### 6. Directory Re-indexing (`Qk1`, `Jq`, `jM`)
+### 6. File-Watcher Re-initialization — `Qk1`
+
+After indexing, the file-watcher is refreshed so the new directory participates in incremental change tracking.
 
 ```
-function reindexDirectory(resolvedPath):
-    // Clear any stale cache entries for this path
-    fileCache.delete(resolvedPath)
-
-    // Stat all immediate entries in parallel
-    entries = await Promise.all(
-        subPaths.map(p => fs.stat(p))
-    )
-
-    for each entry in entries:
-        basename = path.basename(entry.path)
-
-        // Warn on suspicious entries
-        if entry has unexpected state:
-            log.warn(...)
-
-        // Read file content (utf-8, up to limit)
-        content = await fs.readFile(entry.path, "utf-8")
-
-        // Check numeric ordering fields
-        order      = entry["order"]
-        stateOrder = entry["stateOrder"]
-
-        if Number.isFinite(order):
-            fileCache.set(entry.path, { content, order, stateOrder })
-        else:
-            fileCache.clear()   // safety reset after 1000 ms debounce
-
-    // Rebuild internal index
-    rebuildIndex(resolvedPath)
-    loadContextFile(resolvedPath)
+async function reinitFileWatcher(appState):
+    clearExistingWatcher()                     // YW → bfH.delete
+    newWatchState = buildWatchState(appState)  // Jq
+        // vX.stat each watched path
+        // NX.join / NX.basename for path construction
+        // bfH.get / bfH.set / bfH.clear for watcher cache
+        // Number.isFinite guard on mtime
+        // Reads file content: vX.readFile
+        // Parses JSON metadata: B6 → JSON.parse
+        // Emits "warn" log on unexpected state: literal "warn"
+    persistWatchState(newWatchState)           // jM
+        // lY: atomic write via randomBytes + writeFile + rename
+        // NX.join for path, RH for serialization (JSON.stringify)
+    handleErrors(D8, fH)
 ```
 
-Debounce timeout for cache reset: 1000 ms.
-Analysis basis: CC v2.1.132 bundle.js:+3877939, +3877957, +3875017, +3875058, +3875085, +3875106, +3875143, +3875156, +3875298, +3875325, +3875403, +3875438, +3875463, +3875542, +3875647, +3875663, +3875808, +3875863, +3875920, +3876020, +3878122, +3878227, +3878233
+Analysis basis: CC v2.1.132 bundle.js:+3877939, +3877957, +3878122, +3878227, +3878233, +3875017, +3875058, +3875143, +3875156, +3875298, +3875325, +3875403, +3875438, +3875463, +3875542, +3875647, +3875663, +3875808, +3875863, +3875920, +3876025
 
 ---
 
-### 7. Result Rendering (`_a`, `HuH`)
+### 7. Result Rendering — `_a`
+
+The JSX result renderer composes the terminal output for all outcomes.
 
 ```
-function renderResult(resolvedPath, status):
-    if status == "success":
-        displayPath = boldFormatter(resolvedPath)
-        permissionsHint = dimFormatter("· /permissions to manage")
-        render(<AddedDirComponent path=displayPath hint=permissionsHint />)
-    else if status == "alreadyInWorkingDirectory":
-        render(<NoticeComponent message="Did not add a working directory." />)
-    else:
-        render(<ErrorComponent message=mapStatusToMessage(status) />)
+function renderAddDirResult(appState, resolvedPath):
+    // Success path:
+    boldPath    = M6.bold(resolvedPath)
+    hintLine    = M6.dim("· /permissions to manage")  // literal at +3986562
+    successJsx  = render(boldPath + newline + hintLine)
+
+    // Failure path (Did not add):
+    if noPathAdded:
+        return render("Did not add a working directory.")  // literal at +3986719
+
+    // On unexpected error:
+    fallbackMsg = error.message ?? "Unknown error"         // literal at +3986454
+
+    // Uses ok1 to build per-directory permission rows,
+    // CA to load settings layers (policySettings / flagSettings /
+    //   userSettings / projectSettings),
+    // R8 to classify permission entries,
+    // aRK to resolve file-system accessibility of each entry,
+    // v3 to lstatSync + check FIFO / socket / char / block device exclusions,
+    // Q$ / i4 for rule-text formatting and escaping
 ```
 
-- Success message uses **bold** formatting for the path.
-- Permissions hint string: `· /permissions to manage`
-- Failure string for already-registered or rejected path: `Did not add a working directory.`
-- Fallback error string: `Unknown error`
-
-Analysis basis: CC v2.1.132 bundle.js:+3986269, +3986454, +3986555, +3986562, +3986719, +3579977, +3580045
+Analysis basis: CC v2.1.132 bundle.js:+3986252, +3986269, +3986454, +3986555, +3986562, +3986595, +3986719, +3986770, +3986836, +3887014, +3887093, +3887383, +3887587, +3887674, +3887722, +3887969, +3887990, +3887993
 
 ---
 
-### 8. `--add-dir` Startup Flag Equivalence
+### 8. CLI Alias
 
-The literal `"--add-dir"` is present in the command's implementation scope, confirming that the slash command shares its core path-registration logic with the CLI startup flag of the same name. Both paths converge on the same config-persistence and re-indexing routines.
+The string literal `"--add-dir"` at bundle.js:+3986222 indicates the command is also reachable as a CLI flag `--add-dir` in non-interactive / scripted invocations (passed to `_a`'s argument parser).
 
 Analysis basis: CC v2.1.132 bundle.js:+3986222
 
@@ -329,16 +319,29 @@ Analysis basis: CC v2.1.132 bundle.js:+3986222
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_daemon_config_reload` (fired during daemon config reload sequence; bundle.js:+14143280) |
-| Config key written | `addDirectories` — resolved absolute path appended (bundle.js:+3986034) |
-| Config key cleaned | `removeDirectories` — resolved path removed if present (bundle.js:+3886548) |
-| Tool permission context | `setToolPermissionContext` called with updated `localSettings` and `session` (bundle.js:+3986108) |
-| Daemon watcher | Stop → `updateConfig` → Start cycle executed on successful add (bundle.js:+14142875, +14142884, +14142902) |
-| Filesystem side effects | `.claudeignore` / context file created (mode `0o600`) under new directory if absent; parent directories created (mode `0o700`) (bundle.js:+11785956, +11785998, +11786037, +11786065) |
-| File cache | Stale entries for the added path cleared; directory re-indexed and cache repopulated (bundle.js:+3875017, +3875438, +3875808, +3876020) |
-| Cache reset debounce | 1000 ms (bundle.js:+3876020) |
-| UI render | JSX component rendered with bold path and dim permissions hint (bundle.js:+3986269, +3986555) |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | `tengu_daemon_config_reload` (bundle.js:+14143280); `tengu_mcp_retry_failed_remote` (bundle.js:+13846663) — both are downstream of the config/watcher refresh path, not emitted unconditionally by `/add-dir` itself |
+| `appState` mutation | `localSettings.session.addDirectories` array is extended with the resolved path (bundle.js:+3986034, +3986081, +3986097) |
+| Tool permission context | `setToolPermissionContext` called with index `1` immediately after path append (bundle.js:+3986108, +3986017) |
+| Permission rules | `cf` re-evaluates `alwaysAllowRules`, `alwaysDenyRules`, `alwaysAskRules`, `addRules`, `replaceRules`, `removeRules` for the updated directory set (bundle.js:+3986140) |
+| Config reload | `UA.refreshConfig()` triggers a full settings reload from disk (bundle.js:+3986192) |
+| File-watcher cache | `bfH` (watcher cache Map) is cleared and rebuilt for all watched directories including the new one (bundle.js:+3875017, +3876025) |
+| Index files | `yK.mkdir` + `yK.appendFile` create or update index artifacts for the new directory; directory mode `0o700`, file mode `0o600` (bundle.js:+11785956, +11785998, +11786037, +11786065) |
+| Atomic writes | File-watcher state persisted via `randomBytes` + `writeFile` + `rename` sequence (bundle.js:+2861114, +2861161, +2861214) |
+| Sound | None found in depth-2 traversal |
+| Hook registration | None found in depth-2 traversal |
+
+---
+
+## Error Reference
+
+| Status Code | User-Visible Message | Condition |
+|---|---|---|
+| `emptyPath` | "Please provide a directory path." | Argument is absent or blank (bundle.js:+3579394, +3579909) |
+| `notADirectory` | *(filesystem-derived message)* | `stat` returns `ENOTDIR`, `EACCES`, or `EPERM` (bundle.js:+3579492, +3579582, +3579597, +3579611) |
+| `pathNotFound` | *(filesystem-derived message)* | `stat` returns `ENOENT` (bundle.js:+3579637) |
+| `alreadyInWorkingDirectory` | *(already-present notice)* | Path is already registered in session (bundle.js:+3579748) |
+| *(catch-all)* | "Did not add a working directory." | Any unclassified failure (bundle.js:+3986719) |
+| *(catch-all)* | `error.message` or `"Unknown error"` | Exception without recognized code (bundle.js:+3986454) |
 
 ---
 
@@ -352,19 +355,12 @@ Analysis basis: CC v2.1.132 bundle.js:+3986222
 
 ## Common Mistakes
 
-1. **Omitting the path argument.** Invoking `/add-dir` with no argument returns `"Please provide a directory path."` immediately; no state is modified.
-
-2. **Supplying a file path instead of a directory.** If the resolved path exists but is not a directory (stat result is not a directory, or `ENOTDIR` is raised), the command returns `notADirectory` and does not update config.
-
-3. **Using a relative path expecting it to be resolved from the project root.** The path is resolved relative to the process current working directory at the time of invocation, not necessarily the primary project directory.
-
-4. **Adding a directory that is already registered.** The command silently returns `"Did not add a working directory."` — no duplicate entry is created, but also no error is surfaced, which can be confused with a successful add.
-
-5. **Expecting permission rules to survive across sessions without `localSettings` persistence.** The `setToolPermissionContext` call updates `localSettings`; if that config layer is ephemeral (e.g., in-memory only), permission grants for the new directory may not persist after restart.
-
-6. **Paths with null bytes.** Any path containing a null byte triggers an immediate `TypeError` inside the path-resolution helper before any filesystem access occurs.
-
-7. **Tilde expansion scope.** Only the `~/` prefix is expanded to the home directory. Bare `~username` forms are not expanded and will produce a `pathNotFound` or `notADirectory` error.
+1. **Passing a file path instead of a directory path.** The command calls `fs.stat` and checks that the result is a directory; passing a regular file returns a `notADirectory` error before any state is mutated.
+2. **Passing a relative path without a clear working context.** The normalizer resolves relative paths against `process.cwd()` at invocation time. If the terminal's working directory differs from the intended base, the resolved absolute path may not match expectations.
+3. **Passing a `~/…` path in an environment where `os.homedir()` is unexpected (e.g., inside a container).** The tilde expansion uses `tv6.homedir()` at runtime; the expanded path must be accessible and stateable by the process.
+4. **Assuming the command is idempotent without feedback.** If the directory is already registered, the command returns an `alreadyInWorkingDirectory` notice rather than silently succeeding; callers should handle this as a non-error informational response.
+5. **Expecting immediate tool-call access without awaiting config refresh.** The sequence `setToolPermissionContext` → `cf` → `UA.refreshConfig` → `e_A` → `Qk1` is fully async; race conditions in scripts that immediately issue tool calls after `/add-dir` may see the old directory set.
+6. **Providing a path containing null bytes.** The normalizer explicitly detects null bytes and throws (`"Path contains null bytes"`) before any filesystem access; such paths are unconditionally rejected.
 
 ---
 
@@ -374,47 +370,99 @@ Analysis basis: CC v2.1.132 bundle.js:+3986222
 
 | Identifier | Role |
 |---|---|
-| `mbK` | Command handler — top-level `/add-dir` implementation function |
-| `A` | App state accessor object (provides `getAppState`, `setToolPermissionContext`, `toUpperCase`) |
-| `cf` | Tool permission context updater (processes rule sets, calls config set/delete) |
-| `k` | Permission mode validator / debug logger (checks `bypassPermissions` mode availability) |
-| `i4` | Rule formatter / serializer helper |
-| `RH` | JSON serialization helper (wraps `JSON.stringify`) |
-| `_` | Config store object (provides `set`, `delete`, `includes`, `filter`) |
-| `L` | Rule-list formatter / filter helper (provides `filter`, `has`; uses `K.map`, `padEnd`) |
-| `K` | Process / IPC channel manager (provides `has`, `process.exit`) |
-| `MV` | Working-directory membership checker |
-| `D` | Daemon / watcher manager (provides `stop`, `updateConfig`, `start`, `get`, `set`, `delete`) |
-| `lDH` | Config file reader (reads UTF-8 config, handles ENOENT) |
-| `q` | File writer / IPC write channel (provides `write`, `close`, `filter`, `has`, `startsWith`) |
-| `Hwq` | Config display formatter (uses `Object.keys`, `Math.max`) |
-| `f` | Connection/channel handle (provides `get`, `set`, `delete`, `close`) |
-| `E` | Event stop handler (calls `preventDefault`, daemon restart) |
-| `I` | Watcher instance (provides `stop`, `updateConfig`, `start`) |
-| `VQq` | Heartbeat emitter |
-| `Z` | Secondary watcher / process (provides `start`) |
-| `d` | Telemetry emitter (fires `tengu_daemon_config_reload`) |
-| `JaH` | Config refresh trigger |
-| `e_A` | Context / gitignore loader (realpath, mkdir, readFile, appendFile) |
-| `oDH` | Context environment detector (test/production mode selector) |
-| `D8` | Error code extractor (reads `.code` property from error objects) |
-| `fH` | Context file entry loader (reads individual context entries, logs errors) |
-| `lg` | Logger instance |
-| `_A` | Path utilities / config path resolver |
-| `Qk1` | Directory re-indexer (orchestrates `YW`, `Jq`, `jM`, `fH`) |
-| `YW` | Cache invalidator (calls `fileCache.delete`) |
-| `Jq` | File stat and content loader (parallel stat, readFile, cache population) |
-| `jM` | Index rebuilder (joins paths, calls `RH` for serialization, `YW` for cache clear) |
-| `_a` | Result renderer — builds JSX output for success, duplicate, and error cases |
-| `j_A` | Rendered component helper |
-| `ok1` | Sub-directory context builder (maps tool lists, filters, calls `fH`) |
-| `R8` | Tool-entry formatter (uses `IdA`, `G7_`, `VdA`) |
-| `CA` | Tool permission resolver (resolves allow/deny/ask rules per tool, emits events) |
-| `Q$` | Text truncation / substring helper |
-| `H` | Random delay / animation helper (uses `Math.random`, `setTimeout`) |
-| `exH` | Path resolution orchestrator (calls `c_`, `fs.stat`, `Qd`, `CS`) |
-| `c_` | Low-level path normalizer (tilde expansion, null-byte check, `path.resolve`, `path.normalize`) |
-| `j8` | Error code normalizer |
-| `Qd` | Path display formatter |
-| `CS` | Path alias substituter (replaces `/var/` → `/tmp$1`, normalizes display paths) |
-| `HuH` | Success message renderer (applies `M6.bold`, `fl6.dirname`) |
+| `mbK` | Top-level async handler for `/add-dir` command (module `ah1`) |
+| `A` | App-state accessor object (`getAppState`, `setToolPermissionContext`) |
+| `cf` | Permission-rule application function |
+| `k` | Debug / logging helper (emits `"debug"` level) |
+| `Lsq` | Lower-level log dispatcher |
+| `rdA` | Log transport internals (`Nrq`, `krq`) |
+| `H` | Multi-use local variable (context-dependent) |
+| `RH` | JSON serializer wrapper (`JSON.stringify`) |
+| `mf` | Path display formatter (redacts sensitive segments, `[REDACTED]`) |
+| `MnA` | Path segment mapper |
+| `_` | Generic utility / lodash-like object |
+| `gNH` | Stream / writer helper (`slA → H.write`) |
+| `slA` | Low-level write wrapper |
+| `Msq` | Persistent-storage write coordinator (atomic file ops) |
+| `GNH` | Debounce / flush buffer (`clearTimeout`, `setImmediate`, `setTimeout`) |
+| `pHH` | Storage flush helper (`DnA`, `cwH.join`, `l8`, `v6`) |
+| `F6` | Utility: possibly feature-flag or format helper |
+| `JG8` | Utility calling `j8` (internal helper) |
+| `jnA` | Path join helper (`cwH.join`, `v6`) |
+| `JnA` | Atomic rename helper (`YV.stat`, `YV.rename`, `YV.unlink`) |
+| `fsq` | File-append-and-rotate writer (`YV.mkdir`, `YV.appendFile`) |
+| `N1` | In-flight request set manager (`vrq`, `J08.add`, `J08.delete`) |
+| `i4` | Rule-text escape pre-processor → `CPL` |
+| `CPL` | String escape normalizer (`replaceAll` for `\\`, `\(`, `\)`) |
+| `L` | Filtered list / collection helper |
+| `K` | Process-exit-capable task runner |
+| `q` | Generic collection / queue |
+| `vH` | String coercion wrapper |
+| `AZ` | Sync file-write helper (`FNH.writeFileSync`) |
+| `f` | File-descriptor / stream handle |
+| `MV` | Likely MCP-version or metadata object |
+| `D` | Daemon / supervisor controller (`lDH`, `Hwq`, `E.stop`, `I.stop`) |
+| `lDH` | Config-file reader (`eYq.readFile`, `utf8`) |
+| `j8` | Internal utility (called by many helpers) |
+| `qCA` | Config-parse helper (`_CA`) |
+| `Hwq` | Config display formatter (`Object.keys`, `Math.max`, `i3`) |
+| `E` | Event / input handler (`u.preventDefault`, `CP`) |
+| `u` | UI event object |
+| `CP` | Remote-control startup handler (`CA`, literal `"remoteControlAtStartup"`) |
+| `CA` | Settings loader (reads `policySettings`, `flagSettings`, `userSettings`, `projectSettings`) |
+| `I` | Watcher/service instance (`I.stop`, `I.updateConfig`, `I.start`) |
+| `VQq` | Daemon config-change handler (`Do`) |
+| `Do` | Daemon reload worker |
+| `Z` | Secondary service (`.start`) |
+| `d` | Final callback / cleanup in daemon path |
+| `JaH` | Likely "just-added helper" — called between `D.includes` check and `UA.refreshConfig` |
+| `e_A` | Directory re-indexer (`yK.realpath`, `yK.readFile`, `yK.mkdir`, `yK.appendFile`) |
+| `oDH` | Environment classifier (`"production"`, `"test"`) |
+| `yH` | String normalizer (coerces to String) |
+| `tjq` | Test-environment detector |
+| `vh` | Possibly verbose/hidden flag |
+| `D8` | Error-code extractor (`j8`, literal `"EISDIR"`, `"code"`) |
+| `fH` | Error reporter / logger (`HA`, `yH`, `kq`, `$wL`, `kyH.push`, `EQ.logError`) |
+| `HA` | Error factory (wraps `Error` + `String`) |
+| `kq` | Log-queue flusher (`h1_`) |
+| `h1_` | Log-entry formatter (`yH`) |
+| `$wL` | Rolling log buffer (`uv6.shift`, `uv6.push`) |
+| `lg` | Likely logger reference |
+| `_A` | App-level state accessor (used in multiple contexts) |
+| `Qk1` | File-watcher re-initializer (`YW`, `Jq`, `jM`, `D8`, `fH`) |
+| `YW` | Watcher teardown (`bfH.delete`) |
+| `Jq` | Watcher state builder (`vX.stat`, `vX.readFile`, `bfH.*`) |
+| `B6` | JSON parse wrapper |
+| `jM` | Watcher state persister (`lY`, `NX.join`, `RH`, `YW`) |
+| `lY` | Atomic file writer (`Uo8.randomBytes`, `or.writeFile`, `or.rename`, `or.copyFile`, `or.unlink`) |
+| `_a` | Add-dir result renderer (JSX, uses `ok1`, `R8`, `CA`, `exH`, `HuH`) |
+| `j_A` | Sub-renderer or message builder |
+| `ok1` | Permission-row builder (`kK6`, `R8`, `aRK`, `eRK`, `Q$`, `i4`, `CA`, `fH`) |
+| `kK6` | Permission classifier (`R8`) |
+| `R8` | Permission entry resolver (`IdA`, `G7_`, `VdA`) |
+| `aRK` | File-accessibility resolver (`EO`, `F6`, `wE`, `v3`, `Z9`) |
+| `EO` | Settings-layer merger (`MX.join`, `E6H`, `ePL`, `xb`, `sPL`, `ULH`) |
+| `v3` | Filesystem entry type checker (`lstatSync`, `isFIFO`, `isSocket`, `isCharacterDevice`, `isBlockDevice`, `realpathSync`) |
+| `wE` | Possibly "working-entry" builder (`bp`) |
+| `eRK` | Extended rule resolver |
+| `Q$` | Rule-text formatter (`xPL`, `XE`, `uPL`, `bPL`, `H.substring`) |
+| `xPL` | Rule prefix formatter |
+| `XE` | `Object.hasOwn` guard helper |
+| `uPL` | Rule suffix formatter |
+| `bPL` | Rule body escape (`H.replaceAll`) |
+| `M` | MCP server manager (`UZH`, `ZBq`, `K.get`, `K.values`, `j6`, `$F7`) |
+| `UZH` | MCP connection enumerator |
+| `ZBq` | MCP update applier (`H.applyMcpUpdate`, `_.cleanup`) |
+| `$` | Misc helper object |
+| `j6` | MCP server-state lookup (`V5H.has`, `mU.has`, `mU.get`) |
+| `$F7` | MCP client-filter and reconnect controller |
+| `exH` | Path resolver entry point (`c_`, `NZ1.stat`, `Qd`, `CS`) |
+| `c_` | Path normalizer (homedir expand, `OZ.normalize`, `OZ.resolve`, null-byte check) |
+| `N6` | Async-local-storage context getter (`Qv6`, `_A`) |
+| `Qv6` | Store accessor (`gv6.getStore`, `ng`) |
+| `Qd` | Path display formatter (`_A`) |
+| `CS` | Canonical-path builder (`c_`, `_.replace`, `q.replace`, `Y2`, `vbA`, `xi`) |
+| `Y2` | Case normalizer (`H.toLowerCase`) |
+| `vbA` | Platform path adjuster (`s6`, `LX`, `/var/` → `/tmp$1` substitution) |
+| `xi` | Final path canonicalizer |
+| `HuH` | Success-JSX builder (`M6.bold`, `fl6.dirname`) |

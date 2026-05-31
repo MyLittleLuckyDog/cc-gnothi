@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "install-slack-app"
 cc_version: "2.1.132"
-updated: "2026-05-18"
+updated: "2026-05-31"
 tags: ["install-slack-app", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/install-slack-app` command provides a one-step shortcut to install the Claude Slack integration. When invoked, it emits a telemetry event, persists the current global configuration to disk (with file-lock protection), and opens the Slack app installation URL in the user's default browser. The command does not accept arguments and does not support non-interactive (headless) execution.
+The `/install-slack-app` command is a local, non-interactive slash command that opens the Claude Slack application installation page in the user's default browser. It fires a telemetry event at invocation, displays a short status message, resolves the OS-appropriate browser-open mechanism, and then delegates to a URL-opening utility — all without requiring any user input or producing further interactive output.
 
 ---
 
@@ -31,46 +31,47 @@ The `/install-slack-app` command provides a one-step shortcut to install the Cla
 |---|---|
 | type | `local` |
 | name | `install-slack-app` |
-| description | Install the Claude Slack app |
+| description | `Install the Claude Slack app` |
 | supportsNonInteractive | `false` |
-| module\_id | `a6q` |
+| module_id | `a6q` |
+| load_inline | `true` |
+| handler | `h97` (AsyncFunction, resolved via `module_id`) |
+| `loc_byte_end` | `10434951` |
+| `arbor_handler.name` | `h97` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::h97` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.132 bundle.js:+10434765
+Analysis basis: CC v2.1.132 bundle.js:+10434765 – +10434951
 
 ---
 
 ## Input Branching
 
-The command's execution path splits across three concerns: telemetry emission, config persistence (with its own internal branching), and browser launch.
+The command accepts no user-supplied arguments. All branching is driven by the runtime environment (operating system) rather than by input content.
 
 ```mermaid
 flowchart TD
-    A(["/install-slack-app invoked"]) --> B[Emit tengu_install_slack_app_clicked]
-    B --> C[Save global config with lock\n— saveConfigWithLock]
-    C --> D{Lock acquired?}
-    D -- "timeout > 60 000 ms" --> E[Log warning: lock contention\nEmit tengu_config_lock_contention\nContinue anyway]
-    D -- acquired --> F{Re-read config\nhas auth?}
+    A([User invokes /install-slack-app]) --> B[Fire telemetry: tengu_install_slack_app_clicked]
+    B --> C[Acquire config lock / read global config]
+    C --> D{Lock contention?}
+    D -- yes --> E[Emit tengu_config_lock_contention\nlog warning: lock took longer than expected]
+    D -- no --> F[Config read succeeded]
     E --> F
-    F -- "auth missing in re-read\nbut present in cache" --> G[Refuse write\nEmit tengu_config_auth_loss_prevented\nLog safety message]
-    F -- ok --> H[Write config to temp file\nMode 0o600 / utf-8]
-    H --> I{Backup rotation\nneeded?}
-    I -- "≥ 5 backups exist" --> J[Prune oldest backup\nEmit tengu_config_stale_write]
-    I -- "< 5 backups" --> K[Copy current file\nto .backup. + timestamp]
-    J --> K
-    K --> L[Atomic rename temp → target]
-    G --> M([Config not saved])
-    L --> N[openURLInBrowser\nSlack installation URL]
-    N --> O{Protocol check\nhttp: or https:?}
-    O -- invalid --> P[Throw Error]
-    O -- valid --> Q{Platform?}
-    Q -- darwin --> R["spawn: open <url>"]
-    Q -- win32 --> S["spawn: rundll32 url,OpenURL <url>"]
-    Q -- other --> T["spawn: xdg-open <url>"]
-    R & S & T --> U[Display text message\n'Opening Slack app installation page in browser…']
-    U --> V([Done])
+    F --> G[Display status text:\nOpening Slack app installation page in browser…]
+    G --> H[Resolve URL-open utility]
+    H --> I{Platform}
+    I -- win32 --> J[rundll32 url.dll,OpenURL]
+    I -- darwin --> K[open]
+    I -- other --> L[xdg-open]
+    J --> M[Open installation URL in browser]
+    K --> M
+    L --> M
+    M --> N([Command completes])
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+10434369, +10434484, +7355523, +7355558
+Analysis basis: CC v2.1.132 bundle.js:+10434369, +10434409, +10434484, +10434517, +7355523, +7355558, +7355574, +7355658, +7355732, +7355739
 
 ---
 
@@ -78,173 +79,126 @@ Analysis basis: CC v2.1.132 bundle.js:+10434369, +10434484, +7355523, +7355558
 
 ### 1. Command Entry Point
 
+The async handler `h97` (resolved via `module_id: "a6q"`) is the top-level entry point for this command.
+
 ```
-function installSlackAppCommand(context):
-    emitTelemetry("tengu_install_slack_app_clicked")       // +10434371
-    saveGlobalConfigWithLock(context.appState)             // +10434409
-    openURLInBrowser(SLACK_INSTALL_URL)                    // +10434484
-    yield textMessage("Opening Slack app installation page in browser…")
-                                                           // +10434504, +10434517
+async function installSlackAppHandler(context):
+    fire telemetry event "tengu_install_slack_app_clicked"
+    call saveGlobalConfig(context)          // persists any pending config state
+    call openUrlInBrowser(installationUrl)  // opens the Slack install page
+    return text result "Opening Slack app installation page in browser…"
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+10434369
+Analysis basis: CC v2.1.132 bundle.js:+10434369 (telemetry), +10434409 (config save call), +10434484 (browser-open call), +10434504 (return type `"text"`), +10434517 (status string)
 
 ---
 
-### 2. Global Config Save with Lock (`saveConfigWithLock`)
+### 2. Config Persistence (saveGlobalConfig)
 
-This routine serialises the current in-memory configuration to `~/.claude.json` using a file-system lock directory to guard against concurrent writes from multiple Claude instances.
+Before opening the browser, the handler calls a config-save utility that acquires a file-system lock on the global config file (`~/.claude.json`) and writes any pending state. The depth-2 traversal reveals a multi-step locking protocol used by this utility.
 
 ```
-function saveConfigWithLock(configCache):
+async function saveGlobalConfig(context):
+    acquire filesystem lock on globalConfigPath
+    if lock acquisition exceeds timeout:
+        emit telemetry "tengu_config_lock_contention"
+        log warning "Lock acquisition took longer than expected - another Claude instance may be running"
 
-    lockDir = resolveLockDirectory()                       // Xz.dirname + F6
-    fs.mkdirSync(lockDir, { recursive: true })             // +3105125
+    reRead = readConfigFromDisk(globalConfigPath)
 
-    startTime = Date.now()                                 // +3105170
-    acquired  = false
+    if cachedConfig has auth AND reRead is missing auth:
+        emit telemetry "tengu_config_auth_loss_prevented"
+        log warning "saveGlobalConfig fallback: re-read config is missing auth that cache has; refusing to write. See GH #3117."
+        releaseLock()
+        return
 
-    repeat up to 100 iterations:                           // +3105303
-        try:
-            fs.mkdirSync(lockPath, { exclusive: true })    // EEXIST branch +3106056
-            acquired = true
-            break
-        catch EEXIST:
-            sleep(randomJitter())                          // jitter via Math.random + setTimeout
-        if Date.now() - startTime > 60000:                 // +3106079
-            logWarning("Lock acquisition took longer than expected…")
-                                                           // +3105309
-            emitTelemetry("tengu_config_lock_contention")  // +3105398
-            break
+    if configHasBeenModifiedElsewhere(reRead):
+        emit telemetry "tengu_config_stale_write"
 
-    reReadConfig = readConfigFromDisk()
-
-    if cacheHasAuth(configCache) and not reReadConfig.hasAuth():
-        logError("saveConfigWithLock: re-read config is missing auth…")
-                                                           // +3105725
-        emitTelemetry("tengu_config_auth_loss_prevented")  // +3105877
-        releaseLock(lockDir)
-        return  // refuse write
-
-    tempPath = buildTempPath()
-    serialised = JSON.stringify(configCache, null, 2)
-    fs.writeFileSync(tempPath, serialised,
-                     { encoding: "utf-8", mode: 0o600 })   // +3106597, +3106610
-
-    rotateBackups(configPath)                              // see §3
-    fs.renameSync(tempPath, configPath)
-
-    releaseLock(lockDir)
+    mergedConfig = merge(reRead, pendingChanges)
+    atomicWriteConfig(globalConfigPath, mergedConfig)
+    releaseLock()
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+3102400, +3105098, +3105170, +3105183
+Key constants observed in the traversal:
+
+- Lock-wait warning string: `"Lock acquisition took longer than expected - another Claude instance may be running"` (bundle.js:+3105309)
+- Config access guard error string: `"Config accessed before allowed."` (bundle.js:+3107290)
+- Auth-loss prevention log message references GH issue #3117 (bundle.js:+3102607, +3105725)
+- Backup file infix: `".backup."` (bundle.js:+3106195)
+- Maximum backup copies retained: `5` (bundle.js:+3106328)
+- Config file encoding: `"utf-8"` (bundle.js:+3107373)
+- Lock-wait timeout: `60000` ms (bundle.js:+3106079)
+- Config directory mode (octal): `384` (= `0o600`) (bundle.js:+3106610)
+
+Analysis basis: CC v2.1.132 bundle.js:+3102400, +3105098, +3105266, +3105309, +3105398, +3105534, +3105725, +3105877
 
 ---
 
-### 3. Backup Rotation (`rotateOldBackups`)
+### 3. Atomic Config Write (writeConfigAtomically)
 
-Keeps at most 5 timestamped backup copies of `~/.claude.json`. Backup filenames contain the prefix `.backup.` followed by a numeric timestamp segment.
+The config write path uses a temp-file + rename strategy to prevent partial writes.
 
 ```
-function rotateOldBackups(configPath):
-    dir      = Xz.dirname(configPath)                      // +3105104
-    base     = Xz.basename(configPath)                     // +3105994
-    entries  = fs.readdirStringSync(dir)                   // +3106087
-
-    backups  = []
-    for each entry in entries:
-        if entry.startsWith(base + ".backup."):            // +3106122 / ".backup." +3106195
-            parts     = entry.split(".")                   // +3106187
-            timestamp = Number(lastPart(parts))            // +3106180
-            if not Number.isNaN(timestamp):                // +3106218
-                backups.append({ name: entry, timestamp })
-
-    sort backups ascending by timestamp
-
-    while backups.length >= 5:                             // +3106328
-        oldest = backups.shift()
-        fs.unlinkSync(Xz.join(dir, oldest.name))           // +3106446
-
-    destName = base + ".backup." + Date.now()
-    fs.copyFileSync(configPath, Xz.join(dir, destName))    // +3106302
+function writeConfigAtomically(targetPath, data):
+    tempPath = join(dirname(targetPath), randomHexBytes(6) + ".tmp")  // 6 random bytes → hex string
+    originalMode = statSync(targetPath).mode  // preserve existing file permissions
+    writeFileSync(tempPath, serialize(data), encoding="utf-8")
+    fchmodSync(tempPath, originalMode)
+    fsyncSync(tempPath)
+    log debug "Applied original permissions to temp file"
+    renameSync(tempPath, targetPath)          // atomic on POSIX
+    if old temp file exists: unlinkSync(old)
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+3106087, +3106195, +3106328, +3106446
+Constants:
+- Random bytes for temp name: `6` (bundle.js:+952813), encoded as `"hex"` (bundle.js:+952825)
+- Permission bits examined via `fchmodSync` after temp write (bundle.js:+953291)
+- fsync called before rename to flush kernel buffers (bundle.js:+953357)
+- Log string: `"Applied original permissions to temp file"` (bundle.js:+953312)
+
+Analysis basis: CC v2.1.132 bundle.js:+952797, +952862, +952964, +953233, +953291, +953357, +953485
 
 ---
 
-### 4. Global Config Fallback Save (`saveGlobalConfigFallback`)
-
-A secondary, non-locking config persistence path that applies the same auth-safety guard described in §2.
+### 4. Browser URL Opening (openUrlInBrowser)
 
 ```
-function saveGlobalConfigFallback(configCache):
-    reReadConfig = readConfigFromDisk()
-
-    if cacheHasAuth(configCache) and not reReadConfig.hasAuth():
-        logError("saveGlobalConfig fallback: re-read config is missing auth…")
-                                                           // +3102607
-        return  // refuse write
-
-    persistConfig(configCache)
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+3102404, +3102607
-
----
-
-### 5. URL Opener (`openURLInBrowser`)
-
-```
-function openURLInBrowser(url):
-    parsed = parseURL(url)
-
-    if parsed.protocol not in ["http:", "https:"]:         // +7355286, +7355308
-        throw Error("Invalid URL protocol")                // +7355236
-
+function openUrlInBrowser(url):
+    validate url scheme is "http:" or "https:"   // rejects other schemes
     platform = process.platform
 
-    if platform == "darwin":                               // +7355558
-        spawnDetached("open", [url])                       // +7355732
-    else if platform == "win32":                           // +7355574
-        spawnDetached("rundll32", ["url,OpenURL", url])    // +7355658, +7355670
-    else:
-        spawnDetached("xdg-open", [url])                   // +7355739
+    if platform == "win32":
+        spawn("rundll32", ["url.dll,OpenURL", url])
+    else if platform == "darwin":
+        spawn("open", [url])
+    else:                                         // Linux / other POSIX
+        spawn("xdg-open", [url])
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+7355523, +7355607
+Constants:
+- Accepted schemes: `"http:"` (bundle.js:+7355286), `"https:"` (bundle.js:+7355308)
+- Windows check string: `"win32"` (bundle.js:+7355574)
+- macOS check string: `"darwin"` (bundle.js:+7355558)
+- Windows launcher: `"rundll32"` with argument `"url,OpenURL"` (bundle.js:+7355658, +7355670)
+- macOS launcher: `"open"` (bundle.js:+7355732)
+- Linux launcher: `"xdg-open"` (bundle.js:+7355739)
+
+Analysis basis: CC v2.1.132 bundle.js:+7355523, +7355236 (Error on invalid URL), +7355607
 
 ---
 
-### 6. Config Read with Access Guard (`readConfigFromDisk`)
+### 5. Background Daemon / Spare-Session Interactions
 
-```
-function readConfigFromDisk():
-    if configAccessNotYetAllowed():
-        throw Error("Config accessed before allowed.")     // +3107290
+The call graph reaches the background session management layer (`w`, `Y`, `PA`, `rJH`) through the config-write and URL-open paths. These are shared infrastructure utilities rather than behavior specific to this command. The relevant observed behavior is:
 
-    raw  = fs.readFileSync(configFilePath, "utf-8")        // +3107346
-    try:
-        parsed = JSON.parse(raw)
-        return parsed
-    catch parseError:
-        emitTelemetry("tengu_config_parse_error")          // +3107927
-        return defaultConfig()
-```
+- Spare background sessions are spawned proactively with `bm.spawn` and claimed on demand (bundle.js:+14130767, +14130886).
+- A SIGKILL escalation path exists for unresponsive background sessions with a 30-second initial timeout and 15-second escalation window (bundle.js:+14129927, +14129938, +14130013, +14130020).
+- Daemon session creation is recorded under telemetry event `"daemon_bg_session_create"` (bundle.js:+14130282).
 
-Analysis basis: CC v2.1.132 bundle.js:+3107284, +3107346, +3107927
+These interactions are **not triggered by normal command execution** but surface in the traversal because they share helper modules with the config-write subsystem.
 
----
-
-### 7. Jitter-Backoff Sleep Helper
-
-```
-function jitteredSleep():
-    delayMs = Math.random() * BASE_DELAY                  // +12264285
-    setTimeout(resolve, delayMs)                           // +12264322
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+12264285
+Analysis basis: CC v2.1.132 bundle.js:+14129749, +14130282, +14130309, +14130767, +14130886
 
 ---
 
@@ -252,18 +206,18 @@ Analysis basis: CC v2.1.132 bundle.js:+12264285
 
 | Item | Detail |
 |---|---|
-| Telemetry — `tengu_install_slack_app_clicked` | Fired immediately on command invocation (bundle.js:+10434371) |
-| Telemetry — `tengu_config_lock_contention` | Fired when lock acquisition exceeds 60 000 ms (bundle.js:+3105398) |
-| Telemetry — `tengu_config_stale_write` | Fired during backup rotation when the backup set must be pruned (bundle.js:+3105534) |
-| Telemetry — `tengu_config_auth_loss_prevented` | Fired when a write is refused to protect existing auth credentials (bundle.js:+3105877) |
-| Telemetry — `tengu_config_parse_error` | Fired when the on-disk config JSON cannot be parsed (bundle.js:+3107927) |
-| File write | `~/.claude.json` updated atomically (temp-file + rename) with mode `0o600` (bundle.js:+3106610) |
-| Backup files | Up to 5 `.backup.<timestamp>` copies retained alongside `~/.claude.json` (bundle.js:+3106328) |
-| Lock directory | Temporary lock directory created and removed around each config write (bundle.js:+3105125) |
-| Browser process | A detached child process (`open` / `rundll32` / `xdg-open`) is spawned; no stdout/stderr captured (bundle.js:+7355607) |
-| appState changes | In-memory config cache flushed to disk; no other appState fields mutated by this command |
-| Sound | None observed in depth-2 traversal |
-| Non-interactive support | `false` — command must not be called in headless/pipe mode (bundle.js:+10434765) |
+| Telemetry (primary) | `tengu_install_slack_app_clicked` — fired immediately on handler entry (bundle.js:+10434371) |
+| Telemetry (config layer) | `tengu_config_lock_contention` — lock wait exceeded threshold (bundle.js:+3105398) |
+| Telemetry (config layer) | `tengu_config_stale_write` — on-disk config diverged from cache at write time (bundle.js:+3105534) |
+| Telemetry (config layer) | `tengu_config_parse_error` — config JSON parse failure (bundle.js:+3107927) |
+| Telemetry (config layer) | `tengu_config_auth_loss_prevented` — refused write to avoid wiping auth (bundle.js:+3105877) |
+| Telemetry (bg daemon) | `tengu_bg_spare_spawn`, `tengu_bg_spare_enable`, `tengu_bg_spare_claim`, `tengu_bg_spare_claim_fail`, `tengu_bg_dispatch_sigkill_escalate` — background session lifecycle (shared infrastructure) |
+| File system | Global config file (`~/.claude.json`) may be rewritten with an atomic temp-file rename. Backup files (infix `".backup."`) kept up to 5 copies. |
+| Browser | Default OS browser is launched with the Slack app installation URL. |
+| stdout / return | A single `text`-type result containing `"Opening Slack app installation page in browser…"` is returned to the CLI renderer. |
+| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Sound | None observed. |
 
 ---
 
@@ -271,23 +225,21 @@ Analysis basis: CC v2.1.132 bundle.js:+12264285
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis — command registered; telemetry, config-lock, backup rotation, and platform-aware browser launch documented |
+| v2.1.132 | Initial analysis — command registered as `local` type, handler `h97`, opens Slack install URL via OS browser launcher |
 
 ---
 
 ## Common Mistakes
 
-1. **Running in non-interactive mode**: `supportsNonInteractive` is `false`. Invoking `/install-slack-app` in a script or CI pipeline will fail or be silently skipped. Use it only in an interactive terminal session.
+1. **Running in non-interactive mode**: `supportsNonInteractive` is `false`. Invoking this command in a headless or piped session (e.g., `echo "" | claude /install-slack-app`) will be rejected or produce no useful output because a browser cannot be opened.
 
-2. **Multiple concurrent Claude instances**: If two or more Claude Code processes share the same `~/.claude.json`, lock contention will occur. The lock timeout is 60 000 ms; exceeding it triggers a warning and telemetry but does not abort the write, which may result in a race condition.
+2. **Expecting in-CLI output beyond the status line**: The command emits exactly one text message (`"Opening Slack app installation page in browser…"`) and then exits. Any further Slack setup must be completed in the browser.
 
-3. **Corrupted `~/.claude.json`**: If the file is not valid JSON, `tengu_config_parse_error` is emitted and the command falls back to a default config. Any unsaved customisations will be lost. Keep a manual backup if editing the file by hand.
+3. **Assuming no file I/O occurs**: The command calls the global config save routine before opening the browser. If another Claude process holds the config lock, this command will block and emit a lock-contention warning. Running multiple Claude instances simultaneously can cause unexpected delays.
 
-4. **Auth credential loss guard**: If the on-disk config is somehow missing authentication fields while the in-memory cache still holds them, the command deliberately refuses to write. This is a safety measure (see GH #3117). Do not manually strip auth fields from `~/.claude.json` while Claude Code is running.
+4. **Missing browser on Linux**: The command delegates to `xdg-open` on non-macOS, non-Windows platforms. If `xdg-open` is absent (e.g., minimal server environments), the command will fail silently or throw an error, because no fallback browser launcher is defined within the traversed depth.
 
-5. **Firewall / browser not configured**: The URL opener spawns the system browser via `open`, `rundll32`, or `xdg-open`. If no default browser is registered (common on headless Linux servers), the spawned process will exit without opening any page and no error will be surfaced to the CLI.
-
-6. **Stale backups consuming disk space**: Up to 5 `.backup.<timestamp>` files are retained. They are never auto-expired beyond the count limit. On systems with very limited disk space, users should periodically clean `~/.claude.json.backup.*` files manually.
+5. **URL scheme assumptions**: Only `http:` and `https:` URLs are accepted by the browser-open utility. Any future reconfiguration pointing to a non-HTTP URL would cause an `Error` to be thrown before the browser is launched.
 
 ---
 
@@ -297,18 +249,55 @@ Analysis basis: CC v2.1.132 bundle.js:+12264285
 
 | Identifier | Role |
 |---|---|
-| `h97` | Command handler — install-slack-app entry point |
-| `d` | Telemetry emit utility |
-| `A8` | Save global config with lock (top-level coordinator) |
-| `Nt8` | Config file write with lock acquire / release and backup rotation |
-| `H` | Jitter-backoff sleep helper (Math.random + setTimeout) |
-| `FbH` | Lock directory path builder |
-| `CJ1` | Config object serialiser / Object.entries iterator |
-| `gbH` | Timestamp utility (Date.now wrapper) |
-| `k` | Logger / debug output utility |
-| `k5H` | Config read from disk with access guard |
-| `uq6` | Auth presence checker on config object |
-| `vt8` | Config path resolver (dirname + basename utilities) |
-| `LL` | URL browser-open orchestrator |
-| `T04` | URL protocol validator (throws on non-http/https) |
-| `Y8` | Platform-dispatch spawner (darwin / win32 / other) |
+| `h97` | Main async handler for `/install-slack-app` (entry point, AsyncFunction) |
+| `d` | Telemetry event emitter utility |
+| `A8` | Save-global-config top-level function |
+| `Nt8` | Config lock acquire + read + write orchestrator |
+| `A` | Filesystem abstraction (used for `readdirStringSync`, `statSync`) |
+| `F6` | File existence / access check helper |
+| `K` | Filesystem module reference (used for `mkdirSync`, `statSync`, `readdirStringSync`, `copyFileSync`, `unlinkSync`) |
+| `q` | Secondary filesystem module (used for `unlinkSync`, `readFileSync`, `statSync`, `mkdirSync`, `readdirStringSync`, `copyFileSync`) |
+| `vH` | String serialization helper for config data |
+| `AZ` | File write helper (wraps `writeFileSync`, `join`) |
+| `Wc_` | Config merge / Object.assign wrapper |
+| `Bg8` | Config object builder called by `Wc_` |
+| `k` | HTTP request / API call helper (used by config and network layers) |
+| `Lsq` | Request construction sub-helper |
+| `H` | Random/retry utility (uses `Math.random`, `setTimeout`) |
+| `RH` | JSON serialization helper (wraps `JSON.stringify`) |
+| `mf` | String path manipulation helper |
+| `gNH` | String utility wrapping `slA` |
+| `Msq` | Chunked HTTP send helper (uses `Buffer.byteLength`, `ZE6.then`, `fsq.bind`) |
+| `j8` | Debug / trace logger |
+| `k5H` | Config read + backup rotation function |
+| `B6` | JSON parse wrapper |
+| `Fh` | String prefix-strip helper (`startsWith` + `slice`) |
+| `bJ1` | Directory listing / backup file finder |
+| `fH` | Error handler / logger (uses `EQ.logError`) |
+| `kt8` | Path join + label helper |
+| `w` | Background process manager (spawn, kill, retry) |
+| `uq6` | Config validation helper |
+| `_` | Case-normalization utility (`toLowerCase`) |
+| `f` | Connection/session close handler |
+| `Z` | Config key filter (uses `startsWith`) |
+| `P` | MCP/SDK connection manager (`Promise.all`, `fH`, `HA`) |
+| `gX8` | SDK transport initializer |
+| `HA` | Error wrapping utility |
+| `I` | Array slice helper for backup list |
+| `QyH` | Atomic file write utility (temp file + rename) |
+| `O` | File stats / symbolic-link checker |
+| `D8` | Logging helper wrapping `j8` |
+| `FbH` | Config diff / change-detection helper |
+| `CJ1` | Object entries iterator helper |
+| `gbH` | Timestamp / Date.now wrapper |
+| `vt8` | Config path resolution helper (uses `QyH`) |
+| `LL` | Browser URL-open orchestrator |
+| `T04` | URL scheme validator (throws `Error` on invalid scheme) |
+| `Y8` | Browser launch dispatcher (platform detection + spawn) |
+| `PA` | Child-process spawn wrapper |
+| `rJH` | Spawn option builder (sets stdio, env, signals) |
+| `Y` | Background session lifecycle manager |
+| `ujL` | Spawn output string converter |
+| `N6` | Async-local-storage context resolver |
+| `Qv6` | Store accessor (`gv6.getStore`) |
+| `_A` | Context fallback resolver |

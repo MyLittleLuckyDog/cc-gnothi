@@ -2,7 +2,6 @@
 type: feature-spec
 feature: "stickers"
 cc_version: "2.1.132"
-updated: "2026-05-18"
 tags: ["stickers", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +20,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/stickers` command opens the official Claude Code sticker order page (`https://www.stickermule.com/claudecode`) in the user's default system browser. It is a local, interactive-only command with no arguments; on success it prints a brief status message, and on failure it falls back to printing the URL for manual navigation.
+`/stickers` is a local slash command that opens the Claude Code sticker ordering page (`https://www.stickermule.com/claudecode`) in the user's default system browser. It is a purely side-effect-oriented command: it invokes the platform-appropriate URL-open mechanism, emits a brief status message to the user, and exits immediately. No AI model call is made.
 
 ---
 
@@ -34,78 +33,83 @@ The `/stickers` command opens the official Claude Code sticker order page (`http
 | description | `Order Claude Code stickers` |
 | supportsNonInteractive | `false` |
 | module_id | `k$q` |
+| load_inline | `true` |
+| handler (Arbor) | `ED7` (AsyncFunction, resolved via `module_id` path) |
+| `loc_byte_end` | `11306000` |
+| `arbor_handler.name` | `ED7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::ED7` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.132 bundle.js:+11305840
+Analysis basis: CC v2.1.132 bundle.js:+11305840 – +11306000
 
 ---
 
 ## Input Branching
 
-Because the command accepts no user-supplied arguments, the only branching that occurs is at the operating-system layer inside the browser-open utility, followed by an error-recovery path.
+The command accepts no meaningful user-supplied arguments. Its branching is entirely determined by the **host operating system** and by whether the URL-open system call succeeds or fails.
 
 ```mermaid
 flowchart TD
-    A(["/stickers invoked"]) --> B[Resolve target URL\nhttps://www.stickermule.com/claudecode]
-    B --> C[Validate URL scheme]
-    C -- "scheme is http: or https:" --> D[Detect host OS]
-    C -- "scheme is neither" --> E[Throw Error — unsupported protocol]
-    D -- "darwin" --> F["spawn 'open' <url>"]
-    D -- "win32" --> G["spawn 'rundll32 url,OpenURL' <url>"]
-    D -- "other / Linux" --> H["spawn 'xdg-open' <url>"]
-    F & G & H --> I{Browser launch\nsucceeded?}
-    I -- "exit code 0" --> J["Emit text message:\n'Opening sticker page in browser…'"]
-    I -- "exit code non-zero\nor spawn error" --> K["Emit text message:\n'Failed to open browser. Visit: https://www.stickermule.com/claudecode'"]
-    J --> L([Done])
-    K --> L
+    A["/stickers invoked"] --> B["Resolve target URL\nhttps://www.stickermule.com/claudecode"]
+    B --> C["Validate URL scheme\n(must be http: or https:)"]
+    C -- "invalid scheme" --> D["Throw / reject with error"]
+    C -- "valid" --> E{"Detect OS\nprocess.platform"}
+    E -- "darwin" --> F["spawn: open <url>"]
+    E -- "win32" --> G["spawn: rundll32 url,OpenURL <url>"]
+    E -- "other (linux/etc.)" --> H["spawn: xdg-open <url>"]
+    F & G & H --> I["Emit status text:\n'Opening sticker page in browser…'"]
+    I --> J{"Browser open\nsucceeded?"}
+    J -- "yes" --> K["Return — command complete"]
+    J -- "no" --> L["Emit fallback message:\n'Failed to open browser. Visit: …'"]
+    L --> K
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11305573, +7355236, +7355286, +7355308, +7355558, +7355574, +7355658, +7355670, +7355732, +7355739, +11305643, +11305714
+Analysis basis: CC v2.1.132 bundle.js:+7355236, +7355286, +7355308, +7355558, +7355574, +7355658, +7355670, +7355732, +7355739, +11305576, +11305643, +11305714
 
 ---
 
 ## Behavioral Spec
 
-### Command Entry Point
+### 1 — Handler entry point (`ED7`)
 
 ```
-function executeStickersCommand(context):
-    targetURL = "https://www.stickermule.com/claudecode"
-    result = openURLInBrowser(targetURL)
-    if result.success:
-        yield textBlock("Opening sticker page in browser…")
-    else:
-        yield textBlock(
-            "Failed to open browser. Visit: https://www.stickermule.com/claudecode"
-        )
+async function stickersCommandHandler(commandContext):
+    targetUrl = "https://www.stickermule.com/claudecode"
+    await openUrlInBrowser(targetUrl)
+    // openUrlInBrowser defined below
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11305576, +11305630, +11305643, +11305714
+Analysis basis: CC v2.1.132 bundle.js:+11305573, +11305576
 
 ---
 
-### URL Validation
+### 2 — URL validation (`urlValidator` / `T04`)
 
-Before any OS call is made, the browser-open utility inspects the URL's protocol scheme.
+Before any process is spawned, the URL scheme is checked against an allow-list.
 
 ```
-function validateURL(url):
-    scheme = extractScheme(url)          // everything up to and including ":"
-    if scheme not in ["http:", "https:"]:
-        throw new Error("unsupported protocol: " + scheme)
-    return url
+function validateUrlScheme(url):
+    parsed = new URL(url)
+    if parsed.protocol not in ["http:", "https:"]:
+        throw new Error("URL scheme not permitted")
+    return parsed
 ```
 
-Supported schemes: `http:` and `https:`.
+Supported schemes: `"http:"` (bundle.js:+7355286) and `"https:"` (bundle.js:+7355308).  
+Any other scheme causes an immediate rejection via `Promise.reject` (bundle.js:+983679).
+
 Analysis basis: CC v2.1.132 bundle.js:+7355236, +7355286, +7355308
 
 ---
 
-### Platform-Specific Browser Launcher
+### 3 — Platform-aware browser open (`openUrl` / `LL` + `Y8`)
 
 ```
-function openURLInBrowser(url):
-    validateURL(url)
-    platform = getOperatingSystem()      // Node process.platform equivalent
+async function openUrlInBrowser(url):
+    validateUrlScheme(url)           // throws on bad scheme
+    platform = process.platform
 
     if platform == "darwin":
         command = "open"
@@ -113,49 +117,73 @@ function openURLInBrowser(url):
     else if platform == "win32":
         command = "rundll32"
         args    = ["url,OpenURL", url]
-    else:                                // Linux and all other POSIX systems
+    else:                            // linux, freebsd, etc.
         command = "xdg-open"
         args    = [url]
 
-    exitCode = spawnSync(command, args)
-
-    // Exit code 0 signals success; any other value is treated as failure.
-    // The numeric constant 1 marks the non-zero failure sentinel in the bundle.
-    return exitCode == 0
+    result = await spawnProcess(command, args)
+    return result
 ```
 
-Numeric sentinels used internally: `0` (success) and `1` (failure indicator).
-Analysis basis: CC v2.1.132 bundle.js:+7355558, +7355574, +7355658, +7355670, +7355732, +7355739, +7355806, +987899, +987933
+String constants used:
+- `"darwin"` — macOS branch (bundle.js:+7355558)
+- `"win32"` — Windows branch (bundle.js:+7355574)
+- `"rundll32"` with argument `"url,OpenURL"` (bundle.js:+7355658, +7355670)
+- `"open"` — macOS launcher (bundle.js:+7355732)
+- `"xdg-open"` — Linux/other launcher (bundle.js:+7355739)
+
+Analysis basis: CC v2.1.132 bundle.js:+7355523, +7355558, +7355574, +7355607
 
 ---
 
-### Child-Process Wrapper
+### 4 — Status message emission (`PA` / output layer)
 
-The spawn helper wraps the low-level process call and enforces a timeout expressed as the numeric literal `10` found at the call site.
+Two user-visible string literals are emitted depending on outcome:
 
-```
-function spawnSync(command, args):
-    // Maximum wait: 10 (unit: <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->)
-    process = childProcess.spawnSync(command, args, { timeout: 10 })
-    if process.error:
-        throw process.error
-    return process.status
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+987899, +987933, +987954, +988065
-
----
-
-### Output Format
-
-The command always yields exactly one output block of kind `"text"`.
-
-| Scenario | Text content |
+| Situation | Message |
 |---|---|
-| Browser opened successfully | `Opening sticker page in browser…` |
-| Browser launch failed | `Failed to open browser. Visit: https://www.stickermule.com/claudecode` |
+| URL open attempted | `"Opening sticker page in browser…"` |
+| Browser open failed | `"Failed to open browser. Visit: https://www.stickermule.com/claudecode"` |
+
+The happy-path message is a `"text"`-typed output node (bundle.js:+11305630, +11305643).  
+On failure the fallback message embeds the full URL so the user can copy it manually (bundle.js:+11305714).
 
 Analysis basis: CC v2.1.132 bundle.js:+11305630, +11305643, +11305714
+
+---
+
+### 5 — Subprocess / process management layer (`rJH`, `Y`, `fH`)
+
+The call graph reveals a subprocess-management subsystem reached through `PA → rJH`. Key behavioural facts visible at depth 2:
+
+- A concurrency limit of **10** simultaneous child processes applies in this layer (bundle.js:+987899).
+- A size/buffer cap of **1 000 000 bytes** (`1_000_000`) is enforced on subprocess output (bundle.js:+988421).
+- The system uses a retry/back-off loop with a **2 000 ms** delay constant (bundle.js:+14129682), consistent with the background-spare-process pool seen in telemetry.
+- `Promise.reject` is used for hard failures when the subprocess cannot be started (bundle.js:+983679).
+- An error-level log entry is emitted via the internal logging system on subprocess failure (bundle.js:+911916, +911941).
+
+```
+// Simplified subprocess dispatch (pseudocode only)
+async function spawnProcess(command, args):
+    if activeProcessCount >= 10:
+        await waitForSlot()
+    child = spawn(command, args, {maxOutputBytes: 1_000_000})
+    try:
+        await child.completion
+    catch err:
+        logError("error", err)
+        raise err
+```
+
+Analysis basis: CC v2.1.132 bundle.js:+987899, +988421, +983679, +911916, +911941
+
+---
+
+### 6 — Context / store access (`N6`, `Qv6`)
+
+`Y8` reaches a store-access utility (`N6 → Qv6`) that calls `getStore()` on an AsyncLocalStorage-style context (bundle.js:+918237). This is the standard mechanism by which the command handler obtains the current session/app context — no special sticker-specific state is stored.
+
+Analysis basis: CC v2.1.132 bundle.js:+988065, +918288, +918237
 
 ---
 
@@ -163,15 +191,14 @@ Analysis basis: CC v2.1.132 bundle.js:+11305630, +11305643, +11305714
 
 | Item | Detail |
 |---|---|
-| Telemetry | None — the `telemetry` array is empty; no `tengu_*` events are emitted. |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | None observed in depth-2 traversal. |
-| Sound | None observed in depth-2 traversal. |
-| External process | Spawns one synchronous child process (`open`, `rundll32`, or `xdg-open`) per invocation. |
-| Network | No direct network I/O from the CLI; the system browser handles the HTTP request. |
-| Interactive-only | `supportsNonInteractive: false` — the command is disabled in non-interactive (pipe/CI) mode. |
-
-Analysis basis: CC v2.1.132 bundle.js:+11305840 (registration), empty telemetry array
+| Telemetry — `tengu_bg_spare_enable` | Fired within the background-process pool layer (`Y`) when a spare process slot is enabled (bundle.js:+14129457) |
+| Telemetry — `tengu_bg_spare_spawn` | Fired when a spare background process is actually spawned (bundle.js:+14129749) |
+| Browser process | Spawns one OS-level child process (`open` / `rundll32` / `xdg-open`) to open the sticker URL |
+| appState changes | None detected at depth-2 traversal; the command does not mutate conversation or session state |
+| Hook registration | None detected specific to this command |
+| Sound | None detected |
+| Non-interactive support | `false` — the command will not run in `--no-interactive` / headless mode |
+| Return value | A text message node; no assistant model response is generated |
 
 ---
 
@@ -179,17 +206,17 @@ Analysis basis: CC v2.1.132 bundle.js:+11305840 (registration), empty telemetry 
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis — command registered as local, opens StickerMule order page, no telemetry. |
+| v2.1.132 | Initial analysis — command opens `https://www.stickermule.com/claudecode` via platform browser |
 
 ---
 
 ## Common Mistakes
 
-1. **Running in non-interactive mode.** Because `supportsNonInteractive` is `false`, invoking `/stickers` inside a script or piped session will not execute the command. Always run it in an interactive terminal session.
-2. **Expecting URL customization.** The target URL (`https://www.stickermule.com/claudecode`) is hard-coded; no argument or environment variable overrides it. Analysis basis: CC v2.1.132 bundle.js:+11305576.
-3. **Assuming telemetry is emitted.** Unlike many other CC commands, `/stickers` fires no telemetry events. Do not rely on analytics data to confirm its invocation.
-4. **Misreading the fallback message as an error exit.** When the browser cannot be opened, the command emits a `text` block with the fallback URL and exits cleanly — it does not throw an unhandled exception to the CLI runtime.
-5. **Treating Linux behavior as identical to macOS.** On non-`darwin`, non-`win32` platforms the launcher calls `xdg-open`, which may fail silently on minimal server environments where no browser or `xdg-open` binary is installed. Analysis basis: CC v2.1.132 bundle.js:+7355739.
+1. **Running in non-interactive mode** — `supportsNonInteractive: false` means invoking `/stickers` in a headless or CI pipeline will be rejected or silently skipped. Use an interactive terminal session.
+2. **Expecting a model response** — this command never calls the Claude model. Users should not wait for an AI reply; the only output is the short status text message.
+3. **Firewall / sandbox environments** — if `open`, `rundll32`, or `xdg-open` are blocked, the fallback message is shown. The URL must then be visited manually: `https://www.stickermule.com/claudecode`.
+4. **Passing arguments** — the command ignores any text typed after `/stickers`. The URL is hardcoded; no customisation is possible via arguments.
+5. **Assuming cross-platform parity** — on Linux the command depends on `xdg-open` being present; minimal container images (Alpine, distroless) often omit it, causing the failure branch to fire.
 
 ---
 
@@ -199,7 +226,17 @@ Analysis basis: CC v2.1.132 bundle.js:+11305840 (registration), empty telemetry 
 
 | Identifier | Role |
 |---|---|
-| `ED7` | Stickers command implementation module — top-level handler that resolves the target URL and delegates to the browser-open utility |
-| `LL` | Browser-open orchestrator — validates the URL scheme and dispatches to the platform-specific launcher |
-| `T04` | URL scheme validator — inspects the protocol prefix and throws on unsupported schemes |
-| `Y8` | Platform-specific process spawner — selects `open`, `rundll32`, or `xdg-open` based on `process.platform` and executes synchronously |
+| `ED7` | Main async handler for `/stickers`; entry point resolved via `module_id` path |
+| `LL` | URL-open orchestrator; validates scheme then dispatches to OS launcher |
+| `T04` | URL scheme validator; throws on non-http(s) protocols |
+| `Y8` | Wrapper that combines browser-open with context/store retrieval |
+| `PA` | Process-management facade; enforces concurrency limit and output-size cap |
+| `rJH` | Low-level subprocess executor; handles spawn lifecycle, rejection, and error logging |
+| `Y` | Background spare-process pool manager; fires `tengu_bg_spare_*` telemetry |
+| `ujL` | Output stringification utility (uses `String()` coercion) |
+| `fH` | Error-logging helper; pushes entries to internal log and calls `EQ.logError` |
+| `N6` | Context accessor; delegates to store-retrieval layer |
+| `Qv6` | AsyncLocalStorage `getStore()` wrapper for session context |
+| `_A` | Auxiliary helper reached from context layer; role unclear at depth-2 traversal |
+
+<!-- TODO: roles of lL_, hy8, Sy8, Cy8, eq_, VH6, yy8, hL_, tq_, HL_, aq_, sq_, Sq_, kL_, yH6, vL_, NL_, LL_, HA, yH, kq, $wL, kyH, ng, j6, s6, qFA, d not found in depth-2 traversal; needs --depth 4 -->

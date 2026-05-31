@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "reload-plugins"
 cc_version: "2.1.132"
-updated: "2026-05-18"
+updated: "2026-05-31"
 tags: ["reload-plugins", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/reload-plugins` command activates any pending plugin changes in the current Claude Code session without requiring a full restart. It does this by clearing all cached plugin state, re-reading plugin configuration files (`.mcp.json` and `.lsp.json`), resolving dependencies, re-registering plugin MCP and LSP servers, and emitting a completion event. The command dispatches its work via a thin-client control request, making it unavailable in non-interactive mode.
+The `/reload-plugins` command activates pending plugin changes in the current CLI session without requiring a full restart. It clears all plugin-related caches, re-resolves and reconnects active MCP servers, hooks, and LSP servers associated with installed plugins, and reports the resulting status back to the user. The command dispatches a `control-request` to the session layer, making it a session-management operation rather than a direct agent prompt.
 
 ---
 
@@ -34,339 +34,279 @@ The `/reload-plugins` command activates any pending plugin changes in the curren
 | description | `Activate pending plugin changes in the current session` |
 | supportsNonInteractive | `false` |
 | thinClientDispatch | `control-request` |
-| module\_id | `I3q` |
+| module_id | `I3q` |
+| load_inline | `true` |
+| handler (Arbor) | `Nz7` (AsyncFunction, resolved via `module_id`) |
+| `loc_byte_end` | `11257474` |
+| `arbor_handler.name` | `Nz7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::Nz7` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.132 bundle.js:+11257255
+Analysis basis: CC v2.1.132 bundle.js:+11257255 – +11257474
 
 ---
 
 ## Input Branching
 
-The command handler (`commandHandler`) takes no user-supplied arguments. All branching occurs internally during the plugin refresh pipeline. The following flowchart captures the top-level control flow derived from the call graph rooted at `commandHandler`.
+The handler (`Nz7`) takes no user-supplied argument text. All branching is internal, driven by the current state of plugin registrations and MCP connection health.
 
 ```mermaid
 flowchart TD
-    A(["/reload-plugins invoked"]) --> B[Send control-request via sendControlRequest\nbundle.js:+11256315]
-    B --> C[Emit 'ccr' request identifier\nbundle.js:+11256296]
-    C --> D[Call refreshActivePlugins\nbundle.js:+11256686]
-    D --> E[Log: clearing all plugin caches\nbundle.js:+11254402]
-    E --> F[Clear installed-plugins cache\nbundle.js:+11254454]
-    F --> G[Read MCP config — .mcp.json\nbundle.js:+7419180]
-    G --> H[Read LSP config — .lsp.json\nbundle.js:+8218101]
-    H --> I{LSP JSON parseable?}
-    I -- No --> J[Record error: lsp-config-invalid\nbundle.js:+8218363]
-    I -- Yes --> K[Resolve plugin dependencies\nbundle.js:+11254509]
-    J --> K
-    K --> L{Dependency resolution result}
-    L -- dependency-unsatisfied --> M[Mark plugin: dependency-unsatisfied\nbundle.js:+10504094]
-    L -- not-found --> N[Mark plugin: not-found\nbundle.js:+10504131]
-    L -- blocked-by-policy --> O[Mark plugin: blocked-by-policy\nbundle.js:+4913437]
-    L -- resolved --> P[Register plugin MCP server\nbundle.js:+11256501]
-    M --> Q[Register plugin LSP server\nbundle.js:+11256993]
-    N --> Q
-    O --> Q
-    P --> Q
-    Q --> R[Rebuild plugin list — filter lsp-manager entries\nbundle.js:+11255847]
-    R --> S[Reduce & deduplicate plugin registrations\nbundle.js:+11255288]
-    S --> T[Emit completion event via Dz8.emit\nbundle.js:+11255442]
-    T --> U[Register hooks: 'hook' type entries\nbundle.js:+11256934]
-    U --> V[Resolve plugin display name\nbundle.js:+11256761]
-    V --> W[Return result text to session\nbundle.js:+11256658]
-    W --> Z([Done])
+    A["/reload-plugins invoked"] --> B["Send control-request\n(sendControlRequest)"]
+    B --> C["Log control event\n(Dg / Q8)"]
+    C --> D["refreshActivePlugins:\nclear all plugin caches"]
+    D --> E["Enumerate plugin entries\n(ts / LJ9 / ywA)"]
+    E --> F{"For each plugin entry"}
+    F --> G["Reload plugin config\n(kTH / jS4)"]
+    F --> H["Resolve MCP server list\n(M.reduce / UZH / ZBq)"]
+    H --> I{"MCP server state?"}
+    I -->|"disabled"| J["Skip server"]
+    I -->|"stdio / sse / sse-ide / ws-ide"| K["Re-initialise connection\n(tTA / eTA)"]
+    I -->|"needs-auth"| L["Skip — cached auth block"]
+    K --> M{"Connection result?"}
+    M -->|"connected"| N["Mark connected"]
+    M -->|"failed"| O["Log MCP error\n(Z7 / EQ.logMCPError)"]
+    D --> P["Reload hooks\n(pHH / LqH / n56)"]
+    D --> Q["Reload LSP servers\n(vz7 — 'lsp-manager' filter)"]
+    P --> R["Build result summary\n(Ra)"]
+    Q --> R
+    N --> R
+    O --> R
+    R --> S["Return text response\n(type: 'text')"]
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11256278, +11256315, +11256686, +11254509, +11255442
+Analysis basis: CC v2.1.132 bundle.js:+11256278 (handler entry), +11256315 (sendControlRequest call), +11254400 (cache-clear log), +11254509 (Promise.all fan-out), +11254856 (LSP config reload), +11254950 (MCP reduce), +11256761 (result assembly)
 
 ---
 
 ## Behavioral Spec
 
-### 1. Command Entry and Control-Request Dispatch
+### 1. Handler Entry and Control-Request Dispatch
 
 ```
-function commandHandler(context):
-    send control-request with identifier "ccr"    // bundle.js:+11256296, +11256315
-    normalize command name to lowercase            // bundle.js:+14153948
-    call refreshActivePlugins(context)             // bundle.js:+11256686
-    call resolveAndRegisterPlugins(context)        // bundle.js:+11256718
-    call resolveDisplayNames(context)              // bundle.js:+11256761
-    return result as { type: "text", content: ... } // bundle.js:+11256658
+async function reloadPluginsHandler(context):
+    sendControlRequest(context)                   // notifies session layer
+    logControlEvent(Dg, Q8)                       // internal audit log
+    result = await refreshAndReconnect(context)
+    return { type: "text", content: result }
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11256278
+The command sends a `control-request` (registration field `thinClientDispatch`) before performing any work, ensuring the session layer is aware of the reload operation.
+
+Analysis basis: CC v2.1.132 bundle.js:+11256315, +11256390, +11256658
+
+The string `"ccr"` is used as the control-request identifier.
+
+Analysis basis: CC v2.1.132 bundle.js:+11256296
+
+The telemetry event name associated with the reload action is `"reload_plugins"`.
+
+Analysis basis: CC v2.1.132 bundle.js:+11256345
 
 ---
 
-### 2. Refresh Active Plugins (Cache Clear)
-
-This sub-routine is the first substantive step. It logs that it is clearing all plugin caches, then invalidates every cached plugin entry so that subsequent reads pull fresh data from disk.
+### 2. Plugin Cache Clearing (`refreshActivePlugins`)
 
 ```
-function refreshActivePlugins(context):
-    log DEBUG "refreshActivePlugins: clearing all plugin caches"   // bundle.js:+11254402
-    call clearInstalledPluginsCache()                               // bundle.js:+11254454
-    log "Cleared installed plugins cache"                          // bundle.js:+9167667
-    fetch plugin config via getPluginConfig()                      // bundle.js:+11254460
-    fetch VE9-scoped state                                         // bundle.js:+11254465
-    fetch VW-scoped state                                          // bundle.js:+11254483
-    fetch Oh9-scoped state                                         // bundle.js:+11254488
-    await Promise.all([mcpConfigLoad(), lspConfigLoad()])          // bundle.js:+11254509
-    call postLoadHook()                                            // bundle.js:+11254522
-    call internalStateUpdate()                                     // bundle.js:+11254528, +11254531
-    map over plugin list L                                         // bundle.js:+11254610
-    enumerate Object.keys of plugin map                            // bundle.js:+11254650
-    call pluginServerSetup()                                       // bundle.js:+11254695
-    call lspConfigReader()                                         // bundle.js:+11254856
-    reduce plugin map M                                            // bundle.js:+11254925
-    reduce dependency set $                                        // bundle.js:+11254950
-    apply jitter delay H (Math.random * 2, setTimeout)            // bundle.js:+11254973, +12264285, +12264322
-    call pluginStatusFilter()                                      // bundle.js:+11255048
-    call YK8-scoped update                                         // bundle.js:+11255172
-    call fileSystemSync fs                                         // bundle.js:+11255197
-    call pluginLoadHandler()                                       // bundle.js:+11255216
-    call stringNormalizer()                                        // bundle.js:+11255273
-    reduce plugin registration list L                              // bundle.js:+11255288
-    enumerate Object.values of plugin registry                     // bundle.js:+11255341
-    emit reload-complete event via eventEmitter.emit               // bundle.js:+11255442
+function refreshActivePlugins():
+    log("refreshActivePlugins: clearing all plugin caches")
+    clearInstalledPluginsCache()          // Og9 / k — "Cleared installed plugins cache"
+    clearPluginStateMap($3 / PcH)         // PEA.clear()
+    invalidateMarketplaceEntries()
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11254400
+The log line `"refreshActivePlugins: clearing all plugin caches"` is emitted at the start.
+
+Maximum cache-clearing scope: all installed plugin entries and the plugin state map are wiped before re-enumeration.
+
+Analysis basis: CC v2.1.132 bundle.js:+11254400, +11254454, +11254460
 
 ---
 
-### 3. MCP Configuration Loading
-
-The MCP server configuration is read from `.mcp.json` files discovered in the project hierarchy.
+### 3. Plugin Configuration Re-enumeration (`ts` / `LJ9` / `ywA`)
 
 ```
-function mcpConfigLoader(paths):
-    for each candidate path in paths:
-        read file at path + ".mcp.json" (encoding: utf-8)   // bundle.js:+7419180
-        if Array.isArray(result):                            // bundle.js:+7419399
-            await Promise.all(parseEntries(result))          // bundle.js:+7419429
-            map entries via L.map                            // bundle.js:+7419441
-            apply per-entry normalizer k                     // bundle.js:+7419571
-            enumerate Object.keys of merged map              // bundle.js:+7419725
-        else:
-            treat as object map and merge directly
-    return merged MCP config
+async function enumeratePlugins(context):
+    entries = []
+    for configFile in [".mcp.json", ".lsp.json", ...]:
+        raw = await readFile(configFile, "utf-8")
+        parsed = jsonParse(raw)
+        for [name, spec] of Object.entries(parsed):
+            if spec.status starts with "http" or "download":
+                markNetworkSource(name)
+            entries.push(normalizeEntry(name, spec))
+    return entries
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+7419169
+Files consulted include `.mcp.json` (MCP server config) and `.lsp.json` (LSP server config).
+
+Analysis basis: CC v2.1.132 bundle.js:+7419169 (`ywA`), +7419180 (`.mcp.json` literal), +8218101 (`.lsp.json` literal), +7419311 (`LJ9`), +7418739 (`"http"` literal), +7418760 (`"download"` literal)
 
 ---
 
-### 4. LSP Configuration Loading
-
-The LSP server configuration is read from `.lsp.json` files. If JSON parsing fails, an error code is recorded but execution continues.
+### 4. Plugin Manifest Validation (`kTH` / `jS4`)
 
 ```
-function lspConfigReader(paths):
-    for each candidate path in paths:
-        joined_path = path_segments.join(separator)         // bundle.js:+8218085
-        raw = readFile(joined_path + ".lsp.json", "utf-8") // bundle.js:+8218130, +8218145
-        try:
-            parsed = JSON.parse(raw)
-            validate parsed against record schema            // bundle.js:+8218164, +8218173
-            apply schema filter $hH                         // bundle.js:+8218184
-            merged = Object.assign(accumulator, parsed)     // bundle.js:+8218217
-        catch error:
-            record error code "lsp-config-invalid"          // bundle.js:+8218363
-            log "Failed to parse JSON file"                 // bundle.js:+8218799
-            push error to error list A                      // bundle.js:+8218350
-        apply D8 post-processing                            // bundle.js:+8218489
-        apply HA finalization                               // bundle.js:+8218649
-        call jS4 hook                                       // bundle.js:+8218888
-        enumerate Object.keys of result                     // bundle.js:+8218950
-    return { config: merged, errors: errorList }
+async function loadPluginManifest(pluginPath):
+    manifestPath = join(pluginPath, ".lsp.json")
+    raw = await readFile(manifestPath)
+    parsed = jsonParse(raw)
+    validated = schema.record(schema.string()).parse(parsed)
+    if validation fails:
+        logError("lsp-config-invalid")
+        return null
+    for each subPlugin of validated:
+        absPath = resolve(pluginPath, subPlugin.path)
+        relPath = relative(pluginPath, absPath)
+        if relPath starts with "..":
+            warn("Invalid path: must be relative and within plugin directory")
+            continue
+        mergedConfig = Object.assign({}, baseConfig, subPlugin)
+        entries.push(mergedConfig)
+    return entries
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11254856
+Path traversal is actively blocked: any resolved sub-plugin path that escapes the plugin directory root (relative path starts with `".."`) is rejected with a warning.
+
+Analysis basis: CC v2.1.132 bundle.js:+8218101, +8218164, +8218173, +8218184, +8218363, +8218000 (`".."` literal), +8219294 (path-escape warning literal), +8219208 (`"warn"` literal)
 
 ---
 
-### 5. Plugin Status Filtering
-
-After configs are loaded, plugins are filtered by their operational status. The `lsp-manager` label is used to exclude internal manager entries from the user-visible list; entries prefixed `plugin:` are retained as real plugin registrations.
+### 5. MCP Server Reconnection (`M` / `UZH` / `ZBq`)
 
 ```
-function pluginStatusFilter(pluginMap, knownSet):
-    filtered = pluginMap.filter(entry => entry.source !== "lsp-manager")  // bundle.js:+11255847
-    realPlugins = filtered.map(entry => entry)                             // bundle.js:+11255904
-    active = realPlugins.filter(entry => entry.prefix === "plugin:")       // bundle.js:+11255882, +11255926
-    deduplicated = active.filter(entry => !knownSet.has(entry.id))        // bundle.js:+11255941
-    call dependencyResolutionHelper(deduplicated)                          // bundle.js:+11255947
-    return deduplicated
+async function reconnectMcpServers(pluginEntries):
+    results = pluginEntries.reduce((acc, entry) => {
+        serverDefs = getMcpServerDefsForPlugin(entry)    // UZH
+        for serverDef of serverDefs:
+            if serverDef.status == "disabled":
+                skip
+            if serverDef.transportType in ["stdio","sse","sse-ide","ws-ide","sdk"]:
+                connectionResult = await connectOrReuse(serverDef)   // tTA / eTA
+                acc.push(connectionResult)
+            if serverDef.status == "needs-auth":
+                log("Skipping connection (cached needs-auth)")
+                skip
+        applyMcpUpdate(acc)     // ZBq / H.applyMcpUpdate
+        return acc
+    }, [])
+    return results
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11255048
+Supported transport types: `"stdio"`, `"sse"`, `"sse-ide"`, `"ws-ide"`, `"sdk"`, `"claudeai-proxy"`.
+
+Analysis basis: CC v2.1.132 bundle.js:+9462075, +9462109, +9462174, +9462210, +9459106, +9462482, +9461973 (`"disabled"`), +9462602 (`"Skipping connection (cached needs-auth)"`), +9462668 (`"needs-auth"`)
+
+Failed connections are classified as `"failed"` and logged via the MCP error logger.
+
+Analysis basis: CC v2.1.132 bundle.js:+9463337 (`"failed"` literal), +912085 (`EQ.logMCPError`)
 
 ---
 
-### 6. Plugin Resolution and Registration
-
-This is the main dependency-resolution loop. It handles multiple failure modes with distinct error codes and registers successfully resolved plugins.
+### 6. OAuth / Auth-Required MCP Servers (`tTA`)
 
 ```
-function resolveAndRegisterPlugins(context):
-    pluginMap = Map()
-    errorList = []
-    dependencySet = Set()
-
-    for each plugin entry in context.pluginList:
-        // Read plugin record from cache or disk
-        record = readPluginRecord(entry)                        // bundle.js:+10504158, +10504194
-
-        // Check scope restrictions
-        if record.scope === "managed":                          // bundle.js:+4398529
-            raise Error("Cannot install plugins to managed scope")  // bundle.js:+4398551
-
-        // Resolve source location
-        if record.source is local AND has no location:
-            mark error "local-source-no-location"               // bundle.js:+4913653
-
-        // Check policy gates
-        if policyGate.blocks(record):
-            mark error "blocked-by-policy"                      // bundle.js:+4913437
-        if marketplacePolicy.blocks(record):
-            mark error "marketplace-blocked-by-policy"          // bundle.js:+4913529
-
-        // Resolve dependencies via p76 (Object.entries + Array.isArray checks)
-        deps = resolveDependencies(record)                      // bundle.js:+10504343, +4410159, +4410224
-
-        for each dep in deps:
-            if dep.status === "resolution-failed":              // bundle.js:+4914648
-                mark error "dependency-unsatisfied"             // bundle.js:+10504094
-            if dep.status === "dependency-blocked-by-policy":   // bundle.js:+4914763
-                mark error "dependency-blocked-by-policy"
-            if dep.status === "dependency-marketplace-blocked-by-policy": // bundle.js:+4914873
-                mark error "dependency-marketplace-blocked-by-policy"
-            if dep.status === "range-conflict":                 // bundle.js:+4916193
-                mark error "range-conflict"
-            if dep.status === "no-matching-tag":                // bundle.js:+4916373
-                mark error "no-matching-tag"
-            if dep.status === "installed-unsatisfied":          // bundle.js:+4917672
-                mark error "installed-unsatisfied"
-
-        if no errors for this plugin:
-            // Register plugin:
-            pluginMap.set(record.id, record)                    // bundle.js:+10504194
-            dependencySet.add(record.id)                        // bundle.js:+10504216
-
-            // Validate host/path patterns for MCP registration
-            validate record.hostPattern                         // bundle.js:+4417006
-            validate record.pathPattern                         // bundle.js:+4417050
-
-            // Register "plugin MCP server" entry
-            register(record, type="plugin MCP server")          // bundle.js:+11256501
-
-            // Register "plugin LSP server" entry
-            register(record, type="plugin LSP server")          // bundle.js:+11256993
-
-            // Register hooks
-            register(record, type="hook")                       // bundle.js:+11256934
-
-            // Emit telemetry if MCP retry failed
-            if mcpRetryFailed:
-                emit "tengu_mcp_retry_failed_remote"            // bundle.js:+13846663
-
-        else:
-            errorList.push({ plugin: record.id, errors: errors })  // bundle.js:+10504437
-
-    // Dependency-resolution summary pass
-    summarize(dependencySet, type="dependency-resolution")      // bundle.js:+10505106
-
-    // Include/exclude based on current inclusion list L
-    for each id in inclusionList L:
-        if not L.includes(id):                                  // bundle.js:+10505184
-            L.push(id)                                          // bundle.js:+10505198
-
-    return { registered: pluginMap, errors: errorList }
+async function handleOAuthServer(serverDef):
+    // Offer an "authenticate" tool with instructions for OAuth flow
+    authTool = {
+        name: "authenticate",
+        description: "Call to start OAuth flow — receive authorization URL"
+    }
+    result = await Promise.race([
+        initiateOAuthFlow(serverDef),
+        timeout(10000)
+    ])
+    if result.status == "complete_authentication":
+        finalizeConnection(serverDef)
+    else if result.status == "unsupported":
+        markServerUnsupported(serverDef)
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11256718, +10504158
+The OAuth tool is exposed with the name `"authenticate"` and a timeout of 10 000 ms.
+
+Analysis basis: CC v2.1.132 bundle.js:+9416726 (`"authenticate"`), +9416952 (10000 ms timeout), +9418242 (`"complete_authentication"`), +9417231 (`"unsupported"`)
 
 ---
 
-### 7. Display Name Resolution
-
-After registration, each plugin entry is assigned a user-facing display name. The name is built by mapping up to 5 path components, joining them, and optionally appending a `dependency` or `dependencies` suffix.
+### 7. Hook Reloading (`LqH` / `n56`)
 
 ```
-function resolveDisplayNames(pluginList):
-    for each plugin in pluginList:
-        segments = plugin.path.split(separator)         // bundle.js:+4398382
-        // Take at most 5 trailing segments              // bundle.js:+4411302
-        relevant = segments.slice(-5)
-        parts = relevant.map(seg => formatSegment(seg)) // bundle.js:+4411306
-        joined = parts.join(" · ")                      // bundle.js:+11256528, +4411343
-        // Trim trailing slice if too long
-        display = joined.slice(0, maxLen)               // bundle.js:+4411359
-
-        // Append dependency label if needed
-        if plugin.dependencyCount === 1:
-            display += " dependency"                    // bundle.js:+4411416
-        else if plugin.dependencyCount > 1:
-            display += " dependencies"                  // bundle.js:+4411429
-
-        // Finalize via Q8 formatter
-        plugin.displayName = finalizeDisplayName(display, plugin)  // bundle.js:+4411411
-
-    return pluginList
+async function reloadHooks(pluginEntries):
+    hookMap = new Map()
+    for entry of pluginEntries:
+        configData = readPluginConfig(entry)        // qf / S0H / y7A
+        parsedHooks = parseHookBlocks(configData)   // p76 / R8
+        for hook of parsedHooks:
+            if hook.type == "hook":
+                registerHook(hookMap, hook)
+            if hook.type == "plugin LSP server":
+                registerLspEntry(hookMap, hook)
+            if dependencyUnsatisfied(hook):
+                markError(hook, "dependency-unsatisfied")
+            if notFound(hook):
+                markError(hook, "not-found")
+        hookMap.set(entry.id, parsedHooks)
+    return hookMap
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11256761
+Hook type strings observed: `"hook"`, `"plugin LSP server"`.
+
+Analysis basis: CC v2.1.132 bundle.js:+11256934, +11256993, +10504094 (`"dependency-unsatisfied"`), +10504131 (`"not-found"`)
 
 ---
 
-### 8. Plugin Load Handler (Error Accumulation)
-
-Individual plugin load operations accumulate errors and log them without aborting the whole pipeline.
+### 8. LSP Server Filtering and Reloading (`vz7`)
 
 ```
-function pluginLoadHandler(plugin):
-    result = loadPlugin(plugin)                         // bundle.js:+911541, +911554
-    if result is error:
-        push error to kyH error list                    // bundle.js:+911901
-        log error via EQ.logError                       // bundle.js:+911941
-        apply $wL error formatter                       // bundle.js:+911883
-    return result
+function filterAndReloadLspServers(allEntries):
+    lspEntries = allEntries.filter(e => e.serverType == "lsp-manager"
+                                     || e.id.startsWith("plugin:"))
+    for lspEntry of lspEntries:
+        if lspEntry has genericError:
+            markStatus(lspEntry, "generic-error")
+    return lspEntries
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11255216
+The `"lsp-manager"` tag and `"plugin:"` prefix are used to identify LSP-related plugin entries during the reload pass.
+
+Analysis basis: CC v2.1.132 bundle.js:+11255847, +11255882, +11255994 (`"generic-error"`)
 
 ---
 
-### 9. Plugin Config Schema Validation
-
-Each plugin config entry is validated using a schema that requires a `record` type with string fields. Entries failing validation are flagged with `"lsp-config-invalid"`.
+### 9. Result Assembly (`Ra`)
 
 ```
-function validatePluginConfig(raw):
-    schema = { type: record, valueType: string }    // bundle.js:+8218164, +8218173
-    filtered = applySchemaFilter(raw, schema)       // bundle.js:+8218184
-    if invalid:
-        record error "lsp-config-invalid"           // bundle.js:+8218363
-    return filtered
+function buildResultSummary(pluginResults, mcpResults, hookResults):
+    lines = []
+    for result of pluginResults (up to 5 items per group):
+        line = formatLine(result.name, result.status)
+        lines.push(line)
+    if lines is empty:
+        lines.push(defaultNoPluginsMessage)
+    return lines.join(" · ")
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+8218156
+The separator between result items is `" · "` (U+00B7 middle dot surrounded by spaces).
+
+Maximum items rendered per result group before truncation: 5.
+
+Analysis basis: CC v2.1.132 bundle.js:+11256528 (`" · "` separator), +4411302 (number `5` limit), +11256761 (`Ra` call site)
 
 ---
 
-### 10. Settings Write Failure Handling
-
-If writing plugin state back to the settings store fails, the error code `"settings-write-failed"` is recorded and execution continues.
+### 10. Error Path — Plugin Type Unsupported
 
 ```
-function settingsWriter(state):
-    try:
-        writeSettings(state)
-    catch:
-        record error "settings-write-failed"    // bundle.js:+4915150
+if pluginSourceType not in knownSourceTypes:
+    throw Error(
+        "This plugin uses a source type your Claude Code version does not support. " +
+        "Update Claude Code and try again."
+    )
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+4915150
+Analysis basis: CC v2.1.132 bundle.js:+4930893
 
 ---
 
@@ -374,21 +314,17 @@ Analysis basis: CC v2.1.132 bundle.js:+4915150
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_mcp_retry_failed_remote` — emitted when an MCP server retry exhaustion occurs during reload (bundle.js:+13846663) |
-| Hook registration | Entries of type `"hook"` are re-registered for each successfully resolved plugin after reload (bundle.js:+11256934) |
-| Plugin MCP server | Re-registered as `"plugin MCP server"` for each resolved plugin (bundle.js:+11256501) |
-| Plugin LSP server | Re-registered as `"plugin LSP server"` for each resolved plugin (bundle.js:+11256993) |
-| Cache invalidation | All installed-plugin caches are cleared unconditionally at the start of every reload (bundle.js:+11254402) |
-| Event emission | A reload-complete event is emitted via the internal event emitter (`Dz8.emit`) after plugin registration (bundle.js:+11255442) |
-| File reads | `.mcp.json` is read from the project hierarchy (bundle.js:+7419180); `.lsp.json` is read with `utf-8` encoding (bundle.js:+8218101, +8218145) |
-| Error accumulation | Plugin load errors are accumulated in a list and logged individually; they do not abort the pipeline (bundle.js:+911901, +911941) |
-| Settings write | Plugin state is persisted back to settings; failure is recorded as `"settings-write-failed"` (bundle.js:+4915150) |
-| Jitter delay | A random delay using `Math.random * 2` and `setTimeout` is applied during plugin server setup to stagger connections (bundle.js:+12264285, +12264322) |
-| Dependency deduplication | Dependency IDs are tracked in a `Set` to prevent double-registration (bundle.js:+10504216) |
-| Non-interactive | `supportsNonInteractive: false` — the command cannot be invoked in headless/non-interactive mode (bundle.js:+11257255) |
-| Dispatch mechanism | `thinClientDispatch: "control-request"` — the command is forwarded as a control-plane request in thin-client deployments (bundle.js:+11257255) |
-| Column padding | Display output columns are padded to 40 characters width (bundle.js:+14154022) |
-| Separator | Plugin display name segments are joined with ` · ` (middle dot) (bundle.js:+11256528) |
+| Plugin cache | All installed-plugin caches cleared before re-enumeration (Analysis basis: +11254402) |
+| Plugin state map | `PEA.clear()` wipes the in-memory plugin state map (Analysis basis: +9113840) |
+| MCP connections | Active MCP server connections are torn down and re-initiated where applicable (`ZBq / H.applyMcpUpdate`) (Analysis basis: +13846850) |
+| Hook registry | Hook registrations rebuilt from disk config (Analysis basis: +10504216) |
+| LSP server entries | LSP server list refreshed via `vz7` filtering pass (Analysis basis: +11255048) |
+| Event emission | `Dz8.emit` fires after plugin state update (Analysis basis: +11255442) |
+| Telemetry — `tengu_mcp_retry_failed_remote` | Emitted when a remote MCP server fails to reconnect (Analysis basis: bundle.js:+13846663) |
+| Telemetry — `tengu_iron_gate_closed` | Emitted when a plugin source is blocked by the iron-gate policy check (Analysis basis: bundle.js:+7930461) |
+| Telemetry — `tengu_daemon_control` | Emitted on daemon control path touched by the control-request dispatch (Analysis basis: bundle.js:+14164048) |
+| Sound | None observed in traversal |
+| appState changes | Plugin state map and MCP client registry updated in-place |
 
 ---
 
@@ -396,25 +332,23 @@ Analysis basis: CC v2.1.132 bundle.js:+4915150
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis — command registered as `local` type with `control-request` thin-client dispatch; full pipeline documented |
+| v2.1.132 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Running `/reload-plugins` in non-interactive mode.** Because `supportsNonInteractive` is `false`, the command will not execute in headless or scripted sessions. Use an interactive terminal session instead.
+1. **Running in non-interactive mode**: `supportsNonInteractive` is `false`. Invoking `/reload-plugins` from a script or headless pipeline will be rejected or silently ignored.
 
-2. **Expecting immediate MCP server availability.** A jitter delay (`Math.random * 2` seconds via `setTimeout`) is deliberately applied during plugin server setup to stagger connections. Plugins may not be immediately contactable right after the command returns.
+2. **Expecting immediate tool availability**: MCP servers with `"needs-auth"` status are skipped during reload; OAuth must be completed through the interactive auth flow before those tools become available.
 
-3. **Ignoring `lsp-config-invalid` errors.** If `.lsp.json` contains malformed JSON, the error is recorded and logged but the command still continues. Users may miss that their LSP config was silently skipped. Check the session log for `"Failed to parse JSON file"` messages.
+3. **Assuming all transport types are reconnected**: Only `stdio`, `sse`, `sse-ide`, `ws-ide`, `sdk`, and `claudeai-proxy` are handled; servers with `"disabled"` status are unconditionally skipped.
 
-4. **Assuming managed-scope plugins can be reinstalled.** Any plugin with `scope: "managed"` will be rejected with `"Cannot install plugins to managed scope"` during the resolution pass. These plugins must be managed externally.
+4. **Plugin paths with directory traversal**: Sub-plugin paths that resolve outside the plugin root directory (i.e., relative path beginning with `".."`) are rejected with a warning. Symlink-based escapes may also be blocked by the atomic-write guard (`QyH`).
 
-5. **Confusing `dependency-unsatisfied` with `not-found`.** Both are distinct error codes. `not-found` means the plugin itself could not be located; `dependency-unsatisfied` means the plugin was found but one or more of its dependencies failed resolution.
+5. **Conflating `/reload-plugins` with a full restart**: The command clears and re-reads plugin configuration in-process; it does not restart the CLI process, daemon, or agent session. Deeply cached state outside the plugin subsystem is unaffected.
 
-6. **Not accounting for `settings-write-failed`.** If the settings store is read-only or locked, plugin state may not be persisted after reload. The command will appear to succeed but the next session start may revert to the previous state.
-
-7. **Expecting hook re-registration to be atomic.** Hooks (`"hook"` type entries) are re-registered per plugin sequentially. If the session is used during reload, some hooks may be briefly unavailable.
+6. **Yarn or pnpm lockfiles in plugin packages**: If a plugin package contains `yarn.lock` or `pnpm-lock.yaml`, the installation step (triggered during reload if a plugin is pending install) is skipped with the message about unsupported lockfiles. Use `bun` or `npm` lockfiles instead.
 
 ---
 
@@ -424,38 +358,212 @@ Analysis basis: CC v2.1.132 bundle.js:+4915150
 
 | Identifier | Role |
 |---|---|
-| `Nz7` | Command handler — top-level entry point for `/reload-plugins` |
-| `A3` | Pre-dispatch initializer called before control-request is sent |
-| `ywH` | Internal initialization helper called from pre-dispatch initializer |
-| `Dg` | Display/output formatter for command result |
-| `Q8` | Display name finalizer used by both output formatter and display name resolver |
-| `pDH` | `refreshActivePlugins` — main plugin cache-clear and reload pipeline |
-| `k` | Per-entry plugin normalizer / config key processor |
-| `Og9` | Clear-installed-plugins-cache routine |
-| `$3` | Plugin config reader / schema provider |
-| `VE9` | Scoped state fetcher (first auxiliary state) |
-| `Oh9` | Scoped state fetcher (second auxiliary state) |
-| `_A` | Internal state updater after config load |
-| `L` | Plugin list / padded column mapper |
-| `ts` | MCP config loader (reads `.mcp.json`) |
-| `kTH` | LSP config reader (reads `.lsp.json`) |
-| `M` | Plugin map reducer — merges plugin entries with MCP retry logic |
-| `$` | Dependency set reducer |
-| `H` | Jitter delay helper — applies `Math.random * 2` + `setTimeout` |
-| `vz7` | Plugin status filter — separates `lsp-manager` from real plugin entries |
-| `fH` | Plugin load handler — accumulates errors without aborting |
-| `vH` | String normalizer (wraps `String()` constructor) |
-| `LqH` | `resolveAndRegisterPlugins` — dependency resolution and plugin registration loop |
-| `A` | Plugin record accumulator / cache store |
-| `lB` | Dependency lookup helper |
-| `p76` | Dependency resolver using `Object.entries` and `Array.isArray` |
-| `LR` | Scope restriction enforcer (raises Error for `"managed"` scope) |
-| `P1` | Path segment splitter / inclusion-check helper |
-| `K` | Process exit / fatal error handler (calls `process.exit`) |
-| `bX` | Host/path pattern validator for MCP registration |
-| `S0H` | Plugin record reader (reads plugin file from disk) |
-| `zG` | Plugin schema resolver and qualifier checker |
-| `Oq7` | Deduplication checker using `Set.has` |
-| `n56` | Full plugin installation/resolution sub-routine (handles all error codes) |
-| `Ra` | Display name resolver — maps path segments and appends dependency labels |
-| `q` | Unlink/cleanup helper (calls `tgq.unlinkSync` for stale plugin files) |
+| `Nz7` | Main async handler for `/reload-plugins` (AsyncFunction, module `I3q`) |
+| `A3` | Helper called at handler entry (pre-dispatch utility) |
+| `ywH` | Sub-utility called by `A3` |
+| `Dg` | Control-event logger (wraps `Q8`) |
+| `Q8` | Low-level event emit primitive |
+| `pDH` | `refreshActivePlugins` — orchestrates full plugin cache clear and reconnect |
+| `k` | Generic async logger / debug emitter |
+| `Lsq` | Debug log formatter |
+| `rdA` | Log routing helper |
+| `RH` | JSON serialiser wrapper |
+| `mf` | Log-line string formatter (redacts sensitive fields) |
+| `MnA` | Redaction map builder |
+| `gNH` | Stream write helper |
+| `slA` | Low-level handle writer |
+| `Msq` | File-append log writer |
+| `GNH` | Debounced log flush |
+| `pHH` | Hook-entry writer |
+| `F6` | Process data directory resolver |
+| `JG8` | File size checker |
+| `jnA` | Log-file path builder |
+| `JnA` | Log-file rotation handler |
+| `fsq` | Log file rotate-and-append |
+| `N1` | Writer-lock manager |
+| `Og9` | Installed-plugin cache invalidator |
+| `$3` | Plugin state-map rebuilder |
+| `Ed4` | Plugin descriptor factory |
+| `qT` | Descriptor field validator |
+| `N58` | Plugin name normaliser |
+| `Cs6` | Plugin capability classifier |
+| `Je6` | Plugin scope checker |
+| `UfA` | Plugin root resolver |
+| `fH` | Error constructor helper |
+| `js6` | Plugin JSON schema validator |
+| `yEA` | Plugin feature-flag reader |
+| `aF9` | Plugin policy enforcer |
+| `nt` | Settings-layer plugin reader |
+| `a_H` | User settings accessor |
+| `cF9` | Project settings accessor |
+| `s58` | Local settings accessor |
+| `m7A` | Capability set merger |
+| `l7A` | Plugin list sorter |
+| `PcH` | Plugin state-map clear |
+| `VE9` | MCP version negotiator |
+| `Oh9` | Plugin health checker |
+| `_A` | Async context store accessor |
+| `L` | Column-format text padder |
+| `ts` | Plugin config file enumerator |
+| `ywA` | MCP JSON config reader |
+| `D8` | Error classifier (ENOENT / EISDIR) |
+| `B6` | JSON parse wrapper |
+| `dB` | File-extension filter (`.mcpb`, `.dxt`) |
+| `LJ9` | Plugin directory scanner |
+| `F56` | MCPB archive extractor |
+| `kTH` | LSP config loader and validator |
+| `HA` | Error string normaliser |
+| `jS4` | LSP sub-plugin path validator |
+| `JS4` | Path escape checker |
+| `M` | MCP server reconnect orchestrator (reduce loop) |
+| `UZH` | Single MCP server connection manager |
+| `qt` | MCP transport factory |
+| `wI` | MCP stdio transport builder |
+| `qA` | MCP transport option assembler |
+| `Qw6` | MCP transport capability filter |
+| `Nr4` | MCP connection attempt timer |
+| `a18` | MCP server tool registrar |
+| `K8` | MCP debug logger |
+| `tTA` | OAuth MCP server connector |
+| `eTA` | SSE MCP server connector |
+| `mc9` | MCP server state persister |
+| `aTA` | MCP server auth-state updater |
+| `gwA` | MCP server capability includer |
+| `J` | Process kill list builder |
+| `S` | Output stream enqueuer |
+| `Z7` | MCP error logger |
+| `Cc9` | MCP state snapshot builder |
+| `dw6` | Retry count parser (base 10) |
+| `PZA` | Timeout value parser (base 10) |
+| `ZBq` | MCP update applier (`applyMcpUpdate`) |
+| `df8` | MCP diff serialiser |
+| `bI` | MCP client cleanup helper |
+| `$` | MCP event timestamper |
+| `mzq` | Event record builder |
+| `j6` | MCP dedup/cache key manager |
+| `hq6` | Cache hit logger |
+| `Rq6` | Cache miss logger |
+| `Oo` | Tool-call logger |
+| `uQ6` | Server-level dedup checker |
+| `R6` | Tool invocation dispatcher |
+| `$F7` | Remote server retry orchestrator |
+| `t18` | Remote server health checker |
+| `o8` | Abort-signal timeout wrapper |
+| `dcH` | MCP client cleanup + serialise |
+| `vz7` | LSP/plugin server entry filterer |
+| `Z3q` | LSP status aggregator |
+| `LqH` | Hook + plugin resolver (main) |
+| `lB` | Marketplace-config reader |
+| `qf` | Plugin config file reader |
+| `R58` | Known-marketplaces path builder |
+| `p76` | Hook definition parser |
+| `R8` | Tool-permission cache reader/writer |
+| `IdA` | Permission cache lookup |
+| `G7_` | Permission policy evaluator |
+| `VdA` | Permission cache writer |
+| `LR` | Managed-scope error thrower |
+| `P1` | Path include/split helper |
+| `bX` | Plugin network-source validator |
+| `F76` | URL-source permission checker |
+| `PLA` | Host-pattern matcher |
+| `om1` | Host-pattern error builder |
+| `am1` | Path-pattern error builder |
+| `pFK` | GitHub/git/URL/npm source handler |
+| `j_H` | File/directory source handler |
+| `mFK` | File install helper |
+| `S0H` | Installed-plugin config reader |
+| `eY6` | `.claude-plugin` directory reader |
+| `REA` | Plugin marketplace.json parser |
+| `j8` | Generic error logger |
+| `zG` | Plugin config resolver |
+| `y7A` | Plugin config file reader (per-scope) |
+| `Oq7` | Hook duplicate checker |
+| `n56` | Full plugin installation / registration pipeline |
+| `Iv` | Plugin source-type normaliser |
+| `vs6` | Plugin local-source installer |
+| `_66` | Local-source `./` prefix checker |
+| `O` | Plugin ID map |
+| `N6` | Async-context plugin getter |
+| `Qv6` | Async-store reader |
+| `DG` | Plugin env-var config loader |
+| `bEA` | Env-file reader |
+| `xEA` | Env-var entry parser |
+| `P` | Dynamic MCP server connection manager |
+| `gX8` | Dynamic MCP server factory |
+| `sx` | Semver range constructor |
+| `yo6` | Semver satisfier |
+| `W` | Plugin state-change debouncer |
+| `z` | Plugin state broadcaster |
+| `BfH` | Config-change event builder |
+| `uuH` | Policy-settings change checker |
+| `gm1` | Dependency graph walker |
+| `CA` | Plugin settings writer |
+| `EO` | Settings file path resolver |
+| `wE` | Settings file atomic writer |
+| `Wh8` | Settings write-time recorder |
+| `E6H` | Settings resolved-path builder |
+| `QyH` | Atomic file writer (symlink-safe) |
+| `C2` | Permission cache clearer |
+| `NN6` | Log file writer for settings |
+| `xb` | `.claude` directory path builder |
+| `ub` | Settings load-from-disk orchestrator |
+| `Ns6` | Plugin install path sandbox checker |
+| `g` | Permission classifier (deny/classify/ask) |
+| `aq8` | Iron-gate policy checker |
+| `Bt` | Permission request handler |
+| `Q` | Conversation-file accessor |
+| `pJ6` | Conversation file reader |
+| `_e9` | Conversation file deleter |
+| `$H` | MCP message stream handler |
+| `Zi9` | MCP model config reader |
+| `fS` | MCP stream router |
+| `p` | Output progress writer |
+| `v6` | Void/empty result builder |
+| `c` | Plugin source filter |
+| `r` | Plugin source list |
+| `u76` | NPM version range resolver |
+| `YLA` | NPM package version lister |
+| `Gs6` | Git-subdir installer |
+| `Wn1` | Git installer |
+| `Es6` | NPM/Git/URL installer |
+| `JaK` | Install lock acquirer |
+| `Y8` | Install event emitter |
+| `w` | MCP subprocess manager |
+| `l56` | Full plugin source installer |
+| `i56` | MCPB / archive-type installer |
+| `ys6` | Plugin binary hash checker |
+| `hn1` | Plugin pre-install hook |
+| `N_H` | Plugin content hasher |
+| `Ec` | Plugin EW flag reader |
+| `j` | Subprocess wrapper |
+| `So6` | Plugin npm-install runner |
+| `cB` | Plugin install logger |
+| `spH` | Post-install EW writer |
+| `Vs6` | Plugin cleanup (rm) helper |
+| `v7A` | Plugin list updater (Added/Updated) |
+| `y` | Clipboard image handler |
+| `aiH` | PNG clipboard reader |
+| `siH` | JPEG clipboard reader |
+| `Y` | Background session process manager |
+| `HH` | MCP elicitation handler |
+| `_H` | Elicitation in-flight set |
+| `d` | Generic disposable resource |
+| `Rw6` | MCP elicitation response dispatcher |
+| `Lgq` | Elicitation queue manager |
+| `Cw6` | MCP elicitation result handler |
+| `EF` | Notification event builder |
+| `t` | Voice-focus silence timer |
+| `C` | Output stream coordinator |
+| `R` | Output chunk writer |
+| `qH` | Voice-toggle silence timer |
+| `o` | Conversation loader / session resumption handler |
+| `XaK` | Plugin dependency spec parser |
+| `u` | Plugin install options mapper |
+| `qR` | Plugin name case-normaliser |
+| `W$` | Plugin scope validator |
+| `yH` | String cast utility |
+| `T4` | OTEL metric emitter |
+| `LW8` | OTEL attribute builder |
+| `rmH` | OTEL span builder |
+| `jaH` | OTEL event recorder |
+| `Ra` | Result-summary formatter (final output builder) |

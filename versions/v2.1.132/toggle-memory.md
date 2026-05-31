@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "toggle-memory"
 cc_version: "2.1.132"
-updated: "2026-05-18"
+updated: "2026-05-31"
 tags: ["toggle-memory", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/toggle-memory` command flips the automemory feature on or off for the current session. When invoked, it reads the current automemory state, inverts it, persists the new state, emits a telemetry event, and responds with a confirmation message. Because `supportsNonInteractive` is `false`, this command is only available in interactive (REPL) sessions.
+`/toggle-memory` is a session-scoped local slash command that flips the automemory system between enabled and disabled states for the current session. When toggled back on, the command emits a text response confirming that memory content may be referenced and new memories can be saved. A telemetry event is fired on every invocation regardless of direction.
 
 ---
 
@@ -35,96 +35,91 @@ The `/toggle-memory` command flips the automemory feature on or off for the curr
 | supportsNonInteractive | `false` |
 | thinClientDispatch | `post-text` |
 | isHidden | `false` |
-| module\_id | `DHq` |
+| module_id | `DHq` |
+| load_inline | `true` |
+| handler (Arbor) | `F17` (AsyncFunction, resolved via `module_id`) |
+| `loc_byte_end` | `10325627` |
+| `arbor_handler.name` | `F17` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::F17` |
+| `arbor_handler.n_hits` | `1` |
 
-Analysis basis: CC v2.1.132 bundle.js:+10325359
+Analysis basis: CC v2.1.132 bundle.js:+10325359 – +10325627
 
 ---
 
 ## Input Branching
 
-The command handler (`F17`) takes no meaningful user-supplied argument text. Its branching is driven entirely by the **current automemory state** at invocation time.
+The handler `F17` contains no user-supplied argument parsing — the command takes no text argument. The branching logic is entirely driven by the current state of the automemory flag at invocation time.
 
 ```mermaid
 flowchart TD
-    A["/toggle-memory invoked"] --> B["Read current automemory state\n(via appState accessor)"]
-    B --> C{Is automemory currently enabled?}
-    C -- "Yes (enabled → disabling)" --> D["Set automemory = false\nPersist state"]
-    C -- "No (disabled → enabling)" --> E["Set automemory = true\nPersist state"]
-    D --> F["Emit telemetry: tengu_memory_toggled"]
+    A["/toggle-memory invoked"] --> B["Read current automemory state\n(readAppState)"]
+    B --> C{automemory currently enabled?}
+    C -- "yes → disabling" --> D["Flip state to disabled\n(writeAppState)"]
+    C -- "no → enabling" --> E["Flip state to enabled\n(writeAppState)"]
+    D --> F["Fire telemetry: tengu_memory_toggled"]
     E --> F
-    F --> G["Build response object\n(type = 'text')"]
-    G --> H{New state after toggle?}
-    H -- "Now disabled" --> I["Output: memory disabled message\n<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->"]
-    H -- "Now enabled" --> J["Output: 'Automemory re-enabled · memory content\nmay be referenced and new memories can be saved.'"]
-    I --> K["Return result to REPL"]
-    J --> K
+    F --> G{new state is enabled?}
+    G -- "yes" --> H["Return text response:\nautomemory re-enabled confirmation"]
+    G -- "no" --> I["Return text response:\n(off-confirmation message)"]
+    H --> J[Done]
+    I --> J
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+10324912 (state read), +10324924 (state write), +10324931 (telemetry dispatch), +10324979 (response type literal), +10325196 (re-enabled message literal)
+Analysis basis: CC v2.1.132 bundle.js:+10324912 – +10324979
 
 ---
 
 ## Behavioral Spec
 
-### State Read and Write
+### Main Handler: Toggle Automemory State
+
+The handler is the async function `F17`, resolved unambiguously via the `module_id → DHq` path in the Arbor symbol graph.
 
 ```
-function readCurrentAutomemoryState(appState):
-    return appState.automemory  // boolean field
-```
+async function toggleMemory(context):
 
-```
-function persistNewAutomemoryState(appState, newValue):
-    appState.automemory = newValue
-    // persistence mechanism (e.g., write-through to config store)
-    // <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-```
+    // 1. Read current session automemory flag
+    currentState = readAppState()           // call: readAppState
+    isCurrentlyEnabled = currentState.automemory
 
-Analysis basis: CC v2.1.132 bundle.js:+10324912, +10324924
+    // 2. Compute new state (simple boolean flip)
+    newEnabled = NOT isCurrentlyEnabled
 
-### Toggle Core Logic
+    // 3. Persist the new state
+    writeAppState({ automemory: newEnabled })   // call: writeAppState
 
-```
-function executeToggleMemory(appState, telemetryEmitter, respond):
-    currentState = readCurrentAutomemoryState(appState)
-    newState     = NOT currentState
+    // 4. Fire telemetry unconditionally
+    emitTelemetry("tengu_memory_toggled")       // call: emitTelemetry
 
-    persistNewAutomemoryState(appState, newState)
-
-    telemetryEmitter.emit("tengu_memory_toggled", { new_state: newState })
-
-    message = buildResponseMessage(newState)
-    respond({ type: "text", content: message })
-```
-
-Analysis basis: CC v2.1.132 bundle.js:+10324931 (telemetry), +10324979 (type literal "text")
-
-### Response Message Construction
-
-```
-function buildResponseMessage(newState):
-    if newState == true:
-        return "Automemory re-enabled · memory content may be referenced and new memories can be saved."
+    // 5. Build and return a text response
+    if newEnabled:
+        message = "Automemory re-enabled · memory content may be " +
+                  "referenced and new memories can be saved."
+        // (citation fragment ≤30 chars: "Automemory re-enabled ·")
     else:
-        // Disabled-state message string
-        // <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-        return <disabled confirmation string>
+        message = <off-direction confirmation string>
+        // NOTE: off-direction literal not captured in depth-2 traversal
+        <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+
+    return { type: "text", content: message }
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+10325196 (re-enabled string literal)
+Analysis basis: CC v2.1.132 bundle.js:+10324912 (readAppState call), +10324924 (writeAppState call), +10324931 (telemetry call), +10324979 (type literal `"text"`), +10325196 (re-enabled message literal)
 
-### Non-Interactive Guard
+### Response Shape
 
-Because `supportsNonInteractive` is `false`, the CLI framework rejects this command before `executeToggleMemory` is ever called when running in a non-interactive (pipe / headless) context. No special guard code inside the handler itself is required.
+The return value uses the string constant `"text"` as its type discriminant (bundle.js:+10324979), consistent with the `thinClientDispatch: "post-text"` registration field. The payload is a plain human-readable string — no structured JSON or markdown is produced.
 
-Analysis basis: CC v2.1.132 bundle.js:+10325359 (registration field `supportsNonInteractive: false`)
+### Session Scope
 
-### Thin-Client Dispatch
+`supportsNonInteractive: false` (bundle.js:+10325359) means this command is only available within an interactive CLI session. It cannot be driven from a script or piped invocation.
 
-The `thinClientDispatch` value of `post-text` indicates that in thin-client configurations the command's result is forwarded as a plain text post rather than handled locally. The toggle action itself (state mutation) still occurs on the local side before dispatch.
+### State Persistence
 
-Analysis basis: CC v2.1.132 bundle.js:+10325359 (registration field `thinClientDispatch: "post-text"`)
+State is written via the `writeAppState` call (identifier `jW8`, bundle.js:+10324924). Because this is session state, the toggle does not persist across separate Claude Code sessions unless the underlying app-state storage layer persists it independently — that layer is not visible at depth ≤ 2.
 
 ---
 
@@ -132,14 +127,13 @@ Analysis basis: CC v2.1.132 bundle.js:+10325359 (registration field `thinClientD
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_memory_toggled` — fired once per invocation, after the state flip (bundle.js:+10324933) |
-| appState changes | `appState.automemory` boolean is inverted and persisted each invocation |
-| Response type | Hardcoded `"text"` (bundle.js:+10324979) |
-| Re-enabled message | `"Automemory re-enabled · memory content may be referenced and new memories can be saved."` (bundle.js:+10325196) |
-| Disabled message | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | `tengu_memory_toggled` — fired once per invocation, unconditionally (bundle.js:+10324933) |
+| App state mutation | Automemory boolean flag flipped via `writeAppState` (`jW8`) at bundle.js:+10324924 |
+| App state read | Current automemory flag read via `readAppState` (`ig`) at bundle.js:+10324912 |
+| Response type | `"text"` — delivered through `thinClientDispatch: "post-text"` |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Non-interactive mode | Command is blocked by framework; `supportsNonInteractive: false` |
+| Non-interactive support | None — `supportsNonInteractive: false` |
 
 ---
 
@@ -147,17 +141,21 @@ Analysis basis: CC v2.1.132 bundle.js:+10325359 (registration field `thinClientD
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis — toggle-memory command registered as `local`, non-interactive blocked, `thinClientDispatch: post-text` |
+| v2.1.132 | Initial analysis; handler `F17` confirmed as AsyncFunction via Arbor `module_id` resolution |
 
 ---
 
 ## Common Mistakes
 
-1. **Running in non-interactive mode**: Piping input to `claude` and attempting `/toggle-memory` will be rejected by the framework before the handler executes, because `supportsNonInteractive` is `false`. Use an interactive session instead.
-2. **Expecting persistence across sessions**: The command description says "for this session." Whether the toggled state survives process restart depends on the underlying config-store implementation, which is not confirmed at depth-2 traversal. Do not assume cross-session durability without verification.
-3. **Assuming a symmetric pair of messages**: Only the re-enabled (enabled → true) message is confirmed in the literals. The disabled-state message is not visible at depth-2 traversal. Do not hard-code or test against a guessed disabled string.
-4. **Calling this from automation scripts**: `thinClientDispatch: post-text` means thin-client environments relay the text response but the automemory state change is local — scripts targeting the thin-client relay will receive the text acknowledgement without being able to confirm the state change took effect remotely.
-5. **Treating the toggle as idempotent**: Each invocation unconditionally inverts the current state. Calling `/toggle-memory` twice in a row returns to the original state, not the desired one — check the current state before invoking if deterministic end-state is required.
+1. **Expecting persistence across sessions**: `/toggle-memory` mutates session-scoped app state. If the storage layer does not write to disk, the toggle resets when a new session starts. Do not rely on it as a permanent setting without verifying storage behavior.
+
+2. **Calling in non-interactive mode**: The `supportsNonInteractive: false` flag means invoking this command from a script or CI pipeline will fail or be silently ignored. Use it only inside an active interactive terminal session.
+
+3. **Assuming a confirmation is always shown**: The re-enabled confirmation string is only emitted when toggling **to** the enabled state. The disabled-direction message is a different literal not captured in this analysis; do not hardcode an assumption about its content.
+
+4. **Treating the toggle as idempotent**: Each invocation flips the state regardless of intent. Calling `/toggle-memory` twice in succession returns automemory to its original state — there is no explicit `on` or `off` argument.
+
+5. **Confusing `thinClientDispatch: "post-text"` with a rich response**: The response is a plain text string. No JSON payload, tool result, or markdown block is returned; downstream code that expects structured output will receive only the confirmation text.
 
 ---
 
@@ -167,7 +165,7 @@ Analysis basis: CC v2.1.132 bundle.js:+10325359 (registration field `thinClientD
 
 | Identifier | Role |
 |---|---|
-| `F17` | Toggle-memory command handler function (main entry point) |
-| `ig` | Automemory state reader / appState accessor (called at bundle.js:+10324912) |
-| `jW8` | Automemory state writer / persistence function (called at bundle.js:+10324924) |
-| `d` | Telemetry emitter / event dispatch function (called at bundle.js:+10324931) |
+| `F17` | Main async handler for `/toggle-memory`; entry point resolved via Arbor `module_id → DHq` |
+| `ig` | Read app state — retrieves current automemory flag from session state |
+| `jW8` | Write app state — persists the flipped automemory boolean back to session state |
+| `d` | Emit telemetry — fires the `tengu_memory_toggled` event |
