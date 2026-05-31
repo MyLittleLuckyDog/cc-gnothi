@@ -20,52 +20,53 @@ It contains:
 - `telemetry` — all `tengu_*` event strings found in the implementation
 - `literals` — string/number constants found in the implementation
 - `identifiers` — obfuscated function identifiers reached during traversal
-- `_arbor_fallback` (optional) — when `true`, the index was built via the Arbor
-  tree-sitter fallback (Babel tripped on this bundle). Add a one-line footnote
-  near the bottom of the spec: "Note: index built via Arbor fallback; some
-  signals (telemetry, literals) may be missing — see arbor-fallback.js."
-- `registration.loc_byte_end` — the registration object's closing brace
-  offset (inclusive of `}`). Use the `(loc_byte, loc_byte_end)` span when
-  you need to cite the full registration block.
-- `registration.prompt_body` (optional, `prompt`-type only) — the actual
-  text the command sends to the agent at invocation. `length` and `trace`
-  document provenance; `text` is the body when extraction succeeded.
-  Ground the Behavioral Spec in what is really instructed. **Do not quote
-  verbatim** beyond short citation fragments (≤30 chars) — the body is
-  © Anthropic PBC.
-- `registration.handler_method` (optional) — when set (currently
-  `"getPromptForCommand"`), the handler lives inline as an ObjectMethod on
-  the registration object rather than behind a module export. callGraph
-  for this command then starts at the synthetic entry
-  `__handler_<command>`; treat it as the command's main handler.
-- `registration.load_ident` (optional) — when set, the handler ident was
-  inlined into a `load:()=>Promise.resolve({call: IDENT})` shape (no
-  `module_id`). callGraph entry will say `via:"load_ident"`. Reference
-  this ident as the handler in the Behavioral Spec.
-- `registration.dynamic_name: true` (optional) — the registration `name`
-  is built at runtime (currently the `mcp__` prefix class). The spec
-  should describe the command as a **prefix-class** (one entry covering
-  many instantiations), not as a single fixed name.
-- `registration.arbor_handler` (optional, present when Arbor was
-  available at index time) — the unambiguous handler this command owns,
-  resolved against the Arbor symbol graph. Shape:
-  `{name, fqn, kind, resolution_path, n_hits}` where:
-    - `name` is the minified handler ident (e.g. `lX5`, `R45`) — use
-      it in the Behavioral Spec pseudocode + Appendix mapping table.
-    - `fqn` is Arbor's fully-qualified path; useful for citation
-      precision when two minified handlers share a name.
-    - `resolution_path` says how Arbor reached this handler:
-      `direct` (symbol fell inside the registration byte range),
-      `module_id` (followed module_id → moduleExports → name lookup),
-      `load_ident` (followed the `load:()=>Promise.resolve({call:I})`
-      inline ident). Mention the path only if a reader could otherwise
-      misread which function the spec is documenting.
-    - When `arbor_handler` disagrees with what `callGraph[0].from`
-      suggests (e.g. Arbor says the real handler is `RZ4` but
-      callGraph starts at the registration's inline method
-      `__handler_<cmd>`), **prefer `arbor_handler`** — it is the
-      unambiguous entry point. The synthetic `__handler_*` id is
-      bookkeeping for the BFS, not a real function name in the bundle.
+- `_arbor_fallback` (when `true`) — index was built via the Arbor
+  tree-sitter fallback (Babel tripped on this bundle). **REQUIRED**: add a
+  one-line footnote near the bottom of the spec: "Note: index built via
+  Arbor fallback; some signals (telemetry, literals) may be missing — see
+  arbor-fallback.js."
+
+The following six fields **MUST appear as rows in the Registration table**
+whenever they are present in the input JSON. Do not omit any of them as
+"optional" — they are the indexer's primary disambiguation evidence and a
+downstream automatic patch backfills missing rows, so omitting them just
+loses the LLM-grounded prose you would have written around them.
+
+- `registration.loc_byte_end` — registration object's closing brace
+  offset (inclusive). Use `(loc_byte, loc_byte_end)` to cite the full
+  registration block.
+- `registration.prompt_body` (`prompt`-type only) — actual text the
+  command sends to the agent. Add rows for `prompt_body.length` and
+  `prompt_body.trace`. Ground the Behavioral Spec in what is really
+  instructed. **Never quote verbatim** beyond short citation fragments
+  (≤30 chars) — the body is © Anthropic PBC.
+- `registration.handler_method` — when set (currently
+  `"getPromptForCommand"`), the handler lives inline as an ObjectMethod
+  on the registration object. callGraph then starts at the synthetic
+  entry `__handler_<command>`; treat it as the command's main handler in
+  the Behavioral Spec.
+- `registration.load_ident` — when set, the handler ident was inlined
+  into a `load:()=>Promise.resolve({call: IDENT})` shape (no `module_id`).
+  callGraph entry says `via:"load_ident"`. Reference this ident as the
+  handler.
+- `registration.dynamic_name: true` — the registration `name` is built
+  at runtime (currently the `mcp__` prefix class). Describe the command
+  as a **prefix-class** (one entry covering many instantiations), not as
+  a single fixed name.
+- `registration.arbor_handler` (present when Arbor was available) — the
+  unambiguous handler resolved against the Arbor symbol graph. Add rows
+  for `arbor_handler.name`, `arbor_handler.kind`,
+  `arbor_handler.resolution_path`, `arbor_handler.fqn`, and
+  `arbor_handler.n_hits`. Use `arbor_handler.name` in pseudocode and the
+  Appendix mapping table.
+    - `resolution_path` says how Arbor reached the handler: `direct`
+      (symbol fell inside the registration byte range), `module_id`
+      (followed module_id → moduleExports → name lookup), `load_ident`
+      (followed the inline `Promise.resolve({call:I})` ident).
+    - When `arbor_handler` disagrees with `callGraph[0].from` (e.g.
+      Arbor says `RZ4` but callGraph starts at the synthetic
+      `__handler_<cmd>`), **prefer `arbor_handler`**. The synthetic
+      `__handler_*` is BFS bookkeeping, not a real bundle name.
 
 Use these facts as your primary source. Do not guess. If something is not in the data, write
 `<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->`.
@@ -130,7 +131,14 @@ Analysis basis: CC v{VERSION} bundle.js:+{loc_byte from registration}
 
 ## Input Branching
 
-[Mermaid flowchart or numbered pseudocode derived from callGraph and literals]
+Use the rule below to choose representation:
+
+- **3+ distinct branches** (counted by examining the literals + callGraph
+  for separate input cases or state transitions) — **MUST use a Mermaid
+  flowchart**. Pseudocode in this case is harder to scan and loses the
+  branching shape.
+- **1-2 branches or a simple linear flow** — numbered pseudocode is
+  acceptable.
 
 ```mermaid
 flowchart TD

@@ -216,6 +216,18 @@ export -f analyze_command validate_output copy_from_version
 export VERSION BUNDLE VERSIONS_DIR TODAY PROMPT_TEMPLATE DRY_RUN DEPTH SCRIPT_DIR INDEX_PATH REPO_ROOT
 # Note: CLAUDE_GATEWAY_URL / ANTHROPIC_API_KEY inherited from environment if set
 
+# Backfill PR #3/#4 + Arbor rows on the way out. The prompt template marks
+# them REQUIRED, but the script also runs deterministically at exit time so
+# any LLM that still omitted them gets fixed without a second API call.
+# inject-spec-fields.js is idempotent and processes every command in the
+# version dir; skipped in dry-run because no specs were actually written.
+inject_missing_fields() {
+  if [[ "$DRY_RUN" == "true" ]]; then return 0; fi
+  node "$SCRIPT_DIR/inject-spec-fields.js" --version "$VERSION" 2>&1 \
+    | sed 's/^/  inject-fields: /'
+}
+trap inject_missing_fields EXIT
+
 # ── Single command mode ───────────────────────────────────────────────────────
 
 if [[ -n "$SINGLE_CMD" ]]; then
