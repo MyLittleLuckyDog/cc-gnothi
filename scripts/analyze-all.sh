@@ -10,7 +10,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ARTIFACTS_DIR="$(cd "$REPO_ROOT/../caludeCodeAVX2/artifacts" && pwd)"
+# Bundle artifacts directory. Defaults to a sibling `caludeCodeAVX2`
+# repo (the most common host layout); override with `CC_GNOTHI_ARTIFACTS`
+# when the source repo lives elsewhere.
+ARTIFACTS_DIR="${CC_GNOTHI_ARTIFACTS:-$(cd "$REPO_ROOT/../caludeCodeAVX2/artifacts" 2>/dev/null && pwd)}"
+if [[ -z "$ARTIFACTS_DIR" || ! -d "$ARTIFACTS_DIR" ]]; then
+  echo "ERROR: artifacts dir not found (set CC_GNOTHI_ARTIFACTS or clone caludeCodeAVX2 next to cc-gnothi)" >&2
+  exit 1
+fi
 PROMPT_TEMPLATE="$SCRIPT_DIR/prompts/analyze-command.md"
 
 VERSION="2.1.132"
@@ -327,44 +334,73 @@ fi
 
 # ── Standard batch mode (no --from-version) ──────────────────────────────────
 
+# Build the list of commands that still need ANALYZE: every .md in
+# the version dir that lacks `bundle_verified: true`. The directory
+# may not exist yet (first-time analysis run) — be quiet in that
+# case and let analyze-batch.js fall back to the build-index cache
+# (it reads from `~/.cc-gnothi/cache/index-${VERSION}.json`).
 CMDS_FILE="$(mktemp /tmp/cc-gnothi-cmds-XXXX.txt)"
-ls "$VERSIONS_DIR"/*.md 2>/dev/null \
-  | grep -v "_index.md" \
-  | while read -r f; do
-      cmd="$(basename "$f" .md)"
-      out="$VERSIONS_DIR/${cmd}.md"
-      if [[ ! -f "$out" ]] || ! grep -q "^bundle_verified: true" "$out"; then
-        echo "$cmd"
-      fi
-    done > "$CMDS_FILE"
-
+if [[ -d "$VERSIONS_DIR" ]]; then
+  ls "$VERSIONS_DIR"/*.md 2>/dev/null \
+    | grep -v "_index.md" \
+    | while read -r f; do
+        cmd="$(basename "$f" .md)"
+        out="$VERSIONS_DIR/${cmd}.md"
+        if [[ ! -f "$out" ]] || ! grep -q "^bundle_verified: true" "$out"; then
+          echo "$cmd"
+        fi
+      done > "$CMDS_FILE"
+fi
 CMD_COUNT="$(wc -l < "$CMDS_FILE" | tr -d ' ')"
 
+# Empty CMDS_FILE → let the batch driver use the bundle's full
+# command list from the build-index cache. Skips happen inside the
+# driver via `bundle_verified: true` detection, same gate as the
+# old loop.
 if [[ "$CMD_COUNT" -eq 0 ]]; then
-  echo "All commands already verified."
-  rm -f "$CMDS_FILE"
-  exit 0
+  echo "Standard batch mode | Bundle: $BUNDLE | (no per-spec filter; driver SKIPs verified)"
+else
+  echo "Commands to analyze ($CMD_COUNT):"
+  cat "$CMDS_FILE"
+  echo ""
+  echo "Standard batch mode | Bundle: $BUNDLE | Depth: $DEPTH"
 fi
-
-echo "Commands to analyze ($CMD_COUNT):"
-cat "$CMDS_FILE"
-echo ""
-echo "Sequential | Bundle: $BUNDLE | Depth: $DEPTH"
 echo ""
 
 if [[ "$DRY_RUN" == "true" ]]; then
-  while read -r cmd; do
-    analyze_command "$cmd"
-  done < "$CMDS_FILE"
+  if [[ "$CMD_COUNT" -gt 0 ]]; then
+    while read -r cmd; do
+      echo "DRY-RUN [$cmd]: would invoke analyze-batch.js"
+    done < "$CMDS_FILE"
+  else
+    echo "DRY-RUN: would invoke analyze-batch.js with full bundle command list"
+  fi
   rm -f "$CMDS_FILE"
   exit 0
 fi
 
-# Sequential — rate limit friendly
-while read -r cmd; do
-  analyze_command "$cmd" || true
-done < "$CMDS_FILE"
+# Migrated path — invoke the single-process batch driver once with
+# all pending commands. One long-lived Anthropic client = stable
+# X-Session-Id at the gateway = prompt-cache continuity across the
+# batch (validated 80% hit ratio in PR #9). Validation and SKIP
+# logic live inside analyze-batch.js (validateSpec /
+# isAlreadyVerified), matching analyze-all.sh's analyze_command
+# behavior 1:1.
+BATCH_ARGS=(
+  --bundle "$BUNDLE"
+  --version "$VERSION"
+  --out-dir "$VERSIONS_DIR"
+  --depth "$DEPTH"
+)
+if [[ "$CMD_COUNT" -gt 0 ]]; then
+  CMDS_JOINED="$(tr '\n' ',' < "$CMDS_FILE" | sed 's/,$//')"
+  BATCH_ARGS+=(--commands "$CMDS_JOINED")
+fi
 rm -f "$CMDS_FILE"
+
+node "$SCRIPT_DIR/analyze-batch.js" "${BATCH_ARGS[@]}"
+exit_code=$?
 
 echo ""
 echo "── Done ──"
+exit $exit_code
