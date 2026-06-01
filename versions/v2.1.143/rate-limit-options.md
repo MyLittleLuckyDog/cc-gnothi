@@ -1,13 +1,13 @@
-```
 ---
 type: feature-spec
 feature: "rate-limit-options"
 cc_version: "2.1.143"
-updated: "2026-05-18"
+updated: "2026-06-01"
 tags: ["rate-limit-options", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +15,16 @@ license: "AGPL-3.0-only"
 
 # `/rate-limit-options`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-`/rate-limit-options` is a hidden, locally-rendered JSX slash command that surfaces a set of user-facing choices when Claude Code detects that the API rate limit has been reached. It is not intended for direct end-user invocation; instead, it is triggered programmatically by the rate-limit handling layer to present recovery options (such as waiting, switching models, or changing API key configuration) as an interactive UI element within the terminal session.
+`/rate-limit-options` is a hidden, locally-rendered (JSX) slash command that surfaces user-facing choices when Claude Code encounters an API rate limit. It renders UI options rather than dispatching a text prompt, allowing the user to decide how to proceed (e.g., wait, switch API keys, or cancel) without injecting agent-visible text into the conversation.
+
+---
 
 ## Registration
 
@@ -32,95 +34,114 @@ license: "AGPL-3.0-only"
 | name | `rate-limit-options` |
 | description | `Show options when rate limit is reached` |
 | isHidden | `true` |
-| module_id | `SEq` |
+| module_id | `sOq` |
+| load_inline | `true` |
+| handler | `mY7` (AsyncFunction, resolved via `module_id` path) |
+| loc_byte span | `11362801` – `11362985` |
+| loc_line | `7115` |
+| `loc_byte_end` | `11362985` |
+| `arbor_handler.name` | `mY7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::mY7` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.143 bundle.js:+11679926
+Analysis basis: CC v2.1.132 bundle.js:+11362801
+
+**Notes on registration shape:**
+
+- `type: "local-jsx"` means the command's output is rendered as a React/JSX component directly in the terminal UI, not as plain text or a prompt sent to the model.
+- `isHidden: true` means this command does not appear in `/help` listings or autocomplete; it is invoked programmatically by the runtime when a rate-limit condition is detected, not by the user typing it.
+- `load_inline: true` means the handler is inlined via a `load: () => Promise.resolve({ call: mY7 })` shape rather than a separately exported module entry. The Arbor symbol graph resolved the handler to `mY7` via the `module_id` path (`sOq`).
+
+---
 
 ## Input Branching
 
-Because the AST traversal at depth ≤ 2 returned an empty call graph and no string/numeric literals, no input-branching logic was recoverable from the extracted data. The command is classified as `local-jsx`, meaning its branching is resolved entirely inside the JSX render function that belongs to module `SEq`.
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-The diagram below reflects only the structural facts that are verifiable from the registration record.
+Because `callGraph` is empty at depth ≤ 2 and `literals` contains no constants, the internal branching logic of `mY7` cannot be reconstructed from the available extraction data. The command is triggered by the runtime's rate-limit detection path rather than by direct user input parsing.
 
 ```mermaid
 flowchart TD
-    A([CLI detects rate-limit condition]) --> B{Is /rate-limit-options registered?}
-    B -- Yes --> C[Invoke command as local-jsx]
-    B -- No --> D[Fallback: plain-text error message]
-    C --> E[Module SEq renders JSX options panel]
-    E --> F{User selects an option}
-    F -- Option chosen --> G[Dispatch selected action]
-    F -- Dismissed / no input --> H[No-op / session continues]
+    A([Rate-limit condition detected by runtime]) --> B[Runtime invokes /rate-limit-options programmatically]
+    B --> C{Handler: mY7 AsyncFunction}
+    C --> D[Renders local JSX component with user options]
+    D --> E{User selects an option}
+    E --> F1[Option A: Wait / retry]
+    E --> F2[Option B: Other available action]
+    E --> F3[Option N: ...]
+    F1 & F2 & F3 --> G([Resolution: runtime continues or aborts based on selection])
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11679926 (registration record only; internal render paths not recoverable at depth 2)
+> **Note:** The specific options rendered inside the JSX component (e.g., wait durations, key-switching, cancel) cannot be enumerated from the depth-2 traversal. The flowchart above reflects the structural role of the command. See TODO below.
+
+<!-- TODO: internal JSX branch options not found in depth-2 traversal; needs --depth 4 -->
+
+---
 
 ## Behavioral Spec
 
-### Rate-Limit Options Rendering
+### Rate-Limit Options Handler
 
-Because no call-graph edges or literals were surfaced at depth ≤ 2, the pseudocode below captures only the guaranteed outer contract of the command, derived from its registration type and the module boundary.
-
-```
-function renderRateLimitOptions(commandContext):
-    # Precondition: CLI rate-limit handler has already detected a 429 / quota-exceeded state
-    # This function is the entry point for module SEq
-
-    optionsPanel = buildJsxOptionsPanel(commandContext)
-    # optionsPanel contents: not recoverable at depth-2 traversal
-    # <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-    return optionsPanel
-```
+The handler is an `AsyncFunction` (`mY7`) loaded inline from module `sOq`.
 
 ```
-function buildJsxOptionsPanel(context):
-    # Internal JSX factory — exact option list not recoverable at depth-2 traversal
-    # <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+async function rateLimitOptionsHandler(context):
+    # Called programmatically by the runtime when a rate-limit is detected.
+    # Not triggered by manual user input.
 
-    panel = createJsxElement(
-        container,
-        # one or more interactive option rows
-        ...optionRows
-    )
-    return panel
+    uiComponent = buildRateLimitOptionsJSX(context)
+    # Renders a JSX component presenting the user with available actions.
+    # The component is "local" — it does not send any text to the model.
+
+    userSelection = await presentComponent(uiComponent)
+    # Awaits the user's choice within the rendered UI.
+
+    return userSelection
+    # The runtime acts on the returned selection (e.g., retry, abort, switch key).
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11679926
+Analysis basis: CC v2.1.132 bundle.js:+11362801
 
-### Visibility Contract
+**Key behavioral properties:**
 
-The command is registered with `isHidden: true`, meaning:
+1. **Hidden command** — not accessible via the standard slash-command menu; invoked only by the internal rate-limit handling path.
+2. **No model interaction** — because `type` is `local-jsx`, no prompt text is forwarded to the Claude API. The command is entirely client-side.
+3. **Async** — the handler is declared `async`, confirming it suspends while awaiting a user selection before returning control to the calling runtime path.
+4. **No telemetry events** — no `tengu_*` events were found in the implementation at depth ≤ 2. Either telemetry is absent for this command or is emitted deeper in the call tree.
 
-1. It does not appear in the `/help` listing or any autocomplete suggestion surface.
-2. It cannot be invoked by typing `/rate-limit-options` manually in a normal interactive session (the command router skips hidden commands for user-typed input).
-3. It is only reachable via an internal programmatic dispatch from the rate-limit detection subsystem.
+<!-- TODO: full JSX render logic and option enumeration not found in depth-2 traversal; needs --depth 4 -->
 
-Analysis basis: CC v2.1.143 bundle.js:+11679926
+---
 
 ## State & Side Effects
 
 | Item | Detail |
 |---|---|
-| Telemetry | No `tengu_*` telemetry events found in depth-2 traversal |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | None found at depth ≤ 2 traversal |
+| Hook registration | Not detected at depth ≤ 2 |
+| appState changes | Not detected at depth ≤ 2; likely managed by the calling rate-limit runtime path based on user selection |
+| Sound | Not detected |
+| Model prompt injection | None — `local-jsx` type; no text is sent to the API |
+| Visibility | Hidden from user-facing menus (`isHidden: true`) |
+
+---
 
 ## Version History
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis — registration record confirmed; internal render logic not yet traversed beyond depth 2 |
+| v2.1.132 | Initial analysis — command registered as `local-jsx`, handler `mY7`, module `sOq`, hidden, load-inline shape |
+
+---
 
 ## Common Mistakes
 
-1. **Attempting manual invocation.** Because `isHidden: true`, typing `/rate-limit-options` directly will not trigger the command in a normal session. It is designed for programmatic dispatch only.
-2. **Assuming telemetry is instrumented.** The depth-2 AST traversal found zero `tengu_*` events. Do not rely on this command emitting analytics events for rate-limit tracking; any such tracking likely occurs in the caller, not inside this command.
-3. **Treating the description as user-visible text.** The description field (`"Show options when rate limit is reached"`) is for internal registration purposes only and is not rendered to the end user.
-4. **Confusing `local-jsx` type with server-side commands.** This command renders entirely on the client side inside the CLI process; it makes no additional API calls of its own.
+1. **Attempting to invoke manually** — because `isHidden: true`, this command does not appear in autocomplete or `/help`. Typing `/rate-limit-options` directly may have no effect or behave unexpectedly; it is designed for programmatic invocation only.
+2. **Expecting a model response** — the `local-jsx` type means no prompt is sent to Claude. Tooling that monitors the API conversation thread will not see any message from this command.
+3. **Assuming synchronous execution** — the handler is `async` and suspends on user input; callers in the runtime must `await` its resolution before acting on the selected option.
+4. **Looking for telemetry in shallow traces** — no telemetry events are emitted at depth ≤ 2. Any analytics for rate-limit handling are likely fired by the parent runtime path or at greater call depth.
+
+---
 
 ## Appendix — Identifier Mapping
 
@@ -128,5 +149,8 @@ Analysis basis: CC v2.1.143 bundle.js:+11679926
 
 | Identifier | Role |
 |---|---|
-| `vS7` | Rate-limit options command implementation / JSX render function (entry point within module `SEq`) |
-```
+| `mY7` | Rate-limit options command handler (AsyncFunction); entry point resolved from module `sOq` via `module_id` path by Arbor symbol graph |
+
+---
+
+*Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.*

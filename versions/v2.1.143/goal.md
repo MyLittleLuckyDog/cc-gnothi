@@ -1,12 +1,14 @@
+```
 ---
 type: feature-spec
 feature: "goal"
 cc_version: "2.1.143"
-updated: "2026-05-18"
+updated: "2026-06-01"
 tags: ["goal", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: "2.1.141"
+analysis_basis: "CC v2.1.141 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -14,14 +16,14 @@ license: "AGPL-3.0-only"
 
 # `/goal`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.141 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.141
 
 ---
 
 ## Overview
 
-The `/goal` command sets a persistent session-level goal condition that Claude Code will pursue until the stated condition is met. When a goal is active, a stop hook is registered that evaluates whether the condition has been satisfied after each agent turn; the goal is cleared and the hook removed once completion is confirmed. Passing the literal argument `clear` removes any active goal without triggering the evaluation loop.
+The `/goal` command lets the user declare a persistent condition that Claude Code must satisfy before stopping. Once set, a stop-hook is registered that evaluates the condition after every agentic turn; the session continues autonomously until the goal is met or explicitly cleared. Invoking `/goal clear` (or `/goal` with no argument) removes the active goal and deregisters the stop-hook.
 
 ---
 
@@ -31,210 +33,242 @@ The `/goal` command sets a persistent session-level goal condition that Claude C
 |---|---|
 | type | `local-jsx` |
 | name | `goal` |
-| description | `Set a goal — keep working until the condition is met` |
+| description | Set a goal — keep working until the condition is met |
 | argumentHint | `[<condition> \| clear]` |
 | immediate | `true` |
-| module_id | `bvq` |
+| module_id | `mVq` |
+| load_inline | `true` |
+| loc_byte | `11814797` |
+| loc_byte_end | `11815000` |
+| loc_line | `7727` |
+| arbor_handler.name | `GR7` |
+| arbor_handler.fqn | `claude-2.1.141::GR7` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.143 bundle.js:+11937578
+Analysis basis: CC v2.1.141 bundle.js:+11814797
 
 ---
 
 ## Input Branching
 
-The command entry point trims the raw argument string, then routes execution through one of four paths depending on the content.
+The command has four distinct runtime branches depending on the argument supplied and the current goal state, so a Mermaid flowchart is used.
 
 ```mermaid
 flowchart TD
-    A([User types /goal <arg>]) --> B[Trim whitespace from argument]
+    A([User invokes /goal]) --> B[Trim argument string]
     B --> C{Argument value?}
-    C -- empty string --> D[Display current goal or\n'No goal set' message]
-    C -- 'clear' --> E[Remove active stop hook\nEmit tengu_stop_hook_removed\nClear goal in appState]
-    C -- condition text --> F{Length check}
-    F -- exceeds limit --> G[Emit too_long error via\nsystem message\nRecord tengu_feature_sad]
-    F -- within limit --> H[Normalize condition text\ntoLowerCase for stop-word check]
-    H --> I{Contains skip-listed\nstop word?}
-    I -- yes --> J[Block and show\nwarning message]
-    I -- no --> K[Register stop hook\nWrite goal to appState\nAppend goal message\nEmit tengu_stop_hook_added\nRecord tengu_feature_ok]
+
+    C -->|"'clear' or empty"| D{Goal currently set?}
+    D -->|No| E[Display 'No goal set' message\nand exit]
+    D -->|Yes| F[Remove goal from appState\nDeregister stop-hook\nEmit tengu_stop_hook_removed]
+
+    C -->|Non-empty condition| G{Condition passes\nlength/policy check?}
+    G -->|Too long / policy violation| H[Report 'too_long' or policy error\nEmit tengu_feature_sad]
+    G -->|Valid| I[Run trust_gate check]
+    I -->|Blocked| J[Display trust gate error\nand exit]
+    I -->|Passed| K[Run hooks_gate check]
+    K -->|Blocked| L[Display hooks gate error\nand exit]
+    K -->|Passed| M[Store goal in appState\nAppend goal-status attachment\nRegister stop-hook\nEmit tengu_stop_hook_added]
+
+    C -->|"'skip' token present"| N[Skip goal evaluation\nfor this turn]
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11936167, +11936255, +11936273, +11936301, +11936326, +11936409, +11936412, +11936423, +11936535
+Analysis basis: CC v2.1.141 bundle.js:+11813386 – +11813867
 
 ---
 
 ## Behavioral Spec
 
-### Command Entry Point
+### 1. Argument Parsing (handler entry point)
+
+The async handler `GR7` is the command's main entry point, resolved via module `mVq`.
 
 ```
-function handleGoalCommand(rawArgument):
-    condition = rawArgument.trim()                    // +11936167
+async function handleGoalCommand(context):
+    rawArg = context.argument
+    trimmedArg = rawArg.trim()                      // +11813386
 
-    if condition == "":
-        return displayCurrentGoalOrNotice()           // +11936326
+    if isSkipToken(trimmedArg):                     // +11813492
+        return                                       // silently skip evaluation
 
-    if condition.toLowerCase() == "clear":
-        return removeActiveGoal()                     // +11936287
+    if trimmedArg is empty OR trimmedArg.toLowerCase() == "clear":
+        return handleClearGoal(context)             // +11813520
 
-    if isStopWord(condition.toLowerCase()):           // +11936273, +11936287
-        return showStopWordWarning()
+    return handleSetGoal(context, trimmedArg)       // +11813754
+```
 
-    if condition.length > MAX_CONDITION_LENGTH:
-        emitSystemMessage(ERROR_TOO_LONG)             // +11936423
-        recordTelemetry("tengu_feature_sad")          // implicit via J8 path
+Analysis basis: CC v2.1.141 bundle.js:+11813386
+
+---
+
+### 2. Skip-Token Detection
+
+A helper (`Tj8`) checks whether the provided string matches the internal `"skip"` sentinel.
+
+```
+function isSkipToken(value):
+    normalised = value.toLowerCase()               // +11352720
+    return knownSkipTokens.has(normalised)         // +11352712
+    // knownSkipTokens contains at least "skip"   // +11813492
+```
+
+Analysis basis: CC v2.1.141 bundle.js:+11813506
+
+---
+
+### 3. Clear-Goal Path (`iaH`)
+
+When the argument is absent or `"clear"`, the current goal is removed.
+
+```
+async function handleClearGoal(context):
+    currentState = context.getAppState()            // +11353912
+
+    if currentState.goal is not set:
+        displayMessage("No goal set")              // +11813545
         return
 
-    registerGoal(condition)
+    // Remove goal attachment from conversation
+    context.applyMessageOp("remove", goalAttachment) // +11354110
+
+    // Update appState — clear goal field
+    context.setAppState({ goal: null })             // +11354041
+
+    // Generate UUID for hook record removal
+    hookId = generateUUID()                         // +11354257 (XXq → JXq.randomUUID)
+
+    // Deregister the stop-hook
+    removeStopHook(hookId)                          // +11354167
+    emitTelemetry("tengu_stop_hook_removed")        // +11354167
+
+    renderFeedback(context)                         // +11354165 (Q)
 ```
 
-### Stop-Word Guard
+Analysis basis: CC v2.1.141 bundle.js:+11813520
+
+---
+
+### 4. Set-Goal Path (`naH`)
+
+When a non-empty, non-`"clear"` condition string is provided:
 
 ```
-function isStopWord(normalizedText):
-    // Checks normalizedText against a built-in blocked-term set.
-    // The literal "skip" is one confirmed member of that set.
-    return stopWordSet.has(normalizedText)            // +9108002, +11936273
-```
+async function handleSetGoal(context, conditionText):
 
-The string `"skip"` is a confirmed blocked term.
-Analysis basis: CC v2.1.143 bundle.js:+11936273, +9108002, +9108010
+    // --- Gate checks ---
+    policyResult = checkPolicySettings(conditionText)  // +11353413 (AU_ → Rm → I8 → policySettings +5311315)
+    if policyResult.blocked:
+        report("too_long" or policy error)             // +11813642
+        emitTelemetry("tengu_feature_sad")             // +945699
+        return
 
-### Goal Registration
+    trustResult = runTrustGate(conditionText)          // +11353363
+    if trustResult.blocked:
+        displayTrustError()
+        return
 
-```
-function registerGoal(condition):
-    sessionId  = generateUUID()                       // +9109547
-    appState   = getAppState()                        // +9108788
+    hooksResult = runHooksGate(conditionText)          // +11353309
+    if hooksResult.blocked:
+        displayHooksError()
+        return
 
-    // Append a goal-typed attachment message to the conversation
-    applyMessageOp("append", {                        // +9109423, +9109529
-        type: "attachment",
-        subtype: "goal",                              // +9109488
-        content: condition
+    // --- Persist goal ---
+    timestamp = Date.now()                             // +11353662
+    currentState = context.getAppState()               // +11353498
+
+    context.setAppState({ goal: conditionText, goalSetAt: timestamp })  // +11353700
+
+    // Append a goal-status attachment to the conversation
+    attachment = buildAttachment({
+        type:    "attachment",                         // +11354239
+        subtype: "goal",                               // +11354198
+        status:  "goal_status",                        // +11354326
+        content: conditionText
     })
+    context.applyMessageOp("append", attachment)       // +11353742 / +11354133
 
-    // Write the goal condition into application state
-    setAppState({ goal: condition })                  // +9108990
-
-    // Register a stop hook that will be called after each agent turn
-    registerStopHook({                                // +9109074
-        id: sessionId,
-        condition: condition
+    // Register a stop-hook that re-evaluates the goal after each turn
+    hookId = generateUUID()                            // (XXq → JXq.randomUUID +11354257)
+    stopHookPayload = buildStopHook({
+        id:        hookId,
+        kind:      "Stop",                             // +11353121
+        condition: conditionText,
+        type:      "prompt"                            // +11353228
     })
+    registerStopHook(stopHookPayload)                  // naH → Zj8 → A.push +11353494 / +11353237
+    emitTelemetry("tengu_stop_hook_added")             // +11353799
 
-    recordTelemetry("tengu_stop_hook_added")          // +9109089
-    recordOutcome(SUCCESS)                            // tengu_feature_ok via SH +955068
+    // Log outcome
+    emitTelemetry("tengu_feature_ok")                  // +945566
+    renderFeedback(context, "goal_set")                // +11813628 / +11813631
+
+    // Kick off agentic loop with optional random delay
+    scheduleAgentLoop(context)                         // GR7 → H → Math.random +12516058, setTimeout +12516095
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+9108784, +9108990, +9109032, +9109074, +9109089
+Analysis basis: CC v2.1.141 bundle.js:+11813754
 
-### Stop Hook Evaluation (per turn)
+---
 
-```
-function evaluateStopHook(turnResult):
-    // Called by the hook runner after each completed agent turn.
-    // Reads output token count to determine whether to continue.
-    outputTokenCount = getMetric(turnResult, "outputTokens")   // +41769
+### 5. Stop-Hook Registration & Lifecycle (`Zj8` / `tYH`)
 
-    statusPayload = buildGoalStatus(turnResult)                 // +9109616
-
-    if goalConditionMet(statusPayload):
-        removeActiveGoal()
-        return STOP
-    else:
-        return CONTINUE
-```
-
-The hook runner uses `Date.now()` for timing metadata and `Object.values()` to enumerate turn metrics.
-Analysis basis: CC v2.1.143 bundle.js:+9108952, +41736, +41740, +41769, +9109616
-
-### Goal Removal
+The stop-hook is stored in a persistent set managed by `tYH`. Each hook entry records its UUID so that `/goal clear` can delete exactly that entry.
 
 ```
-function removeActiveGoal():
-    closeFileHandles()                                // +14513628, +14513638
-    unlinkTempFile()                                  // +14482768
+function registerStopHook(payload):
+    hookStore.set(payload.id, payload)    // tYH → K.set +8302095
+    formatHookList()                      // K → L.map +14487598, f.padEnd +14487611
 
-    applyMessageOp("append", { type: "goal_status", status: "cleared" })
-    setAppState({ goal: null })
-
-    deregisterStopHook(activeHookId)                  // +9109457
-    recordTelemetry("tengu_stop_hook_removed")        // +9109457
+function removeStopHook(id):
+    hookStore.delete(id)                  // Zj8 machinery
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+9109331, +9109400, +9109442, +9109457
-
-### Gate Checks Before Hook Registration
-
-Two gate checks run before the stop hook is written:
-
-1. **Hooks gate** (`"hooks_gate"`) — verifies that the hooks feature flag is enabled for the current session.
-2. **Trust gate** (`"trust_gate"`) — verifies that the current operator policy permits hook registration.
-
-If either gate fails, the stop hook is not registered and no goal is persisted.
-Analysis basis: CC v2.1.143 bundle.js:+9108599, +9108653
-
-### Policy Settings Resolution
+The agentic loop itself uses `L` (loop runner) which tracks active runs via a `Set` (`q`):
 
 ```
-function resolvePolicySettings(context):
-    // Retrieves the active policySettings object used by both gate checks.
-    settings = readPolicySettings(context)            // +5388645
-    return settings
+function runAgentLoop(context):
+    activeRuns.add(runId)                  // L → q.add +14469373
+    try:
+        result = await executeLoop(context)
+    finally:
+        activeRuns.delete(runId)           // L → q.delete +14469396
+        cleanupTempFiles()                 // q → n6K.unlinkSync +14444736
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+5388642, +5388645
+Analysis basis: CC v2.1.141 bundle.js:+11353113, +14469373
 
-### Display Helper — Current Goal Notice
+---
 
-```
-function displayCurrentGoalOrNotice():
-    appState = getAppState()
-    if appState.goal is null or undefined:
-        showMessage("No goal set")                    // +11936326
-    else:
-        showMessage("Current goal: " + appState.goal)
-```
+### 6. System Message Injection
 
-Analysis basis: CC v2.1.143 bundle.js:+11936326
-
-### System Message Emission
+After goal state is stored, a system-scoped context injection is performed so that Claude's model context is aware of the active goal constraint.
 
 ```
-function emitSystemErrorMessage(kind):
-    // Appends a role="system" message to the conversation.
-    appendMessage({
-        role: "system",                               // +11936370
-        content: kind                                 // e.g. "too_long" +11936423
+function injectGoalSystemMessage(conditionText):
+    systemMessage = buildSystemMessage({
+        role:    "system",               // +11813589
+        content: conditionText
     })
+    appendToConversation(systemMessage)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11936370, +11936423
+Analysis basis: CC v2.1.141 bundle.js:+11813589
 
-### Jitter Helper (internal)
+---
 
-```
-function computeJitter():
-    // Used internally by the hook runner for retry back-off.
-    base   = Math.random() * 2                        // +12638154, +12638156
-    offset = 1                                        // +12638170
-    return base + offset
-    // Scheduled via setTimeout                       // +12638193
-```
+### 7. Token Accounting
 
-Analysis basis: CC v2.1.143 bundle.js:+12638154, +12638156, +12638170, +12638193
-
-### Column Formatting Helper
+The output-token count of each agentic turn is tracked via `Uj`, which reads `outputTokens` from turn results to decide whether continuation is warranted.
 
 ```
-function formatColumnOutput(rows):
-    // Used when rendering the goal status in the terminal.
-    lines = rows.map(row => row.padEnd(40, " "))      // +14528173, +14526181
-    return lines.join("  ")                           // separator "  " +14526202
+function computeTurnTokens(turnResult):
+    values = Object.values(turnResult)     // Uj → Object.values +40195
+    return sum(values, key="outputTokens") // +40224
 ```
 
-Column padding width: **40 characters**.
-Analysis basis: CC v2.1.143 bundle.js:+14528173, +14526181, +14526202
+Analysis basis: CC v2.1.141 bundle.js:+11353687
 
 ---
 
@@ -242,16 +276,19 @@ Analysis basis: CC v2.1.143 bundle.js:+14528173, +14526181, +14526202
 
 | Item | Detail |
 |---|---|
-| Telemetry — goal set success | `tengu_stop_hook_added` (bundle.js:+9109089) |
-| Telemetry — goal cleared | `tengu_stop_hook_removed` (bundle.js:+9109457) |
-| Telemetry — outcome ok | `tengu_feature_ok` (bundle.js:+955068) |
-| Telemetry — outcome sad | `tengu_feature_sad` (bundle.js:+955201) |
-| Hook registration | A stop hook keyed by a `crypto.randomUUID()`-generated ID is registered on goal set and deregistered on clear or completion (bundle.js:+9109089, +9109457, +9109547) |
-| appState changes | `goal` field set to condition string on activation; set to `null` on clear/completion (bundle.js:+9108990, +9109331) |
-| Message append | An `"attachment"` sub-typed message with subtype `"goal"` is appended to the conversation on activation; a `"goal_status"` message is appended on completion/clear (bundle.js:+9109423, +9109529, +9109616) |
-| File handles | Two file handles are closed and a temporary file is unlinked during goal removal (bundle.js:+14513628, +14513638, +14482768) |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Gate checks | `hooks_gate` and `trust_gate` policy checks must pass before hook is written (bundle.js:+9108599, +9108653) |
+| Telemetry — `tengu_stop_hook_added` | Fired when a new goal stop-hook is successfully registered (bundle.js:+11353799) |
+| Telemetry — `tengu_stop_hook_removed` | Fired when a goal is cleared and its stop-hook deregistered (bundle.js:+11354167) |
+| Telemetry — `tengu_feature_ok` | Fired on successful set-goal completion (bundle.js:+945566) |
+| Telemetry — `tengu_feature_sad` | Fired on policy/length rejection (bundle.js:+945699) |
+| appState changes | `goal` field set to condition string on `/goal <condition>`; cleared to `null` on `/goal clear` |
+| Hook registration | A `"Stop"`-kind hook keyed by UUID is added to (or removed from) the persistent hook store |
+| Conversation mutation | A `"goal_status"` attachment is appended or removed via `applyMessageOp` |
+| System message injection | A `"system"`-role message bearing the goal text is injected into the conversation context |
+| Agentic loop scheduling | A new autonomous agent loop is started via `setTimeout` with a small random delay (range 1–2 relative units, bundle.js:+12516056, +12516072) after goal is set |
+| Temporary file cleanup | On loop completion, any temp files created during the run are removed via `unlinkSync` (bundle.js:+14444736) |
+| Trust gate | The condition text is passed through the `trust_gate` policy before goal persistence (bundle.js:+11353363) |
+| Hooks gate | The condition text is also checked through `hooks_gate` (bundle.js:+11353309) |
+| Policy settings | Validated via `policySettings` (bundle.js:+5311315); violations produce `"too_long"` status (bundle.js:+11813642) |
 
 ---
 
@@ -259,17 +296,18 @@ Analysis basis: CC v2.1.143 bundle.js:+14528173, +14526181, +14526202
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis |
+| v2.1.141 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Passing `skip` as the condition** — the string `"skip"` is on the internal stop-word blocklist and will be rejected silently with a warning instead of registering a goal. Choose a more descriptive condition string.
-2. **Condition too long** — if the condition text exceeds the internal character limit the command emits a `"too_long"` system message and does not set the goal. Keep conditions concise.
-3. **Expecting `/goal clear` to confirm completion** — `clear` forcibly removes the goal regardless of whether the condition was met. The `goal_status` telemetry event is emitted in both the success and the manual-clear paths, so external log analysis must distinguish between them.
-4. **Hooks or trust gate disabled** — if the operator policy has `hooks_gate` or `trust_gate` disabled, `/goal` will appear to accept the condition (no error is shown at the UI layer) but the stop hook will not be registered and Claude will not automatically continue toward the goal.
-5. **Calling `/goal` with no argument to set a goal** — omitting the argument only displays the current goal (or "No goal set"); it does not prompt for interactive input.
+1. **Passing `clear` with extra whitespace** — the argument is trimmed before comparison (`A.trim`, bundle.js:+11813386), so `"  clear  "` is treated identically to `"clear"`. However, `"clearall"` is **not** treated as a clear action.
+2. **Assuming the goal persists across sessions** — the goal is stored in `appState`; if the session terminates abnormally, the stop-hook may not fire its removal telemetry, and the goal may not persist to a fresh session depending on appState serialisation.
+3. **Confusing `/goal` (no arg) with `/goal clear`** — both produce the clear-goal path. There is no "display current goal" query form; an empty argument clears the goal rather than showing it.
+4. **Setting an excessively long condition** — conditions that exceed the policy-enforced length limit produce a `"too_long"` rejection (bundle.js:+11813642) and no goal is stored. Keep conditions concise.
+5. **Expecting the agent to stop immediately** — after `/goal <condition>` the agentic loop is scheduled with a random delay via `setTimeout`; there may be a brief pause before the first autonomous turn begins.
+6. **Ignoring trust/hooks gates** — in restricted or sandboxed environments the `trust_gate` or `hooks_gate` may block goal registration entirely with no fallback; the command exits silently after displaying the gate error.
 
 ---
 
@@ -279,32 +317,32 @@ Analysis basis: CC v2.1.143 bundle.js:+14528173, +14526181, +14526202
 
 | Identifier | Role |
 |---|---|
-| `gb7` | Command entry point / main handler for `/goal` |
-| `A` | Trimmed argument string / text normalization context |
-| `f` | File handle or async operation handle (close path) |
-| `q` | Secondary file handle (close + unlink path) |
-| `L` | Hook lifecycle manager (add/delete/finally) |
-| `H` | Jitter / random delay utility; also lowercase normalization context |
-| `RO8` | Stop-word guard / blocked-term checker |
-| `diH` | Goal removal orchestrator (getAppState / setAppState / applyMessageOp) |
-| `V6` | Internal state accessor utility |
-| `GV` | Low-level state primitive |
-| `giH` | Message builder / prompt assembler |
-| `KDH` | State map setter |
-| `K` | Column/row formatter (map + padEnd) |
-| `pm1` | Row map helper |
-| `Go1` | UUID generator wrapper (crypto.randomUUID) |
-| `d` | Telemetry dispatcher |
-| `J8` | Outcome recorder (tengu_feature_ok / tengu_feature_sad router) |
-| `QiH` | Goal registration orchestrator (full activation path) |
-| `Yk_` | Gate check runner (hooks_gate + trust_gate) |
-| `bm` | Policy settings reader |
-| `I8` | Policy settings resolver (policySettings key) |
-| `aY` | Secondary policy resolver |
-| `E_` | Gate evaluation result handler |
-| `L7` | Path resolver utility |
-| `QhL` | File-system path builder (lz.resolve, ".." literal) |
-| `_` | App state accessor for QiH path (getAppState / setAppState / applyMessageOp) |
-| `tj` | Turn metrics collector (outputTokens, Object.values) |
-| `SH` | Success outcome emitter (tengu_feature_ok) |
-| `CO8` | Post-registration side-effect handler |
+| `GR7` | Main async handler for `/goal` command (arbor_handler, AsyncFunction, resolved via module_id `mVq`) |
+| `A` | Argument string / intermediate string-processing variable |
+| `f` | Agentic loop execution context / file handle abstraction |
+| `q` | Active-run tracking Set; also used for temp-file cleanup |
+| `L` | Agent loop runner; manages run lifecycle and `finally` cleanup |
+| `H` | Random-delay scheduler; calls `Math.random` and `setTimeout` to defer loop start |
+| `Tj8` | Skip-token detector; checks lowercased input against known skip-token set |
+| `iaH` | Clear-goal handler; removes goal from appState and deregisters stop-hook |
+| `V6` | Internal utility called by both clear and set paths |
+| `Zj8` | Stop-hook list mutator; pushes new hook entries |
+| `tYH` | Hook-store manager; calls `K.set` to persist hook entries |
+| `K` | Hook-store Map; maps hook IDs to hook payloads |
+| `Hm1` | Hook-list formatter helper; calls `H.map` over hook entries |
+| `XXq` | UUID generator wrapper; delegates to `JXq.randomUUID` |
+| `Q` | UI feedback renderer; used in both set and clear paths |
+| `D8` | Secondary feedback/logging utility (set path) |
+| `naH` | Set-goal handler; orchestrates gate checks, appState mutation, hook registration |
+| `AU_` | Gate orchestrator; sequences policy, trust, and hooks checks |
+| `Rm` | Policy-settings reader; delegates to `I8` |
+| `I8` | Low-level settings accessor (reads `policySettings`) |
+| `tY` | Trust-gate runner; delegates to `I8` and `zA` |
+| `Z_` | Intermediate gate utility (hooks/trust path) |
+| `L7` | Hooks-gate runner; delegates to `XhL` |
+| `XhL` | Gate resolution dispatcher; fans out to `RH`, `khH`, `N1`, `h6`, `TpH`, `Uo`, `N6`, `dz.resolve` |
+| `_` | App-state accessor used inside `naH` (getAppState / setAppState / applyMessageOp) |
+| `Uj` | Turn token-accounting utility; aggregates `outputTokens` via `Object.values` |
+| `hH` | Telemetry/logging helper for successful set path; calls `Q` |
+| `Ej8` | Final step in handler (clean-up or return value wrapper) |
+```

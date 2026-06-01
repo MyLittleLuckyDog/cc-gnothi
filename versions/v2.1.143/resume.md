@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "resume"
 cc_version: "2.1.143"
-updated: "2026-05-18"
+updated: "2026-06-01"
 tags: ["resume", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/resume` command (aliased as `/continue`) allows users to re-enter a previous Claude Code conversation by specifying either a conversation ID or a free-text search term. When invoked, it searches the local conversation store, resolves the best match, and restores the conversation context into the active session. If no argument is given, the command presents an interactive list of recent conversations for the user to select from.
+`/resume` (alias: `/continue`) lets the user reload a previous Claude Code conversation by providing a conversation ID or a free-text search term. The command queries the on-disk conversation store, presents a filtered and sorted list of matching sessions, then re-opens the selected conversation in the current working context, restoring its message history and metadata.
 
 ---
 
@@ -35,6 +35,15 @@ The `/resume` command (aliased as `/continue`) allows users to re-enter a previo
 | argumentHint | `[conversation id or search term]` |
 | aliases | `["continue"]` |
 | module_id | `xJq` |
+| load_inline | `true` |
+| loc_byte | `11220750` |
+| loc_byte_end | `11220947` |
+| loc_line | `6668` |
+| arbor_handler.name | `iZ7` |
+| arbor_handler.fqn | `claude-2.1.143::iZ7` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
 Analysis basis: CC v2.1.143 bundle.js:+11220750
 
@@ -42,186 +51,253 @@ Analysis basis: CC v2.1.143 bundle.js:+11220750
 
 ## Input Branching
 
-The command entry point (`commandHandler`) first examines the raw argument string, then branches across three main paths: an exact UUID match, a fuzzy title/search-term match, and the no-argument interactive picker.
+The command has 4+ distinct branches depending on argument presence, match count, and session state.
 
 ```mermaid
 flowchart TD
-    A(["/resume [arg]"]) --> B{Argument\nprovided?}
-    B -- No --> C[Load all conversations\nfrom store]
-    C --> D[Present interactive\nconversation list]
-    D --> E{User selects\nan entry}
-    E -- Selected --> F[Resolve session ID\nfrom selection]
-    E -- Cancelled --> Z([Exit — no-op])
-
-    B -- Yes --> G{Arg looks like\na UUID?}
-    G -- Yes --> H[Look up conversation\nby exact ID]
-    H --> I{Found?}
-    I -- No --> J[Emit error:\n'sessionNotFound']
-    I -- Yes --> F
-
-    G -- No --> K[Filter conversations\nby search term]
-    K --> L{Match count}
-    L -- Zero --> M[Emit message:\n'No conversations found to resume.']
-    L -- Exactly one --> F
-    L -- Multiple --> N[Emit error:\n'multipleMatches'\nwith bold list]
-
-    F --> O[Emit telemetry:\nslash_command_session_id]
-    O --> P[Start new session\nwith restored context]
-    P --> Q[Emit telemetry:\nslash_command_title]
-    Q --> R([Session active])
+    A([User invokes /resume]) --> B{Argument provided?}
+    B -- No --> C[List all conversations,\nsorted by timestamp]
+    B -- Yes --> D[Match argument against\nsession IDs and titles]
+    C --> E{Any sessions found?}
+    D --> E
+    E -- No --> F["Display: 'No conversations\nfound to resume.'"]
+    E -- Yes, exactly 1 --> G[Open matched session directly]
+    E -- Yes, multiple --> H{Argument matches\nexact session ID?}
+    H -- Yes --> G
+    H -- No --> I["Display: 'multipleMatches'\nlist for user to choose"]
+    G --> J{Session ID lookup\nresult}
+    J -- Not found --> K["Display: 'sessionNotFound'\nerror (bold)"]
+    J -- Found --> L[Restore conversation:\nload transcript + metadata,\nemit slash_command_session_id\nand slash_command_title events]
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11219420, +11219793, +11216987, +11217058, +11220054, +11220278
+Analysis basis: CC v2.1.143 bundle.js:+11219543
 
 ---
 
 ## Behavioral Spec
 
-### Conversation List Loading
+### 1. Handler Entry Point (`iZ7` — `resumeCommandHandler`)
 
-The list loader function collects all locally persisted conversations, then filters and sorts them for display. It reads conversation metadata (timestamps, titles, last-prompt excerpts) via the conversation store accessor, and performs Unicode NFC normalization on path strings when checking git worktree associations.
-
-```
-function loadConversationList():
-    allConversations = conversationStore.getAll()
-    worktreeInfo = gitWorktreeDetect()       # runs: git worktree list --porcelain
-    for each conversation in allConversations:
-        normalize path with NFC
-        annotate with worktree membership if applicable
-    sorted = sort allConversations by timestamp descending
-    return sorted
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+11216299, +11216354, +11216361, +11216524, +11216606
-
----
-
-### Search / Filter Logic
-
-When the user supplies an argument that is not a UUID, `conversationSearchFilter` is called. It performs a case-insensitive substring match against conversation titles and last-prompt text.
+The Arbor-resolved handler is the async function `iZ7`. It is reached via `module_id → xJq` (resolution_path: `module_id`).
 
 ```
-function conversationSearchFilter(conversations, searchTerm):
-    normalized = searchTerm.toLowerCase()
-    matched = conversations.filter(c =>
-        c.title.toLowerCase().includes(normalized) OR
-        c.lastPrompt.toLowerCase().includes(normalized)
-    )
-    if matched.length == 0:
+async function resumeCommandHandler(context):
+    sessionList = listSessions(context)           // calls conversationLister (uNH)
+    filteredList = filterSessions(sessionList)    // calls filter on session array
+    jsxElement = createElement(...)              // builds UI component
+    timestamp = Date.now()
+
+    if filteredList is empty:
         display "No conversations found to resume."
-        return null
-    if matched.length == 1:
-        return matched[0]
-    # multiple matches
-    display bold-formatted list of matching titles
-    emit error code "multipleMatches"
-    return null
+        return
+
+    matchedSession = resolveSession(filteredList, context.argument)
+
+    if matchedSession is "sessionNotFound":
+        display bold("sessionNotFound") error
+        return
+
+    if matchedSession is "multipleMatches":
+        display match-list UI
+        return
+
+    emitTelemetryLiteral("slash_command_session_id", matchedSession.id)
+    emitTelemetryLiteral("slash_command_title", matchedSession.title)
+
+    openSession(matchedSession)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11219420, +11219450, +11219793, +11217022, +11217058
+Analysis basis: CC v2.1.143 bundle.js:+11219543
 
 ---
 
-### Exact-ID Resolution
-
-When the argument matches the UUID pattern, the command delegates directly to the conversation store's exact-lookup path.
+### 2. Session Listing (`uNH` — `conversationLister`)
 
 ```
-function resolveByExactId(conversationId):
-    entry = conversationStore.getById(conversationId)
-    if entry is null:
-        emit error code "sessionNotFound"
-        return null
-    return entry
+async function conversationLister(context):
+    timestamp = Date.now()
+    runGit(["worktree", "list", "--porcelain"])   // worktree detection
+    emit telemetry: "tengu_worktree_detection"
+
+    rawLines = splitOutput(gitOutput)
+    worktreePaths = parseWorktreeLines(rawLines)  // strips "worktree " prefix (9 chars)
+
+    // Normalize Unicode: NFC form applied to paths
+    sessions = []
+    for each conversationFile on disk:
+        session = loadSessionMetadata(file)
+        sessions.push(session)
+
+    // Filter: exclude sessions that do not match argument (if provided)
+    if argument given:
+        matched = sessions.find(s => s.id.startsWith(argument)
+                                  || s.title includes argument)
+        filtered = sessions.filter(matchPredicate)
+    else:
+        filtered = sessions
+
+    // Sort by last-modified timestamp, locale-aware
+    filtered.sort((a, b) => a.title.localeCompare(b.title, "NFC"))
+
+    return filtered.slice(0, MAX_RESULTS)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11216987
+Key literals observed:
+- Git subcommand: `"worktree"`, `"list"`, `"--porcelain"` (bundle.js:+11216343, +11216354, +11216361)
+- Prefix strip length: `9` characters (`"worktree "`) (bundle.js:+11216593)
+- Unicode normalization form: `"NFC"` (bundle.js:+11216606)
+- Telemetry event `tengu_worktree_detection` (bundle.js:+11216443)
+
+Analysis basis: CC v2.1.143 bundle.js:+11216299
 
 ---
 
-### Session Resumption
+### 3. Conversation File Reading (`tqH` / `XHH` — `sessionStoreReader`)
 
-Once a target conversation is resolved (by any path), `resumeSession` constructs a new session context object using `Date.now()` as the creation timestamp, attaches the restored message chain, then hands it off to the application state layer.
+The session store subsystem (reached via `iZ7 → tqH → XHH`) reads JSONL transcript files and populates per-session metadata maps. Known metadata keys stored per session:
 
-```
-function resumeSession(resolvedConversation):
-    newSessionContext = {
-        sessionId: resolvedConversation.id,
-        restoredAt: Date.now(),
-        messages: loadMessageChain(resolvedConversation)
-    }
-    emitTelemetry("slash_command_session_id", { id: resolvedConversation.id })
-    appState.setActiveSession(newSessionContext)
-    emitTelemetry("slash_command_title", { title: resolvedConversation.title })
-    renderConversationUI(newSessionContext)
-```
+| Key | Meaning |
+|---|---|
+| `"summary"` | AI-generated conversation summary |
+| `"last-prompt"` | Last user prompt text |
+| `"custom-title"` | User-set title |
+| `"ai-title"` | Model-generated title |
+| `"tag"` | User-applied tag |
+| `"agent-name"` | Sub-agent identifier |
+| `"agent-color"` | Agent color label |
+| `"agent-setting"` | Agent configuration |
+| `"mode"` | Conversation mode |
+| `"permission-mode"` | Permission configuration |
+| `"isolation-latch"` | Isolation flag |
+| `"worktree-state"` | Worktree association |
+| `"pr-link"` | Associated pull-request URL |
+| `"bridge-session"` | Bridge session identifier |
+| `"file-history-snapshot"` | File history snapshot ref |
+| `"attribution-snapshot"` | Attribution snapshot ref |
+| `"content-replacement"` | Content replacement record |
+| `"fork-context-ref"` | Fork context reference |
+| `"marble-origami-commit"` | Internal commit hash label |
+| `"marble-origami-snapshot"` | Internal snapshot label |
 
-Analysis basis: CC v2.1.143 bundle.js:+11219670, +11220054, +11220278, +11219644
+Message types recognized during parsing: `"user"`, `"assistant"`, `"attachment"`, `"system"`, `"compact_boundary"`, `"progress"`.
+
+Analysis basis: CC v2.1.143 bundle.js:+12145546
 
 ---
 
-### Message Chain Loading (`loadMessageChain`)
-
-The message chain loader reconstructs the full conversation transcript from the JSONL-format transcript files. It handles parent-UUID linkage, detects and recovers from phantom parent references, and resolves parallel-thread conflicts. UUID fields are 36 characters wide.
+### 4. Session Resolution (`nQ` — `sessionResolver`)
 
 ```
-function loadMessageChain(conversation):
-    rawEntries = transcriptStore.readAll(conversation.path)
+function sessionResolver(sessions, argument):
+    if argument is undefined or empty:
+        return sessions  // show full list
+
+    lowArg = argument.toLowerCase()
+
+    // Exact UUID match
+    exactId = sessions.find(s => s.id === argument)
+    if exactId found:
+        return exactId
+
+    // Prefix match on ID
+    prefixMatches = sessions.filter(s => s.id.startsWith(lowArg))
+
+    // Content search: titles, summaries
+    contentMatches = sessions.filter(s =>
+        s.title.toLowerCase().includes(lowArg)
+        || s.summary?.toLowerCase().includes(lowArg)
+    )
+
+    allMatches = dedupe(prefixMatches + contentMatches)
+
+    if allMatches.length == 0:
+        return { error: "sessionNotFound" }
+    if allMatches.length == 1:
+        return allMatches[0]
+    return { error: "multipleMatches", matches: allMatches }
+```
+
+Error token literals:
+- `"sessionNotFound"` (bundle.js:+11216987)
+- `"multipleMatches"` (bundle.js:+11217058)
+
+"multipleMatches" UI renders session titles in **bold** via the `M6.bold` call. Analysis basis: CC v2.1.143 bundle.js:+11217022
+
+---
+
+### 5. Conversation Open / Restore (`JJ6` — `sessionOpener`)
+
+```
+async function sessionOpener(sessionId, context):
+    // Resolve full transcript chain
+    chain = resolveChain(sessionId)   // sqH — chainResolver
+
+    // Reconstruct message list from JSONL shards
+    messages = reconstructMessages(chain)  // tNH — transcriptReconstructor
+
+    // Re-build context object for the session
+    sessionCtx = buildSessionContext(messages, metadata)
+
+    // Signal to host that /resume opened this session
+    context.stateUpdate("slash_command_session_id", sessionId)
+    context.stateUpdate("slash_command_title",  sessionCtx.title)
+
+    return sessionCtx
+```
+
+Literal: `"slash_command_session_id"` (bundle.js:+11220054)
+Literal: `"slash_command_title"` (bundle.js:+11220278)
+
+If no sessions exist at all, the literal message `"No conversations found to resume."` is displayed (bundle.js:+11219793).
+
+Analysis basis: CC v2.1.143 bundle.js:+11220099
+
+---
+
+### 6. Chain & Transcript Reconstruction (`sqH`, `tNH` — `chainResolver`, `transcriptReconstructor`)
+
+```
+function chainResolver(sessionId, store):
+    visited = new Set()
     chain = []
-    seen = Set()
-    for each entry in rawEntries:
-        if entry.parentUuid not in seen AND entry.parentUuid is not null:
-            emitTelemetry("tengu_transcript_phantom_parent")
-        if cycleDetected(entry, chain):
-            emitTelemetry("tengu_transcript_parent_cycle")
+    current = sessionId
+
+    while current is not null:
+        if visited.has(current):
+            emit telemetry: "tengu_chain_parent_cycle"
             break
-        chain.push(entry)
-        seen.add(entry.uuid)
-    return chain
+        visited.add(current)
+        node = store.get(current)
+        if node.timestamp missing:
+            emit telemetry: "tengu_chain_timestamp_fallback"
+        chain.push(node)
+        current = node.parentUuid
+
+    if parallel tool-result inconsistency detected:
+        emit telemetry: "tengu_chain_parallel_tr_recovered"
+
+    return chain.reverse()   // chronological order
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+12151969, +12155529, +12149593
-
----
-
-### Git Worktree Detection
-
-During list loading, the worktree detector runs `git worktree list --porcelain`, parses each `worktree ` prefix (9 characters), and annotates conversations whose project paths reside within a known worktree.
-
 ```
-function gitWorktreeDetect(projectPath):
-    output = exec("git", ["worktree", "list", "--porcelain"])
-    lines = output.split("\n")
-    worktrees = lines
-        .filter(l => l.startsWith("worktree "))  # prefix length: 9
-        .map(l => l.slice(9).normalize("NFC"))
-    match = worktrees.find(wt => projectPath.startsWith(wt))
-    emitTelemetry("tengu_worktree_detection", { found: match != null })
-    return match ?? null
+function transcriptReconstructor(chain):
+    // Reads JSONL shards from disk using sync file I/O
+    buffer = Buffer.alloc(...)
+    records = []
+    for each shard in chain:
+        rawBytes = readSync(shard.path, buffer)
+        parsed = parseJSONLRecords(rawBytes)
+        records.push(...parsed)
+
+    if phantom parent detected:
+        emit telemetry: "tengu_transcript_phantom_parent"
+    if parent cycle detected:
+        emit telemetry: "tengu_transcript_parent_cycle"
+
+    return records
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11216354, +11216361, +11216549, +11216562, +11216585, +11216593, +11216606, +11216443
-
----
-
-### Interactive Picker (no-argument path)
-
-When invoked without arguments, the command renders a JSX component (registered type `local-jsx`) that presents a scrollable list of conversations. Each row shows the AI-generated title (metadata key `ai-title`) or custom title (`custom-title`), the last-prompt excerpt (metadata key `last-prompt`), and a relative timestamp. Selection emits `slash_command_session_id` and proceeds to session resumption.
-
-```
-function renderConversationPicker(conversations):
-    rows = conversations.map(c => ({
-        label: c.metadata["custom-title"] ?? c.metadata["ai-title"] ?? c.id,
-        sublabel: c.metadata["last-prompt"] ?? "No prompt",
-        time: formatRelative(c.timestamp)
-    }))
-    selectedIndex = await interactiveList(rows)
-    if selectedIndex is null:
-        return   # user cancelled
-    return conversations[selectedIndex]
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+12153289, +12153367, +12153193, +11220099, +11219644
+Analysis basis: CC v2.1.143 bundle.js:+12134042, +12134193, +12136059, +12151969, +12155529
 
 ---
 
@@ -229,18 +305,19 @@ Analysis basis: CC v2.1.143 bundle.js:+12153289, +12153367, +12153193, +11220099
 
 | Item | Detail |
 |---|---|
-| Telemetry — `tengu_worktree_detection` | Fired during conversation list load when checking git worktree membership (bundle.js:+11216443) |
-| Telemetry — `tengu_transcript_phantom_parent` | Fired when a message's `parentUuid` cannot be resolved in the loaded chain (bundle.js:+12151969) |
-| Telemetry — `tengu_transcript_parent_cycle` | Fired when a cycle is detected in the parent-UUID linkage chain (bundle.js:+12155529) |
-| Telemetry — `tengu_chain_parent_cycle` | Fired at the chain-building layer when a parent cycle is encountered (bundle.js:+12134044) |
-| Telemetry — `tengu_chain_timestamp_fallback` | Fired when a message timestamp is missing and a fallback is used during chain sort (bundle.js:+12134193) |
-| Telemetry — `tengu_chain_parallel_tr_recovered` | Fired when a parallel-thread conflict in the transcript is auto-resolved (bundle.js:+12136059) |
-| Telemetry — `tengu_relink_walk_broken` | Fired if the relink walk encounters a broken parent reference (bundle.js:+12133554) |
-| Hook registration | The `local-jsx` render component created via `OD.createElement` at bundle.js:+11219644 |
-| appState changes | Active session context is replaced with the restored session; session ID and title are written to app state |
-| Session metadata written | Keys accessed/written include: `ai-title`, `custom-title`, `last-prompt`, `summary`, `tag`, `agent-name`, `mode`, `permission-mode`, `worktree-state` (bundle.js:+12153126–12153949) |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Slash-command telemetry fields | `slash_command_session_id` (bundle.js:+11220054), `slash_command_title` (bundle.js:+11220278) |
+| Telemetry — worktree | `tengu_worktree_detection` (bundle.js:+11216443) — fired when enumerating git worktrees |
+| Telemetry — transcript | `tengu_transcript_phantom_parent` (bundle.js:+12151969) — missing parent UUID detected |
+| Telemetry — transcript | `tengu_transcript_parent_cycle` (bundle.js:+12155529) — cycle in parent-UUID chain |
+| Telemetry — chain | `tengu_chain_parent_cycle` (bundle.js:+12134044) — cycle during chain walk |
+| Telemetry — chain | `tengu_chain_timestamp_fallback` (bundle.js:+12134193) — message timestamp missing, using fallback |
+| Telemetry — chain | `tengu_chain_parallel_tr_recovered` (bundle.js:+12136059) — parallel tool-result inconsistency recovered |
+| Telemetry — relink | `tengu_relink_walk_broken` (bundle.js:+12133554) — broken walk during re-link |
+| appState changes | `slash_command_session_id` written to app state on successful resume |
+| appState changes | `slash_command_title` written to app state on successful resume |
+| Hook registration | None detected in depth-2 traversal |
+| Sound | None detected in depth-2 traversal |
+| Filesystem reads | JSONL transcript shards read via synchronous `fs.readSync`; directory listed via `fs.readdir` |
+| Git subprocess | `git worktree list --porcelain` executed to enumerate worktrees |
 
 ---
 
@@ -254,15 +331,11 @@ Analysis basis: CC v2.1.143 bundle.js:+12153289, +12153367, +12153193, +11220099
 
 ## Common Mistakes
 
-1. **Passing a partial UUID as a search term**: If the argument does not match the full UUID regex, the command treats it as a free-text search term rather than an exact-ID lookup. A search for a partial UUID may return zero or multiple matches instead of the intended conversation.
-
-2. **Expecting `/resume` to work across machines**: The command reads from the local conversation store only. Conversations created in a different working directory or on a different machine are not visible.
-
-3. **Ambiguous search terms causing `multipleMatches` errors**: If the search term matches more than one conversation title or last-prompt, the command prints the matching list and exits without resuming. Provide a more specific term or use the full conversation ID.
-
-4. **Confusing `/resume` with `/continue` behavior**: Both names are registered aliases and are functionally identical. There is no behavioral difference between `/resume` and `/continue`.
-
-5. **Worktree path normalization surprises on macOS**: Paths are NFC-normalized before comparison (bundle.js:+11216606). Conversations stored with a non-NFC-normalized path on a case-insensitive filesystem may not match the detected worktree root and will appear as non-worktree sessions.
+1. **Providing a partial ID that matches multiple sessions** — The command returns a `multipleMatches` list rather than opening any session. Supply enough characters to uniquely identify the target session (a UUID prefix of ≥7 characters is typically sufficient).
+2. **Searching for a session in a different worktree** — Session listing is scoped by worktree detection (`git worktree list --porcelain`). Sessions created in another worktree may not appear in the current invocation's list.
+3. **Using `/resume` with no argument expecting an interactive picker** — When no sessions exist at all, the command immediately displays `"No conversations found to resume."` and exits; there is no further prompt.
+4. **Expecting instant load of very long transcripts** — The transcript reconstructor reads JSONL shards synchronously from disk. Long conversation histories with many shards may have noticeable latency before the session becomes interactive.
+5. **Confusing the alias `/continue`** — `/continue` is fully equivalent to `/resume` (registered alias). Both invoke the same handler (`iZ7`).
 
 ---
 
@@ -272,56 +345,169 @@ Analysis basis: CC v2.1.143 bundle.js:+12153289, +12153367, +12153193, +11220099
 
 | Identifier | Role |
 |---|---|
-| `bJq` | Command entry-point / top-level handler for `/resume` |
-| `iZ7` | Main resume command implementation function (JSX render + logic) |
-| `uNH` | Git worktree detection and conversation path annotation |
-| `nQ` | Conversation search/filter dispatcher (delegates to `Dyq`, `tNH`, `uNH`) |
-| `JJ6` | Conversation store accessor / session-state reader |
-| `tqH` | Session state map reader (retrieves all metadata keys from session store) |
-| `XHH` | Session state map writer (writes metadata keys to session store) |
-| `sqH` | Message chain builder (parent-UUID linkage resolution) |
-| `Rm7` | Message chain parallel-thread conflict resolver |
-| `ym7` | Message chain timestamp-sort helper |
-| `Myq` | Message chain deduplication helper |
-| `hm7` | Message chain NaN-timestamp guard |
-| `Qm7` | Low-level JSONL transcript file reader (binary buffer parsing) |
-| `gm7` | JSONL entry parser (buffer-to-record decoder) |
-| `dm7` | Synchronous transcript file open/read helper |
-| `ckq` | Conversation index cache manager |
-| `km7` | Conversation index walk / relink helper |
-| `cm7` | Conversation directory scanner (for interactive picker) |
-| `Yyq` | Interactive conversation picker initializer |
-| `RJq` | Bold-text formatter used for `multipleMatches` output |
-| `P28` | Timestamp parser utility (`Date.parse` wrapper) |
-| `kLH` | Conversation list sort/slice helper (used after filtering) |
-| `nn` | UUID regex test helper |
-| `vi` | Conversation list rendering component |
-| `NH` | Process-spawn / sub-process manager (used for git commands) |
-| `iM` | Message display / output renderer |
-| `__` | Path utility (cross-platform path resolver) |
-| `bj8` | Session context assembler (attaches restored messages to new context) |
-| `rG6` | Conversation metadata loader (reads header fields from transcript) |
-| `tNH` | Transcript binary-header reader (Buffer.alloc-based) |
-| `Dyq` | Filesystem-level conversation scanner (readdir + realpath) |
-| `VJH` | Conversation directory entry processor |
-| `KQ_` | Recursive conversation directory walker |
-| `BG6` | Conversation index get/set helper |
-| `P06` | Message content text extractor |
-| `wQ_` | Compact-summary boundary detector |
-| `jQ_` | Message content type validator |
-| `AQ_` | Combined message-at / search dispatcher |
-| `plH` | Message list mapper |
-| `_SK` | Session ID string coercer |
-| `H_` | History state accessor |
-| `YXH` | BOM / encoding-prefix stripper for transcript files |
-| `pSK` | BOM detection helper |
-| `USK` | UTF-8 BOM remover |
-| `FSK` | JSON-line frame extractor |
-| `BSK` | JSONL boundary scanner |
-| `GV` | Global path resolver |
-| `CU` | Path join utility wrapper |
-| `mG` | Directory entry lister with recursion guard |
-| `X28` | Session-map entry getter with push fallback |
-| `W28` | Session-map full-values enumerator |
-| `C9` | Permission/access error classifier |
-| `Oc_` | Allow-list checker for tool permissions |
+| `iZ7` | Main handler (`resumeCommandHandler`) — async entry point for `/resume` |
+| `bJq` | Pre-filter function applied to the raw session list before handler |
+| `iM` | Session item mapper / normalizer (called twice: in `bJq` and `iZ7`) |
+| `NH` | Logger / error reporting utility (shared across subsystems) |
+| `v_` | Error construction helper |
+| `xH` | String coercion / path helper |
+| `zq` | Secondary filter / query helper |
+| `A$A` | Path helper used by `zq` |
+| `kNK` | LRU-style cache queue manager (shift/push on `Ch6`) |
+| `XH` | String coercion used during session open |
+| `uNH` | Conversation lister — queries git worktrees and returns session list |
+| `$_` | Session store bootstrap / spawn helper |
+| `KXH` | Subprocess / child-process launcher |
+| `YzA` | Subprocess argument builder |
+| `qu8` | Subprocess stdin helper |
+| `Ku8` | Subprocess stream setup |
+| `fu8` | Subprocess option builder |
+| `GOA` | Numeric argument validator |
+| `hA6` | Subprocess lifecycle manager |
+| `Au8` | Reflect-based property installer |
+| `oOA` | Event emitter registration helper |
+| `WOA` | Timeout/race helper for subprocess |
+| `TOA` | Kill/cleanup helper |
+| `POA` | Spawn bind helper |
+| `XOA` | Kill bind helper |
+| `iOA` | Parallel promise runner for subprocesses |
+| `xA6` | Output stream helper |
+| `lOA` | Pipe setup helper |
+| `nOA` | Add-stream helper |
+| `IOA` | Output bind helper |
+| `D` | Session spawn / daemon interaction orchestrator |
+| `G6` | Daemon client |
+| `$` | Disposable resource manager |
+| `IG6` | Platform-aware daemon initializer |
+| `$o_` | Background PTY host spawner |
+| `_SK` | String-based key serializer |
+| `__` | i18n / translation helper |
+| `GV` | Translation lookup table |
+| `bj8` | Conversation browser / search driver |
+| `rG6` | Conversation directory reader |
+| `v` | Conversation file parser |
+| `G5K` | Terminal/UI formatting helper |
+| `hH` | JSON serializer for debug output |
+| `P7` | Path redaction helper (replaces with `"[REDACTED]"`) |
+| `cSH` | Path sanitizer |
+| `Z5K` | Conversation file loader (reads bytes, calls buffer helpers) |
+| `Dyq` | Conversation index builder (reads directory, maps metadata) |
+| `VF` | Projects path resolver |
+| `W` | Event-batching / debounce helper |
+| `K` | Column formatter (padEnd) |
+| `j9` | Async helper |
+| `VJH` | Conversation chunk processor |
+| `KQ_` | Recursive directory scanner for conversation files |
+| `BG6` | Metadata map builder |
+| `YO` | Path normalizer |
+| `T` | Input event handler (remote control) |
+| `Y` | Supervisor session manager |
+| `Z` | MCP / external connection manager |
+| `J` | Process registry |
+| `P` | Buffer / stream accumulator |
+| `X` | MCP tool invocation handler |
+| `j` | Nested worker reference |
+| `G` | MCP tool group handler |
+| `tNH` | Transcript reconstructor (reads JSONL shards synchronously) |
+| `tm7` | JSONL shard parser |
+| `nn` | UUID/regex validator |
+| `vi` | Session validity checker |
+| `tqH` | Session store reader (populates metadata maps) |
+| `XHH` | Session store main initializer / metadata map setter |
+| `Pm7` | Session store map pre-population |
+| `p` | Write stream with timeout |
+| `Ap` | Session store accessor helper |
+| `V6A` | Metadata value normalizer |
+| `T6A` | Metadata type checker |
+| `E6A` | Metadata string replacer |
+| `UP` | Session store update helper |
+| `M` | MCP session manager |
+| `SvH` | MCP server configuration parser |
+| `THK` | MCP server lifecycle updater |
+| `B95` | MCP server connection orchestrator |
+| `O` | Background session map |
+| `N8` | Background session entry |
+| `z` | Daemon control map |
+| `SH` | Telemetry helper (`tengu_feature_ok`) |
+| `mH` | Telemetry helper (`tengu_feature_bad`) |
+| `xN` | Daemon control dispatcher |
+| `Ox` | Process exit orchestrator |
+| `w` | Background session dispatcher |
+| `C` | Background session writer |
+| `x` | Background session timeout/retry handler |
+| `Oo_` | Unix-socket connection helper |
+| `jo_` | Background session lifecycle runner |
+| `L8` | Logging helper |
+| `h` | Session handle |
+| `V` | Pending session handle |
+| `Q` | File read/write queue |
+| `LW6` | File read helper |
+| `B7q` | File unlink helper |
+| `N` | Away-summary generator |
+| `KM8` | State accessor for away-summary |
+| `Te7` | Rate-limit checker for away-summary |
+| `jlq` | Away-summary storage helper |
+| `W18` | Away-summary API caller |
+| `K1q` | UUID generator |
+| `g` | Signal/event emitter |
+| `S` | Session-focus handler (blurred/focused) |
+| `NF` | Session-focus state |
+| `Qm7` | JSONL file reader (low-level, buffer-based) |
+| `e` | Ref-based render timeout helper |
+| `zyq` | Buffer-at accessor |
+| `zH` | Stream chunk enqueuer |
+| `R6` | JSON.parse wrapper |
+| `R` | Record-set accumulator |
+| `y` | Write-stream handle |
+| `Fm7` | Buffer comparator |
+| `c` | Tool-result filter |
+| `HH` | Ref-based render timeout (variant) |
+| `AH` | Ref-based render timeout (variant 2) |
+| `s` | Seen-set for dedup |
+| `DH` | Dual-stream handler |
+| `o` | Voice session orchestrator |
+| `dm7` | Disk-read helper (open/read/close sync) |
+| `ckq` | Session cache manager |
+| `km7` | Session cache walker |
+| `H_` | Passthrough identity helper |
+| `gm7` | JSONL message-block reader |
+| `YXH` | Framing / BOM detector |
+| `pSK` | BOM pre-scan helper |
+| `USK` | BOM-stripped frame helper |
+| `FSK` | Frame parser |
+| `BSK` | Frame push helper |
+| `C9` | Logging level helper |
+| `F` | MCP tool filter |
+| `c6` | Key-event router |
+| `P6` | Orphaned-permission tracker |
+| `l` | Permission-allow set |
+| `Oc_` | Permission allow-entry builder |
+| `r` | Permission deny set |
+| `P28` | Date.parse wrapper for chain timestamps |
+| `sqH` | Chain resolver (walks parentUuid links) |
+| `hm7` | Chain validity checker |
+| `Rm7` | Chain parallel-tool-result reconciler |
+| `ym7` | Chain segment sorter |
+| `Myq` | Chain metadata value mapper |
+| `plH` | Flat message-list mapper |
+| `wQ_` | Compact-summary post-processor |
+| `P06` | Message content normalizer |
+| `vq` | Text content extractor |
+| `jQ_` | Attachment content classifier |
+| `Cm7` | Attachment type checker |
+| `bm7` | Attachment array validator |
+| `X28` | Session-map get/set helper |
+| `W28` | Session-map values lister |
+| `JJ6` | Session opener (reads maps, calls chain resolver) |
+| `Yyq` | Session context assembler |
+| `cm7` | Conversation path builder (joins project dir) |
+| `CU` | Translation helper (calls `GV`) |
+| `mG` | Project directory scanner |
+| `AQ_` | Conversation search orchestrator |
+| `kLH` | Session UI keyboard handler |
+| `nQ` | Session resolver (matches argument to session list) |
+| `RJq` | Bold error renderer for `sessionNotFound` / `multipleMatches` |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

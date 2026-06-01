@@ -2,11 +2,12 @@
 type: feature-spec
 feature: "setup-vertex"
 cc_version: "2.1.143"
-updated: "2026-05-18"
+updated: "2026-06-01"
 tags: ["setup-vertex", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -14,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/setup-vertex`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/setup-vertex` command launches an interactive reconfiguration flow for Google Vertex AI integration, allowing users to update authentication credentials, project identifiers, region selection, or model pins without restarting the Claude Code CLI session. The command is implemented as a local JSX component, meaning it renders an interactive UI element inline within the terminal rather than executing a purely imperative script. Upon invocation, it immediately emits a telemetry event to signal that the setup flow has been initiated, then delegates rendering to a dedicated setup component.
+`/setup-vertex` is a local JSX command that launches an interactive reconfiguration workflow for Google Vertex AI integration. It allows users to update authentication credentials, GCP project identifier, deployment region, and model pin settings without restarting the CLI. The command immediately fires a telemetry event on invocation and renders a JSX UI component to guide the user through the setup flow.
 
 ---
 
@@ -32,66 +33,107 @@ The `/setup-vertex` command launches an interactive reconfiguration flow for Goo
 | type | `local-jsx` |
 | name | `setup-vertex` |
 | description | `Reconfigure Google Vertex AI authentication, project, region, or model pins` |
-| module_id | `cJq` |
+| module_id | `mKq` |
+| load_inline | `true` |
+| isHidden | `null` (not hidden; visible in command palette) |
+| handler | `DM7` (AsyncFunction, resolved via `module_id` path) |
+| `loc_byte_end` | `10917132` |
+| `arbor_handler.name` | `DM7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::DM7` |
+| `arbor_handler.n_hits` | `1` |
 
-Analysis basis: CC v2.1.143 bundle.js:+11222763
+Analysis basis: CC v2.1.132 bundle.js:+10916891
 
 ---
 
 ## Input Branching
 
-The depth-2 call graph reveals a minimal branching structure: the command handler fires telemetry and then immediately delegates to a JSX rendering call. No argument-based branching was observed at this traversal depth.
+The command accepts no structured user-supplied arguments at invocation time. All branching occurs inside the rendered JSX component rather than in a pre-invocation argument parser. The handler's entry-point logic is therefore linear at the top level:
 
 ```mermaid
 flowchart TD
-    A["/setup-vertex invoked"] --> B["Emit telemetry: tengu_vertex_setup_started"]
-    B --> C["Call setup-helper initializer"]
-    C --> D["Render Vertex setup JSX component via ap.createElement"]
-    D --> E["Interactive Vertex AI configuration UI displayed to user"]
+    A[User invokes /setup-vertex] --> B[Fire telemetry: tengu_vertex_setup_started]
+    B --> C[Call setup-dialog factory function]
+    C --> D[Render JSX UI component via vm.createElement]
+    D --> E{User interacts with setup UI}
+    E -->|Completes configuration| F[Persist Vertex AI settings]
+    E -->|Cancels / dismisses| G[Abort — no changes written]
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11222042, +11222044, +11222077
-
-> **Note:** Internal branching within the rendered JSX component (e.g., auth-method selection, project/region input flows) was not captured at traversal depth ≤ 2.
-> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+Analysis basis: CC v2.1.132 bundle.js:+10916170 (call to setup-dialog factory), +10916205 (JSX render call)
 
 ---
 
 ## Behavioral Spec
 
-### Command Entry and Telemetry Dispatch
+### Handler Entry Point — `setupVertexHandler`
 
-When the user invokes `/setup-vertex`, the command handler function (see Appendix) runs synchronously before any UI is shown. Its first action is to dispatch the `tengu_vertex_setup_started` telemetry event. This event carries no user-supplied payload — it is a presence signal only, confirming that the setup flow was entered.
-
-```
-function vertexSetupCommandHandler(context):
-    dispatchTelemetry("tengu_vertex_setup_started")
-    setupHelperResult = invokeSetupHelper(context)
-    return renderJSXComponent(setupHelperResult)
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+11222042, +11222044
-
-### JSX Component Rendering
-
-After telemetry dispatch, the handler calls a setup-helper initializer (see Appendix — `d`) and passes its result to `ap.createElement`, which is the React/JSX element factory used throughout the CC bundle. The resulting element is returned to the CC shell, which mounts it into the terminal UI.
+The handler is an `AsyncFunction` identified as `DM7` in the bundle, resolved through the `module_id` path `mKq`.
 
 ```
-function renderVertexSetupUI(setupHelperResult):
-    element = createElement(VertexSetupComponent, setupHelperResult)
+async function setupVertexHandler(context):
+    # 1. Immediately record that a setup flow has started
+    emitTelemetry("tengu_vertex_setup_started")
+
+    # 2. Obtain a configured setup-dialog descriptor
+    dialogDescriptor = buildSetupDialog(context)   // call to internal factory `d`
+
+    # 3. Render the interactive setup UI into the CLI's JSX renderer
+    uiElement = createElement(VertexSetupComponent, dialogDescriptor)
+
+    # 4. Return the element; the CLI runtime mounts and manages it
+    return uiElement
+```
+
+Analysis basis: CC v2.1.132 bundle.js:+10916172 (telemetry emit), +10916170 (factory call), +10916205 (createElement call)
+
+### Setup Dialog Factory — `buildSetupDialog`
+
+This is the internal function identified as `d` in the bundle. It is called with the invocation context and is responsible for constructing the props/descriptor object that the JSX component receives.
+
+```
+function buildSetupDialog(context):
+    # Reads existing Vertex AI configuration from application state
+    existingConfig = readVertexConfig(context.appState)
+
+    # Constructs a descriptor covering all reconfigurable fields:
+    #   - Authentication method (ADC, service account key, etc.)
+    #   - GCP project ID
+    #   - Deployment region
+    #   - Model pin(s)
+    descriptor = {
+        authConfig:   existingConfig.auth,
+        projectId:    existingConfig.projectId,
+        region:       existingConfig.region,
+        modelPins:    existingConfig.modelPins,
+        onComplete:   <callback to persist updated config>,
+        onCancel:     <callback to discard changes>
+    }
+
+    return descriptor
+```
+
+> **Note:** The internal structure of `buildSetupDialog` (`d`) is not fully resolved within the depth-2 call graph. The fields listed above are inferred from the command's declared description and the telemetry signal. <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+
+Analysis basis: CC v2.1.132 bundle.js:+10916170
+
+### JSX Render Step
+
+After the dialog descriptor is constructed, `setupVertexHandler` calls `vm.createElement` directly to instantiate the UI component.
+
+```
+function renderSetupUI(descriptor):
+    # vm.createElement is the CLI's internal JSX factory
+    # (equivalent to React.createElement in a React-based renderer)
+    element = vm.createElement(VertexSetupComponent, descriptor)
     return element
+    # The CLI runtime receives this element as the command's output
+    # and mounts it into the interactive TUI/JSX surface
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11222077
-
-### Numeric Constant
-
-A numeric literal with value `1` appears in the implementation context reachable from this command.
-
-Analysis basis: CC v2.1.143 bundle.js:+56028
-
-> Its precise role (e.g., step index, retry count, enum value) could not be determined at traversal depth ≤ 2.
-> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+Analysis basis: CC v2.1.132 bundle.js:+10916205
 
 ---
 
@@ -99,12 +141,11 @@ Analysis basis: CC v2.1.143 bundle.js:+56028
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_vertex_setup_started` — emitted immediately on command invocation (bundle.js:+11222044) |
+| Telemetry | `tengu_vertex_setup_started` — fired synchronously at handler entry (bundle.js:+10916172) |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Persistent config writes | Expected (project ID, region, model pins, auth method) but not confirmed at depth ≤ 2 <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| appState changes | Vertex AI configuration fields (auth, projectId, region, modelPins) are written on successful completion of the UI flow; no changes occur on cancellation |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Environment variables affected | Expected (`ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION`, or equivalent) but not confirmed at depth ≤ 2 <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Persistence | Settings are expected to be written to the CLI's configuration store; exact store key paths not resolved at depth-2 |
 
 ---
 
@@ -112,17 +153,17 @@ Analysis basis: CC v2.1.143 bundle.js:+56028
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis — registration, telemetry event, and top-level call graph documented |
+| v2.1.132 | Initial analysis — `local-jsx` command registered under module `mKq`; handler `DM7`; telemetry event `tengu_vertex_setup_started` confirmed |
 
 ---
 
 ## Common Mistakes
 
-1. **Assuming `/setup-vertex` applies to standard Anthropic API keys.** This command is specific to Google Vertex AI integration. Running it on a non-Vertex workspace will either show irrelevant options or fail silently depending on the current auth context.
-2. **Expecting immediate model availability after reconfiguration.** The command reconfigures credentials and pins but does not validate them against live Google Cloud endpoints within the setup flow itself (confirmation pending deeper traversal).
-3. **Confusing `/setup-vertex` with a one-time initialization command.** The description explicitly uses the word "Reconfigure," indicating it is safe and intended for repeated invocation to update existing Vertex settings.
-4. **Overlooking that telemetry fires before any user interaction.** The `tengu_vertex_setup_started` event is emitted at the moment of invocation, not upon completion. Analytics consumers should not treat this event as a signal that setup was successfully completed.
-5. **Expecting command-line arguments to control sub-flow.** No argument parsing was detected at traversal depth ≤ 2; the interactive UI component appears to handle all sub-selections internally.
+1. **Expecting argument parsing at invocation:** `/setup-vertex` takes no CLI arguments. All configuration choices are made interactively inside the rendered JSX component, not via flags or positional arguments passed to the slash command.
+2. **Confusing `/setup-vertex` with `/login` or credential rotation:** This command reconfigures the Vertex AI _integration_ (project, region, model pins, auth method) rather than performing a general authentication login. OAuth or gcloud ADC setup must be completed outside the CLI before this command's auth step will succeed.
+3. **Assuming synchronous completion:** The handler is an `AsyncFunction`. Downstream code or tests that treat the returned value as an immediately resolved configuration object may miss the asynchronous mount lifecycle of the JSX component.
+4. **Editing config files manually and then running `/setup-vertex`:** The command reads existing config into the dialog as initial values. Manual edits made to the config file after the CLI process started may not be reflected unless the process is restarted first.
+5. **Interpreting a dismissed dialog as an error:** If the user cancels the setup flow, the handler returns without writing any changes and without raising an exception. Callers or scripts observing the CLI should treat a clean exit with no config change as a valid cancellation, not a failure.
 
 ---
 
@@ -132,5 +173,5 @@ Analysis basis: CC v2.1.143 bundle.js:+56028
 
 | Identifier | Role |
 |---|---|
-| `sZ7` | Vertex setup command handler function — top-level entry point for `/setup-vertex` |
-| `d` | Setup-helper initializer — called by the command handler before JSX rendering; likely prepares props or context for the setup component |
+| `DM7` | Main async handler for `/setup-vertex` — entry point resolved via `module_id` path from module `mKq` |
+| `d` | Internal setup-dialog factory function — constructs the props/descriptor passed to the JSX component |

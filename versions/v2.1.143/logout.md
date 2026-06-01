@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "logout"
 cc_version: "2.1.143"
-updated: "2026-05-18"
+updated: "2026-06-01"
 tags: ["logout", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/logout` command signs the user out of their Anthropic account by clearing OAuth credentials, removing associated credential files, and resetting in-memory authentication state. It operates as a `local-jsx` command, meaning it renders feedback through the JSX UI layer before performing cleanup. In background (`bg`) or daemon-worker session types, the command is a no-op and informs the user to run `/logout` from their main terminal instead.
+The `/logout` command signs the user out of their Anthropic account by clearing OAuth credentials, removing keychain entries, and purging all in-memory and on-disk authentication state. It is a `local-jsx` command whose handler is the async function `tx4` (resolved via `module_id` → `wZ1`). Background/daemon sessions detect shared credentials and block the logout, directing the user to their main terminal instead.
 
 ---
 
@@ -31,8 +31,17 @@ The `/logout` command signs the user out of their Anthropic account by clearing 
 |---|---|
 | type | `local-jsx` |
 | name | `logout` |
-| description | `Sign out from your Anthropic account` |
+| description | Sign out from your Anthropic account |
+| loc_byte | `10670718` |
+| loc_byte_end | `10670906` |
+| loc_line | `6317` |
 | module_id | `wZ1` |
+| load_inline | `true` |
+| arbor_handler.name | `tx4` |
+| arbor_handler.fqn | `claude-2.1.143::tx4` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
 Analysis basis: CC v2.1.143 bundle.js:+10670718
 
@@ -40,216 +49,174 @@ Analysis basis: CC v2.1.143 bundle.js:+10670718
 
 ## Input Branching
 
-The command entry point (the render/execution function `tx4`) first checks the current session type. If the session is a background or daemon-worker context, the command short-circuits with an informational message and takes no action. Otherwise, it proceeds through the full OAuth logout and credential cleanup sequence.
+Four distinct execution paths exist, warranting a Mermaid flowchart.
 
 ```mermaid
 flowchart TD
-    A["/logout invoked"] --> B{Session type check}
-    B -- "bg / daemon / daemon-worker" --> C["Emit no-op message:\n'This background session shares credentials...\nRun /logout from your main terminal to sign out.'"]
-    C --> Z[Return — no state change]
-    B -- "main terminal session" --> D["Invoke logout action function (logoutAction)"]
-    D --> E["Call HTTP logout / OAuth revocation\n(subscriptionSwitchOrLogout)"]
-    E --> F["Clear global state via clearGlobalState"]
-    F --> G["Clear keychain / credential store entries\n(clearCredentialStore)"]
-    G --> H["Remove credential socket / lock files\n(removeCredentialFiles)"]
-    H --> I["Clear daemon config / IPC files\n(clearDaemonConfig + clearIpcFiles)"]
-    I --> J["Persist cleared config via saveConfig"]
-    J --> K["Emit telemetry: oauth_logout"]
-    K --> L["Render success message:\n'Successfully logged out from your Anthropic account.'"]
-    L --> M["Schedule process teardown via wK after 200 ms"]
-    M --> N[Process exits]
+    A(["/logout invoked"]) --> B{Session type check\nbundle.js:+7541557}
+    B -->|"bg / daemon / daemon-worker\n(background session)"| C["Display warning:\n'shares credentials… no effect'\nbundle.js:+7541667"]
+    C --> D([Return — no logout performed])
+    B -->|"oauth auth type\nbundle.js:+7541611"| E["Call clearOAuthTokens\n(cD6) — revoke + purge\nbundle.js:+7541630"]
+    E --> F["Clear in-memory state\n(dD6) bundle.js:+7540836"]
+    F --> G["Clear file-based state\n(n8_, a6) bundle.js:+7540913"]
+    G --> H["Display success message\nbundle.js:+7541866"]
+    H --> I["Schedule exit / shutdown\nsetTimeout 200 ms\nbundle.js:+7541929"]
+    I --> J([Process exits])
+    B -->|"other / API key auth"| K["Call clearOAuthTokens\n(cD6) in reduced form"]
+    K --> F
+    E --> L{OAuth revocation\nsucceeds?}
+    L -->|success| F
+    L -->|failure — emit 'oauth_logout'\nerror telemetry\nbundle.js:+7541338| F
 ```
-
-Analysis basis: CC v2.1.143 bundle.js:+7541557, +7541630, +7541665, +7541667, +7541819, +7541866, +7541929, +7541961
 
 ---
 
 ## Behavioral Spec
 
-### Session-Type Guard
+### 1. Session-Type Guard
 
-Before executing any destructive action, the command inspects the current session mode. The session type string is normalized to lowercase before comparison.
+Before any credential work, the handler checks the current session mode.
 
 ```
-function sessionTypeGuard(sessionType):
-    normalizedType = sessionType.toLowerCase()
-    if normalizedType in ["bg", "daemon", "daemon-worker"]:
-        return NO_OP
-    return PROCEED
+async function logoutHandler(context):
+    sessionType = getSessionType(context)   // T1 → cB
+    if sessionType in ["bg", "daemon", "daemon-worker"]:
+        displayWarning(
+            "This background session shares credentials with other sessions; " +
+            "/logout here has no effect. Run /logout from your main terminal to sign out."
+        )
+        return   // abort — no side effects
 ```
 
-Session type strings that trigger the no-op path: `"bg"`, `"daemon"`, `"daemon-worker"`.
+Session type constants found in literals: `"bg"` (bundle.js:+2169283), `"daemon"` (bundle.js:+2169293), `"daemon-worker"` (bundle.js:+2169307).
 
-Analysis basis: CC v2.1.143 bundle.js:+14528099 (toLowerCase), +2169283 ("bg"), +2169293 ("daemon"), +2169307 ("daemon-worker")
+Analysis basis: CC v2.1.143 bundle.js:+7541557
 
 ---
 
-### OAuth Logout / Subscription-Switch Call
+### 2. OAuth Token Revocation (`clearOAuthTokens`)
 
-The logout action dispatches an HTTP-level logout request. This call is identified internally with the tag `"subscription-switch"` and, on the OAuth path, the tag `"oauth_logout"`.
+When the session type is `"oauth"` (bundle.js:+7541611), the handler calls the OAuth-clearing function (`cD6`).
 
 ```
-async function performOAuthLogout():
-    result = await subscriptionSwitchRequest(tag="subscription-switch")
-    if result indicates oauth flow:
-        tag = "oauth_logout"
-    return result
+async function clearOAuthTokens():
+    await Promise.resolve()                  // micro-task fence
+    closeOpenStreams()                       // F0_ — close active I/O
+    normalizeAuthType()                      // A → f.toLowerCase
+    shutdownDaemonConnections()              // dD6 sub-steps below
+    unlinkOAuthLockFile()                    // ID1 → XZH.unlink
+    clearConversationCache()                 // d0_ → k26.unlink
+    emitTelemetry("oauth_logout")            // SH — bundle.js:+7541338
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+7541183 ("subscription-switch"), +7541338 ("oauth_logout"), +7541335 (call site of SH/stateUpdate)
+Analysis basis: CC v2.1.143 bundle.js:+7541630
 
 ---
 
-### Global State Teardown
+### 3. In-Memory State Teardown (`dD6`)
 
-After the HTTP call, all in-memory application state is cleared via a dedicated teardown function. This includes:
-
-- Stopping all active background tasks and intervals via `clearInterval` and `process.removeListener`.
-- Removing process-level event listeners (including `"exit"` and `"beforeExit"` listeners).
-- Clearing multiple internal Map and Set structures (session registry, request registry, cache maps, pending-flush sets).
-- Emitting an internal shutdown event to notify subsystems.
+Called unconditionally after credential revocation begins.
 
 ```
-function clearGlobalState():
-    clearAllIntervals()
-    removeProcessListeners(["exit", "beforeExit"])
-    for each internalStore in [sessionMap, requestMap, cacheMap1, cacheMap2, pendingFlushSet]:
-        internalStore.clear()
-    emitShutdownEvent()
+function clearInMemoryState():
+    clearAuthCache()           // rz6
+    clearSessionInfo()         // Il6
+    clearNotificationMap()     // Nl6 → FY9.clear (bundle.js:+2905897)
+    clearMetricsCollector()    // cMH
+    shutdownEventLoop()        // Y0H:
+        stopHeartbeatTimer()       // imH → _9_ → clearInterval
+        removeProcessListeners()   // imH → process.removeListener (bundle.js:+3143698)
+        process.off(...)           // imH → process.off (bundle.js:+3143006)
+        clearMultipleRegistries()  // sMH, Ri6, x76, nA_, PF → .clear()
+        emitShutdownEvent()        // nmH.emit
+        flushPendingLogs()         // NH — network queue drain
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+3143663 (clearInterval), +3143698 (process.removeListener), +3143006 (process.off), +3143064 ("exit"), +3143721 ("beforeExit"), +3143125, +3143137, +3143149, +3143161, +3143173 (.clear calls), +3142878 (emit)
+Lock-acquisition warning: `"Lock acquisition took longer than expected - another Claude instance may be running"` (bundle.js:+3162208).
+
+Config auth-loss guard: if the re-read config is missing auth that the cache holds, the write is refused with message referencing GH #3117 (bundle.js:+3162624).
+
+Analysis basis: CC v2.1.143 bundle.js:+7540836
 
 ---
 
-### Credential Store Clearance
+### 4. Keychain / File Credential Removal
 
-The credential store module attempts to delete the keychain entry for the service account identified as `"claude-code-user"`. The key is derived using a SHA-256 hash (hex-encoded, first 8 characters) of the OS user info. If deletion fails, an error with the message `"Failed to delete keychain entry"` is surfaced (but does not abort the logout sequence).
+Two parallel file-system cleanup paths run:
+
+#### 4a. Keychain entry deletion (`n8_` → `aY9` → `edA`)
 
 ```
-function clearCredentialStore():
-    userInfo = os.userInfo()
-    key = sha256(userInfo).hex().slice(0, 8)
-    serviceAccount = "claude-code-user"
+function deleteKeychainEntry():
+    accountId = deriveAccountId()           // PN → adA.createHash("sha256") → hex slice [0:8]
+    serviceLabel = "claude-code-user"       // bundle.js:+2039609
     try:
-        keychainDelete(serviceAccount, key)
-    except error:
-        log("Failed to delete keychain entry", error)
+        removeKeychainEntry(accountId, serviceLabel)   // KP → KXH
+        resolveUserInfo()                              // nV → sdA.userInfo
+    except:
+        log("Failed to delete keychain entry")         // bundle.js:+2040320
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+2039414 (createHash), +2039429 ("sha256"), +2039456 ("hex"), +2039475 (8), +2039609 ("claude-code-user"), +2039577 (userInfo), +2040320 ("Failed to delete keychain entry")
+Hash algorithm: `"sha256"`, output encoding `"hex"`, prefix length `8` characters (bundle.js:+2039429, +2039456, +2039475).
 
----
+Analysis basis: CC v2.1.143 bundle.js:+7540913
 
-### Socket and Lock File Removal
-
-Credential-related socket files and IPC lock files are removed with `unlinkSync`. The file paths are constructed by joining a base directory path with filename components. Up to 5 backup copies are retained before rotation; files with `.backup.` in their name are part of this rotation scheme.
+#### 4b. Global config credential purge (`a6`)
 
 ```
-function removeCredentialFiles():
-    socketPath = path.join(baseDir, socketFilename)
-    try:
-        fs.unlinkSync(socketPath)
-    except ENOENT:
-        pass   // already gone — not an error
-
-    lockPath = path.join(baseDir, lockFilename)
-    try:
-        fs.unlinkSync(lockPath)
-    except ENOENT:
-        pass
-```
-
-Maximum backup files retained: 5 (Analysis basis: CC v2.1.143 bundle.js:+3163227)
-Backup file name pattern includes substring `".backup."` (Analysis basis: CC v2.1.143 bundle.js:+3163094)
-
-Analysis basis: CC v2.1.143 bundle.js:+14482768 (unlinkSync on socket), +6749910 (XZH.unlink), +10027012 (k26.unlink), +3163345 (L.unlinkSync)
-
----
-
-### Config Persistence (saveConfig with Lock)
-
-After credential clearance, the updated (empty-auth) configuration is written back to disk using an atomic write with a file lock. The lock mechanism warns if acquisition takes longer than expected. A safety guard prevents writing a config that is missing auth fields that the in-memory cache still holds — this prevents accidentally wiping `~/.claude.json` (referenced as GH #3117).
-
-```
-async function saveConfigWithLock(config):
-    acquired = await acquireLock(timeoutMs=60000)
-    if lockContentionDetected:
-        emitTelemetry("tengu_config_lock_contention")
-        log("Lock acquisition took longer than expected - another Claude instance may be running")
-
-    existingConfig = readConfigFromDisk()
-    if existingConfig.auth is present AND config.auth is missing:
-        emitTelemetry("tengu_config_auth_loss_prevented")
-        log("saveConfigWithLock: re-read config is missing auth that cache has; refusing to write to avoid wiping ~/.claude.json. See GH #3117.")
+function purgeGlobalConfigCredentials():
+    acquireConfigLock()       // P9_ — with 60 000 ms timeout (bundle.js:+3162978)
+    reReadConfigFromDisk()    // H$H → q.readFileSync, encoding "utf-8"
+    if cacheHasAuthButDiskDoesNot():
+        log("saveGlobalConfig fallback: … refusing to write. See GH #3117.")  // bundle.js:+3159506
         return
-
-    writeAtomically(config, mode=0o600)   // octal 600 = decimal 384
-    releaseLock()
+    removeAuthFields()
+    writeConfigAtomically()   // yA6 — uses randomBytes(6), temp file, fchmodSync, fsyncSync, renameSync
+    rotateBackups()           // X9_ → lz.join("..", "backups"), keep max 5 (bundle.js:+3163227)
 ```
 
-File write permission mode: `384` (octal `0o600`) (Analysis basis: CC v2.1.143 bundle.js:+3163509)
-Lock timeout: `60000` ms (Analysis basis: CC v2.1.143 bundle.js:+3162978)
-Warning string: `"Lock acquisition took longer than expected - another Claude instance may be running"` (Analysis basis: CC v2.1.143 bundle.js:+3162208)
-Auth-loss prevention string: `"saveConfigWithLock: re-read config is missing auth that cache has; refusing to write to avoid wiping ~/.claude.json. See GH #3117."` (Analysis basis: CC v2.1.143 bundle.js:+3162624)
+Backup directory name: `"backups"` (bundle.js:+3163809). Backup filename contains `".backup."` (bundle.js:+3163094). Config file mode: octal `0600` (decimal `384`, bundle.js:+3163509).
+
+Analysis basis: CC v2.1.143 bundle.js:+7540961
 
 ---
 
-### Daemon Config and IPC File Clearance
-
-Two additional cleanup functions run in sequence:
-
-1. A daemon-config reset function that clears an internal daemon configuration cache (via `.clear()`) and removes any IPC socket files previously registered for inter-process communication.
-2. An IPC path cleanup function that joins path segments and calls `unlink` on the resolved path, swallowing `ENOENT` errors.
+### 5. Success Display and Process Exit
 
 ```
-function clearDaemonConfig():
-    daemonConfigStore.clear()
-    // daemonConfigStore corresponds to FY9
-
-function clearIpcFiles(ipcBasePath):
-    fullPath = path.join(ipcBasePath, ipcFilename)
-    fs.unlink(fullPath, ignoreErrorCode="ENOENT")
+async function displaySuccessAndExit():
+    renderJSXMessage("Successfully logged out from your Anthropic account.")
+        // g0_.createElement, type="system" (bundle.js:+7541819, +7541866)
+    await shutdownSubprocesses()    // wK → x9 → CEH / dY_ / cY_
+    setTimeout(() => process.exit(), 200)   // bundle.js:+7541929, literal 200
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+2905897 (FY9.clear), +7541415, +7541421, +7541427, +7541433, +7541458, +7541511, +7541523
+The exit delay of 200 ms (bundle.js:+7541961) allows the JSX renderer to flush its final frame before the process terminates.
+
+Analysis basis: CC v2.1.143 bundle.js:+7541841
 
 ---
 
-### Process Teardown After Logout
+### 6. Metrics / OTEL Flush (`cFH` → `OL`)
 
-After emitting the success message to the UI, the command schedules a clean process exit via the shutdown orchestrator (`wK`). This orchestrator:
-
-1. Finalizes any pending output writes.
-2. Waits for drain events with a grace period.
-3. Calls `process.exit` or sends `SIGKILL` if the process does not exit within the timeout.
-
-The teardown is scheduled with a `200` ms delay after the success message is rendered.
+Before the process exits, telemetry attributes are serialized and emitted:
 
 ```
-function scheduleProcessTeardown(delayMs=200):
-    setTimeout(() => {
-        shutdownOrchestrator(exitCode=0)
-    }, delayMs)
+function flushOtelMetrics():
+    buildAttributes():
+        set("user.id", ...)
+        set("session.id", ...)          // if OTEL_METRICS_INCLUDE_SESSION_ID
+        set("app.version", "2.1.143")   // bundle.js:+4867428
+        set("organization.id", ...)
+        set("user.email", ...)          // if OTEL_METRICS_INCLUDE_ACCOUNT_UUID
+        set("terminal.type", ...)
+    emitEventBatch(A.emit)              // OL → A.emit (bundle.js:+4868680)
 ```
 
-Teardown delay: `200` ms (Analysis basis: CC v2.1.143 bundle.js:+7541961)
-Grace period for output drain: `5000` ms maximum, `3500` ms target (Analysis basis: CC v2.1.143 bundle.js:+5229354, +5229361)
-Fallback kill signal: `"SIGKILL"` (Analysis basis: CC v2.1.143 bundle.js:+5227919)
+Build timestamp embedded in bundle: `"2026-05-15T17:39:39Z"` (bundle.js:+4867517).
+Commit hash embedded in bundle: `"cfb8132e4c3551e2773f41a1900efd1cc93637db"` (bundle.js:+4867548).
 
----
-
-### Secure Storage Write Telemetry (Credential Layer)
-
-The underlying credential write/delete layer emits fine-grained telemetry tags to track which storage path was used (primary keychain vs. plaintext fallback vs. both failed).
-
-| Storage outcome | Telemetry tag |
-|---|---|
-| Primary keychain succeeded | `"secure_storage_credentials_write"` |
-| Plaintext fallback used | `"plaintext_fallback_used"` |
-| Both primary and fallback failed | `"primary_and_fallback_failed"` |
-
-Analysis basis: CC v2.1.143 bundle.js:+2197680, +2197830, +2197933
+Analysis basis: CC v2.1.143 bundle.js:+7541568
 
 ---
 
@@ -257,25 +224,25 @@ Analysis basis: CC v2.1.143 bundle.js:+2197680, +2197830, +2197933
 
 | Item | Detail |
 |---|---|
-| Telemetry — config lock contention | `tengu_config_lock_contention` emitted when lock acquisition is slow (bundle.js:+3162297) |
-| Telemetry — stale config write | `tengu_config_stale_write` emitted when config on disk is newer than the write candidate (bundle.js:+3162433) |
-| Telemetry — config parse error | `tengu_config_parse_error` emitted when `~/.claude.json` cannot be parsed (bundle.js:+3164878) |
-| Telemetry — auth loss prevented | `tengu_config_auth_loss_prevented` emitted when a write would wipe existing auth tokens (bundle.js:+3162776) |
-| Telemetry — feature ok/bad/sad | `tengu_feature_ok`, `tengu_feature_bad`, `tengu_feature_sad` emitted by the feature-flag gate wrapping the logout action (bundle.js:+955068, +955201, +955126) |
-| Telemetry — daemon config reload | `tengu_daemon_config_reload` emitted when the daemon configuration is reloaded as part of teardown (bundle.js:+14517117) |
-| Telemetry — startup perf | `tengu_startup_perf` emitted in the shutdown path's profiling report (bundle.js:+211017) |
-| Telemetry — scroll summary | `tengu_scroll_summary` emitted by the scroll/output renderer during teardown (bundle.js:+5228657) |
-| Telemetry — pewter brook | `tengu_pewter_brook` emitted by the fullscreen/terminal environment detection layer (bundle.js:+3332480) |
-| Telemetry — cache eviction hint | `tengu_cache_eviction_hint` emitted during session-end cache cleanup (bundle.js:+5229690) |
-| Process event listeners | `"exit"` and `"beforeExit"` listeners removed from `process` during global state teardown |
-| In-memory stores cleared | Multiple internal Map/Set structures cleared: session registry, request queue, cache maps, pending-flush sets |
-| File deletions | OAuth socket file, IPC lock file(s), daemon config files removed via `unlinkSync` / `unlink` |
-| Keychain entry | `"claude-code-user"` keychain entry deleted (error is non-fatal) |
-| Config file | `~/.claude.json` rewritten with auth fields removed (atomic write, mode `0o600`) |
-| appState changes | Auth tokens and session identity cleared from global config store; `FY9` daemon config store cleared |
-| Process lifecycle | `process.exit` called after `200` ms delay; `SIGKILL` sent as last-resort fallback |
+| Telemetry — config lock contention | `tengu_config_lock_contention` (bundle.js:+3162297) |
+| Telemetry — stale config write | `tengu_config_stale_write` (bundle.js:+3162433) |
+| Telemetry — config parse error | `tengu_config_parse_error` (bundle.js:+3164878) |
+| Telemetry — auth loss prevented | `tengu_config_auth_loss_prevented` (bundle.js:+3162776) |
+| Telemetry — feature ok | `tengu_feature_ok` (bundle.js:+955068) |
+| Telemetry — feature sad | `tengu_feature_sad` (bundle.js:+955201) |
+| Telemetry — feature bad | `tengu_feature_bad` (bundle.js:+955126) |
+| Telemetry — daemon config reload | `tengu_daemon_config_reload` (bundle.js:+14517117) |
+| Telemetry — startup perf | `tengu_startup_perf` (bundle.js:+211017) |
+| Telemetry — scroll summary | `tengu_scroll_summary` (bundle.js:+5228657) |
+| Telemetry — display mode | `tengu_pewter_brook` (bundle.js:+3332480) |
+| Telemetry — cache eviction | `tengu_cache_eviction_hint` (bundle.js:+5229690) |
+| Keychain removal | Deletes entry under service `"claude-code-user"` keyed by SHA-256 hash of account ID (first 8 hex chars) |
+| Config file | Atomically removes auth fields from `~/.claude.json`; creates up to 5 rolling backups in `backups/` subdirectory |
+| In-memory caches | Clears `FY9`, `sMH`, `Ri6`, `x76`, `nA_`, `PF` registries; removes all process event listeners |
+| OTEL metrics | Flushed synchronously before exit via `OL → A.emit` |
+| Process lifecycle | `process.exit()` called after 200 ms delay via `setTimeout` |
+| Background session guard | No credential state is modified when session type is `bg`, `daemon`, or `daemon-worker` |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 
 ---
 
@@ -289,15 +256,11 @@ Analysis basis: CC v2.1.143 bundle.js:+2197680, +2197830, +2197933
 
 ## Common Mistakes
 
-1. **Running `/logout` inside a background or daemon-worker session has no effect.** The command detects the session type and short-circuits with a message instructing the user to run `/logout` from their main terminal. Credentials are not cleared.
-
-2. **Expecting `/logout` to be instantaneous.** The command schedules a 200 ms delay before initiating process teardown, and the teardown itself has a drain grace period of up to 5 000 ms. The terminal may remain open briefly after the success message appears.
-
-3. **Assuming credential deletion is guaranteed.** Keychain deletion errors are caught and logged but do not abort the logout. If the keychain entry cannot be removed (e.g., permission denied), the rest of the logout still proceeds and the process exits, but stale keychain data may remain.
-
-4. **Expecting `/logout` to clear project-level settings.** Only OAuth credentials and session-level auth state are removed. Project configuration files (`.claude/` directories) are unaffected.
-
-5. **Re-running Claude immediately after `/logout` without allowing teardown to complete.** Because `saveConfigWithLock` uses a file lock with a 60 000 ms timeout, starting a new Claude process before the config write completes can result in lock contention and the `"another Claude instance may be running"` warning.
+1. **Running `/logout` in a background or daemon session** — the command detects session types `"bg"`, `"daemon"`, and `"daemon-worker"` and exits immediately with a warning. Only the main terminal session performs the actual sign-out.
+2. **Expecting an interactive confirmation prompt** — `/logout` begins credential removal immediately with no confirmation step; the first user-visible output may be the success message just before exit.
+3. **Assuming the process stays alive after logout** — the handler schedules `process.exit()` with a 200 ms delay. Any code or hooks that need to run post-logout must complete within that window.
+4. **Concurrent Claude instances holding config lock** — if another Claude instance is running, lock acquisition may emit `tengu_config_lock_contention` and display `"Lock acquisition took longer than expected"`. The logout will still proceed but config writes may be delayed.
+5. **Auth-loss prevention refusing writes** — if the on-disk `~/.claude.json` already lost auth fields (e.g., manual edit) but the in-memory cache still has them, the atomic write is aborted to avoid data loss (GH #3117 guard). This is logged but does not surface as a user-visible error.
 
 ---
 
@@ -307,115 +270,118 @@ Analysis basis: CC v2.1.143 bundle.js:+2197680, +2197830, +2197933
 
 | Identifier | Role |
 |---|---|
-| `cD6` | Core logout action function (performs HTTP logout, clears state, orchestrates cleanup) |
-| `tx4` | Command render/entry-point function (session-type guard + UI rendering) |
-| `dD6` | Global state teardown orchestrator (calls all sub-cleanup functions) |
-| `T1` | Session-type classifier (maps raw session string to typed enum) |
-| `cB` | Session-type enum or helper used by classifier |
-| `rz6` | First sub-cleanup function called by teardown orchestrator |
-| `Il6` | Second sub-cleanup function called by teardown orchestrator |
-| `Nl6` | Daemon config store clear function (calls `FY9.clear`) |
-| `cMH` | Third sub-cleanup function called by teardown orchestrator |
-| `Y0H` | Shutdown event emitter and process-listener removal coordinator |
-| `Ts` | Terminal/environment string resolver |
-| `xH` | String coercion utility |
-| `jF` | Formatting helper used during environment resolution |
-| `imH` | Internal cleanup orchestrator (clears intervals, process listeners, internal maps) |
-| `_9_` | Interval and process-listener teardown helper |
-| `NH` | Error logging / error-queue manager |
-| `v_` | Error object constructor/wrapper |
-| `zq` | Request queue accessor |
-| `kNK` | Request queue rotation helper (shift/push) |
-| `ID1` | IPC / daemon file removal function |
-| `ND1` | Sub-function of IPC file removal |
-| `NP_` | Path constructor for IPC files |
-| `cDA` | IPC path component resolver |
-| `k_H` | Path join utility used in IPC file removal |
-| `w96` | IPC path builder (joins directory components) |
-| `d0_` | Additional file cleanup function (removes credential socket) |
-| `YC_` | Socket teardown helper (clears timeout, closes socket) |
-| `jC_` | Socket object used by teardown helper |
-| `ND8` | Path builder for socket file |
-| `Po` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| `n8_` | Config persistence coordinator (save-with-lock + backup) |
-| `aY9` | Config write dispatcher |
-| `edA` | Keychain / credential store delete function |
-| `PN` | SHA-256 key derivation helper |
-| `KP` | Keychain platform abstraction |
-| `nV` | OS user-info resolver |
-| `v` | HTTP request utility (used for OAuth logout HTTP call) |
-| `G5K` | HTTP request builder |
-| `H` | Retry/jitter timer (uses `Math.random` + `setTimeout`) |
-| `hH` | JSON serialization helper |
-| `_` | String/path utility |
-| `P7` | URL/path manipulation helper |
-| `cSH` | Request header constructor |
-| `Z5K` | HTTP response handler / streaming body processor |
-| `XH` | String conversion utility |
-| `a6` | Global config read/write function (`saveGlobalConfig`) |
-| `P9_` | Config file write with lock implementation |
-| `x6` | File-existence / stat utility |
-| `heA` | Config object merge helper |
-| `d` | Telemetry event emitter (used throughout) |
-| `L8` | Logger utility |
-| `H$H` | Config file reader with backup support |
-| `d76` | Config diff / validation helper |
-| `X9_` | Backup file path builder |
-| `V` | Active-session registry Map |
-| `X` | SDK/connection manager |
-| `Z` | Supervisor or session controller |
-| `yA6` | Atomic file write utility (uses temp file + rename) |
-| `emH` | Event emitter for config changes |
-| `OZ9` | Config entry iterator |
-| `HpH` | Timestamp helper for config writes |
-| `j9_` | Project-level config writer |
-| `v8_` | Fallback config write path |
-| `dK` | Secure storage (keychain) abstraction layer |
-| `peA` | Credential read/write/delete orchestrator |
-| `UxH` | Credential cache accessor |
-| `Q$L` | Storage context runner (uses `AsyncLocalStorage`) |
-| `SH` | Feature-flag gate emitting `tengu_feature_ok` |
-| `J8` | Feature-flag gate emitting `tengu_feature_sad` |
-| `mH` | Feature-flag gate emitting `tengu_feature_bad` |
-| `mjH` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| `cFH` | Telemetry/OTEL attribute builder |
-| `YE` | OTEL attribute value coercer |
-| `OL` | OTEL metric event emitter |
-| `DV8` | OTEL base metric descriptor |
-| `dFH` | OTEL span/metric constructor |
-| `pu` | Random-bytes-based ID generator for OTEL sessions |
-| `V6` | Global value registry |
-| `g3_` | String coercion for OTEL attribute keys |
-| `L5` | OTEL attribute list builder |
-| `Do9` | OTEL instrument type resolver |
-| `v68` | Frozen OTEL attribute set builder |
-| `wH6` | OTEL event sequence tracker |
-| `wK` | Process shutdown orchestrator |
-| `x9` | Core shutdown sequencer (drain, exit, kill) |
-| `K` | Column/pad formatter used in output rendering |
-| `CEH` | Terminal output finalizer (unmount, writeSync) |
-| `qS` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| `za6` | Terminal escape-sequence writer (saves/restores cursor: `\x1b7` / `\x1b8`) |
-| `dY_` | Startup/shutdown display renderer |
-| `EV` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| `sh` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| `hO6` | File-system stat helper used during display |
-| `g3` | Display column builder |
-| `W91` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| `cY_` | Process exit executor (calls `process.exit` or `process.kill`) |
-| `XSH` | Output stream drain helper |
-| `Y` | Supervisor session manager (stop/start/updateConfig) |
-| `XJH` | Session state serializer |
-| `cIq` | Column width calculator |
-| `T` | Input event interceptor (preventDefault + remoteControl) |
-| `G_K` | Heartbeat manager |
-| `I66` | Startup profiling reporter |
-| `wN8` | Performance mark collector |
-| `e6A` | Profiling log file writer |
-| `N_8` | Scroll/render summary emitter |
-| `X91` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| `P91` | Frame timing calculator (Date.now, Math.max, Math.round) |
-| `rA` | Terminal environment detector (fullscreen/tmux/SSH) |
-| `ieH` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| `k_8` | Parallel cleanup promise coordinator (Promise.all / Promise.race) |
-| `r8` | Timeout-with-abort helper |
+| `tx4` | Main logout handler (`AsyncFunction`, arbor-resolved via `module_id` → `wZ1`) |
+| `cD6` | OAuth token clearing / credential revocation orchestrator |
+| `dD6` | In-memory state teardown coordinator |
+| `T1` | Session-type retrieval helper |
+| `cB` | Session-type constant resolver |
+| `F0_` | Open stream closer |
+| `A` | Auth-type normalizer (calls `f.toLowerCase`) |
+| `f` | Stream/handle object (has `.close`, `.finally`) |
+| `q` | Secondary handle / file-system namespace (has `unlinkSync`, `add`, `delete`) |
+| `L` | Lock / set manager (has `q.add`, `f.finally`, `q.delete`) |
+| `rz6` | Auth cache clearer |
+| `Il6` | Session info clearer |
+| `Nl6` | Notification map clearer (calls `FY9.clear`) |
+| `cMH` | Metrics collector clearer |
+| `Y0H` | Event-loop / heartbeat shutdown orchestrator |
+| `Ts` | Heartbeat/timer stop helper |
+| `xH` | String conversion utility |
+| `jF` | Timer flush helper |
+| `imH` | Process-listener removal and multi-registry clear |
+| `_9_` | Interval and process-listener teardown |
+| `NH` | Network/log queue flusher (has `xRH.push`, `Wc.logError`) |
+| `v_` | Error formatter |
+| `zq` | Essential-traffic queue manager |
+| `kNK` | Queue shift/push helper (`Ch6`) |
+| `ID1` | OAuth lock-file and credential-file unlinker |
+| `ND1` | OAuth credential directory resolver |
+| `NP_` | Credential path builder |
+| `cDA` | Credential directory access helper |
+| `k_H` | Path join utility |
+| `w96` | File path composer (`dDA.join`) |
+| `d0_` | Conversation/cache file unlinker |
+| `YC_` | Cache timeout clearance helper |
+| `jC_` | Cache timer reference |
+| `ND8` | Cache file path builder (`V1q.join`) |
+| `Po` | Post-revocation cleanup step |
+| `n8_` | Keychain + global-config credential removal dispatcher |
+| `aY9` | Keychain entry deletion orchestrator |
+| `edA` | Keychain low-level delete implementation |
+| `PN` | Account-ID hash builder (`adA.createHash`) |
+| `KP` | Keychain platform adapter |
+| `KXH` | Native keychain binding |
+| `nV` | User-info resolver (`sdA.userInfo`) |
+| `v` | Telemetry / event dispatch helper |
+| `G5K` | Telemetry attribute builder |
+| `hH` | JSON serializer wrapper (`JSON.stringify`) |
+| `P7` | URL / string path builder |
+| `cSH` | Context/scope helper |
+| `Z5K` | Telemetry flush / file writer |
+| `XH` | String cast utility |
+| `a6` | Global config credential purge handler |
+| `P9_` | Config lock acquisition and atomic write orchestrator |
+| `heA` | Config object merge helper (`Object.assign`) |
+| `L8` | Config field validator |
+| `H$H` | Config file reader and parser |
+| `d76` | Config diff/delta helper |
+| `X9_` | Backup rotation helper (`lz.join`, keeps 5 backups) |
+| `yA6` | Atomic file write helper (temp file + `fchmodSync` + `fsyncSync` + `renameSync`) |
+| `emH` | Event emitter registry |
+| `OZ9` | Config entries iterator (`Object.entries`) |
+| `HpH` | Timestamp helper (`Date.now`) |
+| `j9_` | Project-level config write helper |
+| `v8_` | Supplementary credential cleanup |
+| `dK` | Secure storage / credential store manager |
+| `peA` | Storage read/write/delete dispatcher |
+| `UxH` | Storage read-async orchestrator |
+| `Q$L` | Async-local-storage context runner (`CeA.getStore` / `CeA.run`) |
+| `SH` | Feature-flag "ok" telemetry emitter |
+| `J8` | Feature-flag "sad" telemetry emitter |
+| `mH` | Feature-flag "bad" telemetry emitter |
+| `mjH` | Miscellaneous post-logout cleanup |
+| `cFH` | OTEL metrics flush / attribute serializer |
+| `YE` | Error type classifier |
+| `OL` | OTEL event batch emitter (`A.emit`) |
+| `DV8` | OTEL exporter initializer |
+| `dFH` | OTEL attribute set builder |
+| `pu` | Random-bytes session-ID generator |
+| `V6` | Version/build-info accessor |
+| `g3_` | String-to-attribute converter |
+| `L5` | OTEL meter/counter helper |
+| `Do9` | OTEL gauge/histogram builders |
+| `v68` | Frozen attribute-set factory (`Object.freeze`) |
+| `wH6` | Workspace host-path serializer |
+| `wK` | UI shutdown / process-exit orchestrator |
+| `x9` | Full shutdown sequence runner |
+| `K` | Column formatter (`L.map` / `f.padEnd`) |
+| `CEH` | Terminal unmount / final render flusher |
+| `qS` | Terminal cleanup helper |
+| `za6` | Raw terminal write helper (`Qs.writeSync`) |
+| `dY_` | Final output line writer (`eOH.writeSync`) |
+| `EV` | Environment variable reader |
+| `sh` | Shell helper |
+| `hO6` | Working-directory stat helper |
+| `g3` | KL-renderer integration helper |
+| `W91` | Escape-sequence sanitizer |
+| `cY_` | Process kill / SIGKILL dispatcher (`process.kill`) |
+| `XSH` | Write-stream drain helper (`at_.drain`) |
+| `Y` | Supervisor / remote-control loop runner |
+| `XJH` | Session-state serializer |
+| `cIq` | Column-width calculator (`Math.max`) |
+| `T` | Remote-control event handler (`m.preventDefault`) |
+| `G_K` | Heartbeat pulse emitter (`Zs`) |
+| `I66` | Startup-perf profiling reporter |
+| `wN8` | Perf mark recorder (`Math.round`) |
+| `e6A` | Perf log file writer |
+| `N_8` | Scroll-summary reporter |
+| `X91` | Scroll metric accumulator |
+| `P91` | Duration/ratio calculator (`Date.now`, `Math.round`) |
+| `rA` | Display-mode detector (fullscreen vs. default) |
+| `ieH` | Cache-eviction hint emitter |
+| `k_8` | Parallel-shutdown task runner (`Promise.race`) |
+| `r8` | Abort-aware timeout helper |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

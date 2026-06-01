@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "passes"
 cc_version: "2.1.144"
-updated: "2026-05-19"
+updated: "2026-06-01"
 tags: ["passes", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/passes` command is a registered local-JSX slash command in Claude Code v2.1.144. Beyond its registration record in module `mWq`, no entry-point functions, call graph edges, string literals, telemetry events, or obfuscated identifiers were recoverable at depth ≤ 2 from the bundle AST. Its precise runtime behavior therefore cannot be fully specified from the available extraction data alone.
+The `/passes` command surfaces a UI for sharing free "guest pass" weeks of Claude Code with friends. It is implemented as a `local-jsx` command, meaning the handler renders a JSX component directly in the terminal UI rather than sending a prompt to the model. Invoking the command fires a telemetry event (`tengu_guest_passes_visited`) and renders the passes interface via React elements.
 
 ---
 
@@ -31,70 +31,183 @@ The `/passes` command is a registered local-JSX slash command in Claude Code v2.
 |---|---|
 | type | `local-jsx` |
 | name | `passes` |
-| description | `null` |
-| loc\_byte | `11453771` |
-| loc\_line | `6995` |
-| module\_id | `mWq` |
+| description | Share a free week of Claude Code with friends |
+| loc_byte | `11453771` |
+| loc_byte_end | `11454093` |
+| loc_line | `6995` |
+| isHidden | `null` (not hidden) |
+| module_id | `mWq` |
+| load_inline | `true` |
+| arbor_handler.name | `Ak7` |
+| arbor_handler.fqn | `claude-2.1.144::Ak7` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `2` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11453771
-
-**Notes on registration fields:**
-
-- **type `local-jsx`** — This command renders its output or UI via a JSX component evaluated locally in the CLI process, rather than producing plain text output. This is consistent with other interactive or visually rich slash commands in Claude Code.
-- **description `null`** — No user-visible description string is registered. The command does not appear in help text that relies on the `description` field, or its description is injected at runtime by another mechanism.
-- **module\_id `mWq`** — The command's implementation is bundled in the obfuscated module identified as `mWq`. The AST traversal did not resolve entry functions from this module at the traversal depth used (≤ 2).
 
 ---
 
 ## Input Branching
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+The command has a simple linear flow with no meaningful user-input branches — it accepts no arguments and directly renders a JSX component. A numbered pseudocode representation is appropriate.
 
-The call graph returned zero edges (`"callGraph": []`) and no string literals or constants were found (`"literals": []`). No branching logic can be deterministically reconstructed from the available data.
-
-The following is a minimal placeholder reflecting only what can be stated with certainty:
-
-```mermaid
-flowchart TD
-    A([User invokes /passes]) --> B{Module mWq loaded?}
-    B -- Yes --> C[Execute local-JSX render path]
-    B -- No --> D[Command unavailable / silent fail]
-    C --> E([Output rendered as JSX component])
-```
-
-> ⚠️ This flowchart reflects only the structural facts derivable from the registration record. Internal branching within module `mWq` is not modeled here because no call graph data was recovered.
-
-Analysis basis: CC v2.1.144 bundle.js:+11453771
+1. User invokes `/passes` in the CLI.
+2. The CLI resolves the `local-jsx` registration and calls the async handler (`Ak7`, resolved via `module_id → mWq`).
+3. The handler fires the `tengu_guest_passes_visited` telemetry event.
+4. The handler calls the config-reading/session utilities (`y6`, `Qj8`, `t6`) to gather any prerequisite session/config state.
+5. The handler invokes `QB_.createElement` to build a JSX tree representing the guest-pass sharing UI.
+6. The rendered component is returned to the CLI shell for display.
 
 ---
 
 ## Behavioral Spec
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+### Main Handler — Guest Passes Entry Point
 
-Because `"note": "no entry functions found for module 'mWq'"` was reported by the AST extractor, no entry-point function could be identified as the root of behavioral analysis.
-
-### Registration and Dispatch
-
-What can be stated from the registration record alone:
+Analysis basis: CC v2.1.144 bundle.js:+11453454
 
 ```
-function dispatchPassesCommand(userInput):
-    // Command is of type local-jsx
-    // No description is registered; help text injection is unknown
-    component = resolveJSXComponent(module = "mWq", command = "passes")
-    if component is null:
-        return  // silent or unhandled
-    render(component, props = { input: userInput })
+async function guestPassesHandler(context):
+    # Fire telemetry immediately on entry
+    emitTelemetry("tengu_guest_passes_visited")
+
+    # Gather current session state
+    sessionInfo  = readSessionConfig(context)       # calls configReader (y6)
+    passesState  = loadPassesModule(context)        # calls passesLoader (Qj8)
+    sessionCtx   = resolveSessionContext(context)   # calls sessionContextResolver (t6)
+
+    # Build and return the JSX UI element
+    uiElement = createElement(GuestPassesComponent, {
+        session: sessionInfo,
+        passes:  passesState,
+        ctx:     sessionCtx
+    })
+    return uiElement
 ```
 
-Analysis basis: CC v2.1.144 bundle.js:+11453771
+### Config Reader — Session State Acquisition
 
-### JSX Rendering Model
+Analysis basis: CC v2.1.144 bundle.js:+3163715
 
-Commands registered as `local-jsx` in Claude Code follow a pattern where the command handler returns a React-compatible element rather than a plain string. The CLI's rendering layer intercepts this element and displays it in the terminal UI. The specific props, state, and child components used by `/passes` are:
+```
+function readSessionConfig(context):
+    # Reads current config, checks timestamps, sets up file-watch
+    now = Date.now()
+    watchConfigFile(configPath, onChange)   # xr6.watchFile
+    config = loadRawConfig()               # m6 / C0
+    token  = resolveAuthToken(config)      # TR (strips prefix, slices)
+    if config stale or missing:
+        refreshConfig()
+    return { config, token, timestamp: now }
+```
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+### Config File Loader — Low-Level Read
+
+Analysis basis: CC v2.1.144 bundle.js:+3166825
+
+```
+function loadConfigFromDisk(configPath):
+    if configPath not yet accessible:
+        throw Error("Config accessed before allowed.")   # literal at +3166831
+
+    raw  = fs.readFileSync(configPath, "utf-8")          # literal "utf-8" at +3166914
+    data = JSON.parse(raw)                               # b6 → JSON.parse
+
+    prefix = resolvePrefix(data)                         # TR: H.startsWith / H.slice
+    dirs   = resolveBackupDirs(configPath)               # GV1 → "backups" literal +3166399
+
+    if ENOENT error:                                     # literal "ENOENT" at +3167061
+        handle missing file gracefully
+    return data
+```
+
+### Passes Module Loader
+
+Analysis basis: CC v2.1.144 bundle.js:+11113888
+
+```
+function loadPassesModule(context):
+    # Resolves passes data via the feature-flag / passes sub-module (f5, KJ)
+    authCtx = resolveAuthContext()         # KJ → $I → uB6, SK, xH
+    apiAuth = getApiKeyOrOAuthToken()      # n$ checks ANTHROPIC_API_KEY
+    if no auth:
+        # Literal: "ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required"
+        #          at +2914674
+        throw AuthError
+    session = buildPassesSession(authCtx)  # Lz → JA ("firstParty" at +2022280)
+    return session
+```
+
+### Session Context Resolver
+
+Analysis basis: CC v2.1.144 bundle.js:+3161889
+
+```
+function resolveSessionContext(context):
+    # Orchestrates config save/lock, backup rotation, daemon coordination
+    configDir = path.dirname(configPath)          # K9_ → fY.dirname
+    ensureDir(configDir)                          # L.mkdirSync
+    timestamp = Date.now()
+
+    # Determine installation type from literals
+    # Possible values: "unknown", "local", "migrated", "native",
+    #                  "installed", "disabled", "enabled",
+    #                  "no_permissions", "global", "not_configured"
+    #                  (all at +3162528–+3162755)
+    installType = detectInstallType(config)
+
+    lockResult = acquireConfigLock()
+    if lock contention detected:
+        emitTelemetry("tengu_config_lock_contention")
+        # Warning: "Lock acquisition took longer than expected …" at +3164798
+
+    savedConfig = saveConfigWithLock(config, lockResult)
+    if savedConfig missing auth that cache has:
+        emitTelemetry("tengu_config_auth_loss_prevented")
+        # Refuse write — safety guard per GH #3117 (literal at +3165214)
+
+    backups = rotateBackups(configDir, maxBackups=5)   # literal 5 at +3165817
+    return { installType, timestamp, backups }
+```
+
+### Backup Rotation Sub-routine
+
+Analysis basis: CC v2.1.144 bundle.js:+3166432
+
+```
+function resolveBackupDirectory(configPath):
+    base    = path.basename(configPath)       # fY.basename
+    backDir = path.join(configDir, "backups") # literal "backups" at +3166399
+    entries = fs.readdirStringSync(backDir)
+
+    for entry in entries:
+        if not entry.startsWith(prefix):
+            continue
+        fullPath = path.join(backDir, entry)
+        stat     = fs.statSync(fullPath)
+        # filter by mtime, keep newest 5
+    return backDir
+```
+
+### Atomic Config Write
+
+Analysis basis: CC v2.1.144 bundle.js:+1000753
+
+```
+function atomicConfigWrite(targetPath, data, mode=384):
+    # mode 384 = 0o600 (literal at +3166099)
+    tmpPath = targetPath + "." + randomHex(6) + ".tmp"   # Ju8.randomBytes, 6 bytes, "hex"
+    fd      = fs.openSync(tmpPath, flags)
+    fs.writeFileSync(tmpPath, serialize(data))
+    fs.fchmodSync(fd, mode)
+    fs.fsyncSync(fd)
+    fs.closeSync(fd)
+    fs.renameSync(tmpPath, targetPath)
+    if error in [ELOOP, ENOTDIR]:                        # literals at +1001126, +1001139
+        cleanup(tmpPath)
+        raise
+```
 
 ---
 
@@ -102,12 +215,17 @@ Commands registered as `local-jsx` in Claude Code follow a pattern where the com
 
 | Item | Detail |
 |---|---|
-| Telemetry | None found — `telemetry: []` (no `tengu_*` events recovered at depth ≤ 2) |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-
-Analysis basis: CC v2.1.144 bundle.js:+11453771
+| Telemetry — `tengu_guest_passes_visited` | Fired on every invocation of `/passes` (bundle.js:+11453594) |
+| Telemetry — `tengu_config_parse_error` | Fired if config JSON cannot be parsed (bundle.js:+3167468) |
+| Telemetry — `tengu_config_lock_contention` | Fired when config lock takes unexpectedly long (bundle.js:+3164887) |
+| Telemetry — `tengu_config_stale_write` | Fired when a stale config write is detected (bundle.js:+3165023) |
+| Telemetry — `tengu_config_auth_loss_prevented` | Fired when a write that would erase cached auth is refused (bundle.js:+3165366) |
+| Telemetry — `tengu_feature_ok` / `tengu_feature_bad` | Feature-flag probe result (bundle.js:+955520, +955578) |
+| Telemetry — `tengu_bg_*` family | Background/daemon lifecycle events emitted by session-context utilities; not directly user-visible from `/passes` but reached via depth-2 call graph |
+| Hook registration | `h1 → OHA.register` — registers a cleanup/teardown hook during session setup (bundle.js:+57049) |
+| File-system side effects | Config file read, optional backup directory creation under `backups/`, atomic temp-file write with `fchmod`/`fsync`/`rename` |
+| appState changes | Session config may be updated (auth token, install type); JSX element returned to shell for rendering |
+| Sound | None observed in depth-2 traversal |
 
 ---
 
@@ -115,21 +233,17 @@ Analysis basis: CC v2.1.144 bundle.js:+11453771
 
 | Version | Change |
 |---|---|
-| v2.1.144 | Initial analysis — registration record confirmed; implementation body not recoverable at depth ≤ 2 |
+| v2.1.144 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Assuming `null` description means the command is undocumented everywhere.** The description field in the registration object is `null`, but the command may still surface documentation through runtime injection, a JSX help component, or a parent command group. Do not conclude the command is intentionally hidden solely from this field being null.
-
-2. **Treating the absence of telemetry events as confirmation that none exist.** The AST traversal reached depth ≤ 2 and found no `tengu_*` events. Telemetry calls deeper in the call tree (e.g., inside the JSX component tree) would not appear in this data set.
-
-3. **Assuming `local-jsx` commands accept no arguments.** The `local-jsx` type governs the output rendering method, not the input parsing model. Whether `/passes` accepts subcommands, flags, or free-form text arguments is unknown from this data and should not be assumed either way.
-
-4. **Expecting `/passes` to appear in `/help` output.** Because `description` is `null`, standard help-listing logic that relies on this field to populate command listings will skip this command. Users relying on `/help` to discover `/passes` may not see it listed.
-
-5. **Conflating module ID `mWq` across bundle versions.** Obfuscated module identifiers are not stable across Claude Code releases. `mWq` refers to the passes command module only in v2.1.144 and must be re-verified for any other version.
+1. **Expecting model output**: `/passes` is a `local-jsx` command — it renders a UI component, not a model response. Passing a query argument has no effect.
+2. **Calling without authentication**: The passes loader (`Qj8 → f5 → KJ → n$`) requires either `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` to be set; without one the command will surface an auth error before the UI is shown.
+3. **Concurrent Claude instances and config lock**: If multiple Claude Code instances are running simultaneously, config lock contention (`tengu_config_lock_contention`) can delay the command; only one instance should manage the config at a time.
+4. **Mistaking backup artifacts**: The command's session-context setup may create files under `~/.claude/backups/`; these are internal rotation backups, not user-facing outputs of `/passes`.
+5. **Expecting `/passes` to re-emit telemetry silently**: Every visit fires `tengu_guest_passes_visited`, which is sent even if the user immediately dismisses the UI.
 
 ---
 
@@ -139,8 +253,76 @@ Analysis basis: CC v2.1.144 bundle.js:+11453771
 
 | Identifier | Role |
 |---|---|
-| `mWq` | Module containing the `/passes` command registration and implementation |
+| `Ak7` | Main async handler for `/passes` (guestPassesHandler) |
+| `y6` | Session/config reader (readSessionConfig) |
+| `m6` | Raw config loader primitive |
+| `t1_` | Auth token helper |
+| `V$H` | Config-from-disk loader (loadConfigFromDisk) |
+| `q` | Filesystem utilities namespace (fs-like) |
+| `b6` | JSON parse wrapper |
+| `TR` | Auth-token prefix resolver (startsWith / slice) |
+| `H` | String/identifier utility |
+| `_` | General filesystem/utility namespace |
+| `A8` | App-state accessor |
+| `GV1` | Backup directory resolver |
+| `L9_` | Config directory path builder |
+| `M` | MCP / module registry |
+| `$` | Secondary module/utility namespace |
+| `v` | API request builder / message formatter |
+| `vfK` | Request builder sub-utility |
+| `CH` | JSON stringify wrapper |
+| `x4` | Content formatter / redactor |
+| `YhH` | Header builder |
+| `yfK` | File-context builder (dirname, byteLength, etc.) |
+| `kH` | Logger / error reporter |
+| `b_` | Error wrapper |
+| `xH` | String coercion helper |
+| `Aq` | Traffic-class resolver ("essential-traffic") |
+| `bkK` | Queue rotation helper (shift/push) |
+| `d` | Display/render primitive |
+| `w` | Subprocess/daemon manager |
+| `A` | Model/session map |
+| `C` | Subprocess controller (kill, write) |
+| `bH` | Feature-bad reporter |
+| `RH` | Feature-ok reporter |
+| `fT6` | Memory/platform check (macOS, 1024 MB) |
+| `x` | Daemon idle-exit timer |
+| `P6` | Config watcher / event emitter |
+| `Ea_` | Daemon connection manager (spawn, claim, connect) |
+| `ka_` | Background session lifecycle manager |
+| `L` | Background session lifecycle manager (alias) |
+| `D` | Spare-daemon reaper |
+| `h` | Timer handle |
+| `fCL` | File-watch config monitor |
+| `Rl` | Render/update callback |
+| `h1` | Hook registrar (OHA.register) |
+| `Qj8` | Passes module loader |
+| `f5` | Passes session bootstrap |
+| `KJ` | Auth-context orchestrator |
+| `SK` | Auth string coercion |
+| `$I` | OAuth/API key resolver |
+| `Lz` | First-party auth resolver |
+| `cJ` | Credential cache |
+| `n$` | Auth requirements checker (ANTHROPIC_API_KEY) |
+| `J1H` | Token validator |
+| `t6` | Session context resolver |
+| `K9_` | Config save-with-lock / backup rotation |
+| `UH1` | Config object merge helper |
+| `Yo8` | Config schema validator |
+| `w56` | Config write helper |
+| `V` | Directory entry filter |
+| `P` | MCP server connection pool |
+| `bE8` | MCP transport builder |
+| `Z` | Backup entry list |
+| `aA6` | Atomic file writer |
+| `O` | Symlink/stat checker |
+| `O8` | App-state error handler |
+| `f` | Socket/stream handle |
+| `PpH` | Platform path helper |
+| `WV1` | Object-entries iterator wrapper |
+| `WpH` | Timestamp-based change detector |
+| `q9_` | Config directory atomic write helper |
 
-> No additional obfuscated function or variable identifiers were recovered from the depth-≤ 2 AST traversal (`"identifiers": []`). A deeper traversal (`--depth 4` or greater) targeting module `mWq` is required to populate this table fully.
+---
 
-Analysis basis: CC v2.1.144 bundle.js:+11453771
+_Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js._

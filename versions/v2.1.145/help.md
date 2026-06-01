@@ -1,13 +1,13 @@
 ---
 type: feature-spec
 feature: "help"
-cc_version: 2.1.145
-updated: "2026-05-18"
+cc_version: "2.1.145"
+updated: "2026-06-01"
 tags: ["help", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.143
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/help`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/help` slash command displays a help panel listing all available slash commands and their descriptions to the user. It is implemented as a `local-jsx` command, meaning its output is rendered directly as a JSX component within the Claude Code terminal UI rather than producing plain text. The command takes no arguments and has no configurable input branching.
+The `/help` command is a locally-rendered, JSX-based slash command that displays help content and the list of available commands to the user within the Claude Code CLI session. Unlike prompt-type commands that dispatch a message to the agent, `/help` renders its response directly as a JSX component, making it a pure UI command with no LLM round-trip required.
 
 ---
 
@@ -33,26 +33,38 @@ The `/help` slash command displays a help panel listing all available slash comm
 | type | `local-jsx` |
 | name | `help` |
 | description | `Show help and available commands` |
-| module_id | `wfq` |
-| loc_line | `5831` |
+| module_id | `kHq` |
+| load_inline | `true` |
+| handler | `n17` (resolved via `module_id` path) |
+| loc_byte span | `bundle.js:+10336831` – `+10336977` |
+| `loc_byte_end` | `10336977` |
+| `arbor_handler.name` | `n17` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::n17` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.143 bundle.js:+10624034
+Analysis basis: CC v2.1.132 bundle.js:+10336831
+
+The registration object occupies bytes `10336831`–`10336977` (inclusive) in the v2.1.132 bundle. The handler is an `AsyncFunction` resolved under the Arbor symbol graph as `claude-2.1.132::n17` via `module_id` resolution. Because `load_inline: true` is set, the module is inlined at registration time rather than being lazily imported from a separate module file.
 
 ---
 
 ## Input Branching
 
-The `/help` command accepts no arguments. Its execution path is linear: the command is invoked, the JSX render function is called, and a React element is returned for display. No branching on user input was found in the depth-2 traversal.
+The `/help` command does not branch on user-supplied arguments according to the depth-2 call graph. The handler proceeds unconditionally to JSX rendering.
 
 ```mermaid
 flowchart TD
-    A([User types /help]) --> B[Command dispatcher matches 'help']
-    B --> C[Invoke helpRenderer]
-    C --> D[createElement called to build JSX output]
-    D --> E([Help panel rendered in UI])
+    A["/help invoked"] --> B["Invoke handler n17 (AsyncFunction)"]
+    B --> C["Call createElement to build JSX tree"]
+    C --> D["Return rendered JSX component to CLI shell"]
+    D --> E["Display help panel to user"]
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10623919
+No argument-conditional branches were detected in the depth-2 traversal. Any argument text supplied after `/help` is either ignored or handled transparently inside the JSX component's own render logic, which is beyond the depth-2 boundary.
+
+<!-- TODO: argument handling inside the JSX render tree not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
@@ -60,35 +72,28 @@ Analysis basis: CC v2.1.143 bundle.js:+10623919
 
 ### Help Panel Rendering
 
-The sole implementation behavior observed at depth ≤ 2 is the construction of a React element representing the help panel.
+The core behavior of `/help` is synchronous JSX construction followed by an immediate return to the CLI shell for display. The handler is an `AsyncFunction`, but based on the call graph the async boundary is a formality of the registration contract — the actual work is synchronous JSX element construction.
 
 ```
-function helpRenderer(props):
-    element = createElement(HelpPanelComponent, props)
-    return element
+async function renderHelpPanel(inputArgs):
+    # Build JSX tree via createElement
+    component = createElement(HelpPanelComponent, props)
+
+    # Return the component to the CLI shell renderer
+    return component
+    # The CLI shell is responsible for mounting and displaying the component
 ```
 
-- `helpRenderer` is the top-level handler invoked when `/help` is dispatched.
-- `createElement` is the standard React element factory (`cx_.createElement`), called with a component reference and any props passed by the dispatcher.
-- The returned element is handed back to the Claude Code rendering pipeline, which mounts it inline in the conversation UI.
+Analysis basis: CC v2.1.132 bundle.js:+10336716
 
-Analysis basis: CC v2.1.143 bundle.js:+10623919
+#### Key behavioral properties
 
-### Command Type: `local-jsx`
+- **No LLM invocation**: Because the type is `local-jsx`, the command never dispatches a prompt to the Claude agent. The response is entirely client-rendered.
+- **No telemetry events**: The depth-2 traversal found zero `tengu_*` telemetry calls in the handler. No usage data is emitted when a user runs `/help`.
+- **No literals captured**: No string or numeric constants were found in the depth-2 traversal beyond what is encoded in the registration object itself (name, description). Any displayed help text is either embedded in the JSX component referenced by `createElement` or pulled from another module not reached within depth 2.
+- **Async function wrapper**: The handler `n17` is declared `AsyncFunction`, consistent with the registration contract requiring all handlers to be awaitable, even when they perform no actual asynchronous work.
 
-Because the command is registered with `type: "local-jsx"`, the dispatcher does **not** send any network request to the Anthropic API. The entire response is synthesised client-side and injected into the UI as a React subtree. This means:
-
-- `/help` is available unconditionally, even when the user is offline or unauthenticated.
-- It does not consume any tokens or credits.
-- It does not appear in the conversation history sent to the model.
-
-Analysis basis: CC v2.1.143 bundle.js:+10624034
-
-### Argument Handling
-
-No argument-parsing literals or conditional branches were found in the depth-2 traversal. The command does not accept, validate, or act upon any text that follows `/help`.
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+<!-- TODO: JSX component tree structure (help text content, command list source) not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
@@ -96,15 +101,14 @@ No argument-parsing literals or conditional branches were found in the depth-2 t
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected in depth-2 traversal (`telemetry: []`) |
+| Telemetry | None detected in depth-2 traversal |
 | Hook registration | None detected in depth-2 traversal |
-| appState changes | None detected in depth-2 traversal |
+| `appState` changes | None detected in depth-2 traversal |
 | Sound | None detected in depth-2 traversal |
-| Network I/O | None — `local-jsx` type executes entirely client-side |
-| Token consumption | None — output is not routed through the model |
-
-> **Note:** The absence of telemetry events in the depth-2 traversal does not conclusively rule out telemetry fired from deeper call sites (e.g., inside the help panel component itself).
-> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+| LLM dispatch | None — `local-jsx` type bypasses the agent entirely |
+| Network I/O | None detected in depth-2 traversal |
+| File I/O | None detected in depth-2 traversal |
+| Render output | JSX component returned to CLI shell for display |
 
 ---
 
@@ -112,16 +116,16 @@ No argument-parsing literals or conditional branches were found in the depth-2 t
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis. Command registered as `local-jsx`, module `wfq`, line 5831. |
+| v2.1.132 | Initial analysis — registered as `local-jsx`, handler `n17`, module `kHq` |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting `/help <topic>` to filter output.** No argument handling was found in the depth-2 traversal. Passing any text after `/help` (e.g., `/help bash`) is silently ignored; the full help panel is always rendered.
-2. **Assuming `/help` is model-aware.** Because the command type is `local-jsx`, the model never sees the `/help` invocation or its rendered output. Referencing "what `/help` showed" in a follow-up prompt will not work as expected.
-3. **Expecting a telemetry event to confirm execution.** No `tengu_*` telemetry events are fired from the paths reachable at depth ≤ 2. Do not rely on telemetry presence to verify the command ran.
-4. **Treating the help panel as an exhaustive API reference.** The panel lists registered slash commands only. Internal commands, keyboard shortcuts, or configuration options not surfaced as slash commands will not appear.
+1. **Expecting an LLM response**: Because `/help` is type `local-jsx`, it never sends a message to the Claude agent. Users who expect Claude to generate a dynamic or context-aware help response will instead receive a statically rendered component. If dynamic help is needed, use a different mechanism.
+2. **Passing arguments expecting filtering**: No argument-handling logic was found in the depth-2 traversal. Passing a command name (e.g. `/help clear`) may silently ignore the argument depending on the JSX component's own rendering logic, which is not confirmed within the analyzed depth.
+3. **Assuming telemetry coverage**: Since no telemetry events are emitted, internal dashboards or usage metrics will not reflect `/help` invocations. Do not rely on telemetry to measure help command usage.
+4. **Confusing `load_inline: true` with lazy loading**: This command is inlined at registration time, not lazily loaded on first invocation. There is no deferred-import cost on first use.
 
 ---
 
@@ -131,4 +135,5 @@ No argument-parsing literals or conditional branches were found in the depth-2 t
 
 | Identifier | Role |
 |---|---|
-| `$P7` | Help command render function — top-level handler invoked by the slash-command dispatcher; calls `cx_.createElement` to produce the help panel JSX element |
+| `n17` | Async handler function for the `/help` command; constructs and returns the JSX help panel component (resolved via `module_id` path, `claude-2.1.132::n17`) |
+| `MNA` | JSX runtime namespace; `MNA.createElement` is the element factory called by `n17` to build the help UI component tree (Analysis basis: CC v2.1.132 bundle.js:+10336716) |

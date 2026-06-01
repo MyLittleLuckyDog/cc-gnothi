@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "ide"
 cc_version: "2.1.143"
-updated: "2026-05-18"
+updated: "2026-06-01"
 tags: ["ide", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/ide` command manages IDE integrations for Claude Code, providing the ability to detect connected IDEs that have the Claude Code extension installed, display their status, and optionally open the current project directly inside a supported IDE. When invoked with the `open` sub-command argument, it presents an interactive IDE-selection prompt and triggers the appropriate IDE launch sequence. Without any argument it reports the current integration status.
+The `/ide` command manages IDE integrations for Claude Code, allowing users to inspect connected IDE instances and optionally open the current project in a detected IDE. It scans for running IDE processes (VS Code, Cursor, Windsurf, JetBrains family), displays their connection status, and supports an `open` sub-command that launches the project in a chosen IDE. The command is implemented as an async handler (`EP7`) resolved via the `Zfq` module.
 
 ---
 
@@ -34,6 +34,15 @@ The `/ide` command manages IDE integrations for Claude Code, providing the abili
 | description | `Manage IDE integrations and show status` |
 | argumentHint | `[open]` |
 | module_id | `Zfq` |
+| load_inline | `true` |
+| loc_byte | `10635236` |
+| loc_byte_end | `10635392` |
+| loc_line | `5833` |
+| arbor_handler.name | `EP7` |
+| arbor_handler.fqn | `claude-2.1.143::EP7` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
 Analysis basis: CC v2.1.143 bundle.js:+10635236
 
@@ -41,180 +50,196 @@ Analysis basis: CC v2.1.143 bundle.js:+10635236
 
 ## Input Branching
 
-The top-level handler (see `commandEntryPoint` in the Appendix) inspects the first argument token after the command name. The resulting control flow has three distinct paths.
+The command has 4+ distinct branches based on argument and IDE detection results.
 
 ```mermaid
 flowchart TD
-    A(["/ide called"]) --> B{argument present?}
-    B -- "no argument" --> C[Show IDE status panel]
-    B -- "argument == 'open'" --> D{IDEs detected?}
-    B -- "other argument" --> E[Show usage / no-op]
-    D -- "none found" --> F["Print: No IDEs with Claude Code extension detected."]
-    D -- "exactly one" --> G[Skip selection — use the single IDE directly]
-    D -- "multiple" --> H[Present interactive IDE-selection prompt]
-    G --> I{IDE type?}
-    H --> I
-    I -- "vscode" --> J[Open via VS Code integration path]
-    I -- "cursor" --> K[Open via Cursor integration path]
-    I -- "windsurf" --> L[Open via Windsurf integration path]
-    J --> M{open succeeded?}
-    K --> M
-    L --> M
-    M -- "yes" --> N["Emit telemetry: tengu_ext_ide_command / ide_open_project"]
-    M -- "no" --> O["Emit telemetry: ide_open_project_failed\nPrint: Exited without opening IDE"]
+    A["/ide invoked"] --> B{Parse args}
+    B -->|"arg == 'open'"| C[Open-project flow]
+    B -->|"no arg / other"| D[Status display flow]
+
+    C --> E[detectIDEs via rgH/T_8]
+    E --> F{IDEs found?}
+    F -->|"None"| G["Emit: No IDEs with Claude Code extension detected.\nTelemetry: tengu_ext_ide_command"]
+    F -->|"One or more"| H{Multiple IDEs?}
+    H -->|"Exactly one"| I[Auto-select that IDE]
+    H -->|"Multiple"| J[Present selection UI — vscode / cursor / windsurf / jetbrains]
+    J --> K{User selects?}
+    K -->|"Cancelled / no selection"| L["Emit: No IDE selected."]
+    K -->|"Selected"| I
+    I --> M[Call openProject via pY_/kM4]
+    M --> N{Open succeeded?}
+    N -->|"Success"| O["Telemetry: ide_open_project\nDisplay worktree/project path"]
+    N -->|"Failure"| P["Telemetry: ide_open_project_failed\nEmit: Exited without opening IDE"]
+
+    D --> Q[Collect IDE status list via rgH]
+    Q --> R{Status entries?}
+    R -->|"Empty"| S["Emit: No IDEs with Claude Code extension detected."]
+    R -->|"Non-empty"| T[Render bold IDE names + connection states\nTelemetry: tengu_ext_ide_command]
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10631296 – +10632907
+Analysis basis: CC v2.1.143 bundle.js:+10631296 (EP7 entry), +10631404 (literal `"open"`), +10631513 (no-IDE message), +10631651 (no-selection message)
 
 ---
 
 ## Behavioral Spec
 
-### 1. IDE Detection (`detectConnectedIDEs`)
-
-At invocation time the handler calls the IDE-detection subsystem to enumerate all IDE processes that are currently running and have the Claude Code extension active.
+### 1. Main Handler (`EP7`)
 
 ```
-function detectConnectedIDEs():
-    connectedList = []
-    rawList = listAvailableIDEConnections()   // reads active SSE-IDE / WS-IDE sockets
-    for each entry in rawList:
-        normalizedPath = normalizePath(entry, "NFC")   // Unicode NFC normalisation
-        connectedList.append(normalizedPath)
-    return connectedList
-```
+async function ideCommandHandler(args, appContext):
+    emit telemetry("tengu_ext_ide_command", ...)         # +10631298
 
-On Linux the detection additionally executes a `ps aux` scan whose grep pattern covers: `code`, `cursor`, `windsurf`, `idea`, `pycharm`, `webstorm`, `phpstorm`, `rubymine`, `clion`, `goland`, `rider`, `datagrip`, `dataspell`, `aqua`, `gateway`, `fleet`, `android-studio`.
+    subCommand = args[0]                                  # argumentHint "[open]"
 
-Analysis basis: CC v2.1.143 bundle.js:+10634736 (entry), +10634829 (NFC normalization), +5215463 (Linux ps-aux pattern)
+    ideList = await detectIDEs(appContext)                 # calls rgH
 
-**Connection socket name constants**
-
-| Socket tag | Value |
-|---|---|
-| SSE-based IDE socket | `sse-ide` |
-| WebSocket-based IDE socket | `ws-ide` |
-
-Analysis basis: CC v2.1.143 bundle.js:+10629283, +10629303
-
----
-
-### 2. Status Display (`renderIDEStatusPanel`)
-
-When no argument is supplied the command renders the IDE integration status panel. The panel iterates over the detected IDE list and formats each entry. Extension status values observed in the bundle are:
-
-| Status token | Meaning |
-|---|---|
-| `unknown` | Extension state could not be determined |
-| `local` | Extension installed locally |
-| `migrated` | Extension migrated from a prior installation |
-| `native` | Extension using the native (bundled) binary |
-| `installed` | Extension installed and active |
-| `disabled` | Extension present but disabled |
-| `enabled` | Extension enabled |
-| `no_permissions` | Extension present but lacking required permissions |
-| `global` | Extension installed at the global scope |
-| `not_configured` | Extension present but not yet configured |
-
-Analysis basis: CC v2.1.143 bundle.js:+3159959 through +3160165
-
----
-
-### 3. `open` Sub-command Flow (`handleIDEOpen`)
-
-```
-function handleIDEOpen(ideList):
-    if ideList is empty:
-        print("No IDEs with Claude Code extension detected.")
-        emitTelemetry("ide_detect", {result: "none"})
-        return
-
-    if length(ideList) == 1:
-        selectedIDE = ideList[0]
-    else:
-        selectedIDE = promptUserToSelectIDE(ideList)
-        if selectedIDE is null:
-            print("No IDE selected.")
+    if subCommand == "open":                              # +10631404
+        if ideList is empty:
+            display("No IDEs with Claude Code extension detected.")  # +10631513
             return
 
-    ideType = classifyIDEType(selectedIDE)   // returns "vscode" | "cursor" | "windsurf" | "jetbrains"
+        if ideList.length == 1:
+            chosen = ideList[0]
+        else:
+            chosen = await promptIDESelection(ideList)    # renders vscode/cursor/windsurf/jetbrains choices
+            if chosen is null:
+                display("No IDE selected.")              # +10631651
+                return
 
-    emitTelemetry("tengu_ext_ide_command", {ideType: ideType})
+        result = await openProjectInIDE(chosen, appContext)  # calls pY_/kM4
 
-    result = openProjectInIDE(selectedIDE, currentWorktreePath())
-
-    if result.success:
-        emitTelemetry("ide_open_project", {ide: ideType, scope: detectScope()})
+        if result.ok:
+            emit telemetry("ide_open_project", {type: worktreeOrProject})  # +10631851/+10631896
+        else:
+            emit telemetry("ide_open_project_failed", ...)                 # +10631958
+            display("Exited without opening IDE")                          # +10632248
     else:
-        emitTelemetry("ide_open_project_failed", {ide: ideType, error: result.error})
-        print("Exited without opening IDE")
-        suggestAction("restart your IDE")
+        # Status display path
+        if ideList is empty:
+            display("No IDEs with Claude Code extension detected.")
+            return
+
+        for each ide in ideList:
+            display bold(ide.name) + connectionStatus(ide)   # M6.bold +10631912
+
+        optionally display restart hint:                  # "restart your IDE" +10632516
+            if any IDE is in degraded/disconnected state
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10631296 (telemetry anchor), +10631404 (`open` literal), +10631513 (no-IDEs message), +10631651 (no-selection message), +10631851 (success telemetry key), +10631958 (failure telemetry key), +10632248 (failure user message), +10632516 (restart suggestion)
+Analysis basis: CC v2.1.143 bundle.js:+10631296–10632907
 
 ---
 
-### 4. IDE-type Classification (`classifyIDEType`)
+### 2. IDE Detection (`rgH` / `T_8` / `TM4`)
 
 ```
-function classifyIDEType(idePath):
-    lowerPath = idePath.toLowerCase()
-    if lowerPath contains "cursor":    return "cursor"
-    if lowerPath contains "windsurf":  return "windsurf"
-    if lowerPath contains "jetbrains" or matches jetbrains product list:
-                                       return "jetbrains"
-    return "vscode"   // default
+async function detectIDEs(appContext):
+    # rgH entry +5210586
+    port = parseInt(env or config)                       # rgH +5210586
+    candidates = await buildIDECandidates()              # T_8 +5207140
+
+    # T_8 / TM4: enumerate IDE install paths
+    #   - checks ~/.claude directory             +5208470
+    #   - checks homedir                         +5208456
+    #   - on WSL: scans /mnt/c/Users/...        +5208677
+    #   - skips Public, Default, Default User, All Users  +5208771/5208790/5208810/5208835
+    #   - resolves symlinks, verifies isDirectory / isSymbolicLink
+    #   - deduplicates via Set.has/add
+
+    results = await Promise.all(candidates.map(checkCandidate))  # T_8 +5207159
+
+    # On linux: runs ps-aux grep for code|cursor|windsurf|idea|pycharm|...
+    #   literal grep command at +5215463
+
+    detectedIDEs = []
+    for each candidate in results:
+        ideType = classifyIDE(candidate)                 # Vj +5216338
+        # Vj.toLowerCase comparison → vscode/cursor/windsurf/jetbrains
+        if ideType is known:
+            detectedIDEs.push({name, type: ideType, path: ...})
+
+    emit telemetry("ide_detect", ...)                    # +5211929
+    if any failure:
+        emit telemetry("ide_detect_failed", ...)         # +5211993
+
+    return detectedIDEs
 ```
 
-Supported product-name tokens for the JetBrains branch (found in the process-name normaliser): `idea`, `pycharm`, `webstorm`, `phpstorm`, `rubymine`, `clion`, `goland`, `rider`, `datagrip`, `dataspell`, `aqua`, `gateway`, `fleet`, `android-studio`, `appcode`.
-
-Analysis basis: CC v2.1.143 bundle.js:+10631711, +10631752, +10631793, +5207036, +5215837
+Analysis basis: CC v2.1.143 bundle.js:+5210586 (rgH), +5207140 (T_8), +5208379 (TM4), +5215463 (linux ps command), +5216338 (Vj classifier)
 
 ---
 
-### 5. Project-path Resolution (`resolveProjectScope`)
-
-Before opening the IDE the handler determines whether to pass a **worktree** path or the **project** root path:
+### 3. IDE Classification (`Vj`)
 
 ```
-function resolveProjectScope():
-    if currentContext is worktree:
-        return ("worktree", worktreePath)
-    else:
-        return ("project", projectRootPath)
+function classifyIDEType(processOrPath):
+    # Vj +5216338
+    lower = processOrPath.toLowerCase()
+
+    if lower contains "cursor"   → return "cursor"       # +10631752
+    if lower contains "windsurf" → return "windsurf"     # +10631793
+    if lower contains "code"     → return "vscode"       # +10631711
+    if lower contains any jetbrains marker
+        (idea, pycharm, webstorm, phpstorm, rubymine,
+         clion, goland, rider, datagrip, dataspell,
+         aqua, gateway, fleet, android-studio, appcode)  # +5215837/+5207036
+         → return "jetbrains"
+
+    # Extract display name via m1 (indexOf/slice helpers)
+    name = extractBasename(processOrPath)                # uI.basename +5216396
+    return {type, displayName: name}
 ```
 
-The scope strings emitted to telemetry are the literals `"worktree"` and `"project"`.
-
-Analysis basis: CC v2.1.143 bundle.js:+10631885, +10631896
+Analysis basis: CC v2.1.143 bundle.js:+5216338 (Vj), +5216382 (m1), +5216396 (basename)
 
 ---
 
-### 6. `onInstallIDEExtension` Hook Registration
+### 4. Open Project (`pY_` / `kM4`)
 
-During command initialisation the renderer registers a callback named `onInstallIDEExtension`. This hook is invoked if the user triggers an in-session IDE-extension installation from the status panel.
+```
+async function openProjectInIDE(ideInfo, appContext):
+    # pY_ +5215975 → kM4 +5214574
+    config = loadConfig(appContext)                          # d6 +5214574
 
-Analysis basis: CC v2.1.143 bundle.js:+10632425
+    # Determine if current context is a worktree or regular project
+    contextType = appContext.isWorktree ? "worktree" : "project"  # +10631885/+10631896
+
+    platformEntries = Object.entries(config.ideSettings)    # +5214877
+    for each [platform, settings]:
+        if settings includes ideInfo.type:                   # q.includes +5214934
+            push open-request to queue                       # H.push +5214949
+
+    # On macOS/Windows/Linux: invokes IDE-specific open protocol
+    # Checks platform (linux/windows/macos in literals +5215437/+14502797/+11972225)
+    # Uses KXH (config accessor) for IDE socket/port resolution
+
+    result = await sendOpenRequest(ideInfo, projectPath)
+    return result
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+5215975 (pY_), +5214574 (kM4), +10631885 (worktree), +10631896 (project)
 
 ---
 
-### 7. IDE Detection Telemetry (`detectIDEsWithTelemetry`)
+### 5. Connection Status Normalization
 
-The IDE-detection function emits two distinct events depending on outcome:
+Connection states encountered in the status display path use the following string literals:
 
-```
-function detectIDEsWithTelemetry():
-    try:
-        result = detectConnectedIDEs()
-        emitTelemetry("ide_detect", {count: length(result)})
-        return result
-    catch error:
-        emitTelemetry("ide_detect_failed", {error: error.message})
-        return []
-```
+| Literal | Meaning |
+|---|---|
+| `"unknown"` | IDE detected but state unresolvable |
+| `"local"` | IDE connected locally |
+| `"migrated"` | Connection migrated from a previous session |
+| `"native"` | Native protocol connection |
+| `"installed"` | Extension installed but not yet active |
+| `"disabled"` | Extension disabled |
+| `"enabled"` | Extension enabled and active |
+| `"no_permissions"` | Extension lacks required permissions |
+| `"not_configured"` | Extension present but not configured |
+| `"global"` | Connection via global scope |
 
-Analysis basis: CC v2.1.143 bundle.js:+5211929 (`ide_detect` literal), +5211993 (`ide_detect_failed` literal)
+Analysis basis: CC v2.1.143 bundle.js:+3159959–3160165 (state strings from G6/N6 scope)
 
 ---
 
@@ -222,18 +247,16 @@ Analysis basis: CC v2.1.143 bundle.js:+5211929 (`ide_detect` literal), +5211993 
 
 | Item | Detail |
 |---|---|
-| Telemetry — primary command event | `tengu_ext_ide_command` (emitted at every `/ide open` invocation) |
-| Telemetry — detection success | `ide_detect` |
-| Telemetry — detection failure | `ide_detect_failed` |
-| Telemetry — open project success | `ide_open_project` |
-| Telemetry — open project failure | `ide_open_project_failed` |
-| Telemetry — background daemon (indirect) | `tengu_bg_spare_claim`, `tengu_bg_spare_spawn`, `tengu_bg_dispatch_sigkill_escalate`, `tengu_daemon_control`, `tengu_bg_sendclaim_failed`, `tengu_bg_attach`, `tengu_bg_attach_kick`, `tengu_bg_attach_stall_ms`, `tengu_bg_attach_stall_gave_up`, `tengu_bg_attach_stall_respawn`, `tengu_bg_attach_legacy_autorespawn`, `tengu_bg_roster_parse_failed`, `tengu_bg_proto_mismatch`, `tengu_bg_dispatch_stale_drop`, `tengu_bg_dispatch_low_mem`, `tengu_bg_low_mem_mb`, `tengu_bg_spare_enable`, `tengu_daemon_idle_exit`, `tengu_config_parse_error` |
-| Telemetry — feature flags (indirect) | `tengu_feature_ok`, `tengu_feature_bad`, `tengu_feature_sad` |
-| Hook registration | `onInstallIDEExtension` callback registered on render |
-| appState changes | IDE-connection map updated; SSE-IDE / WS-IDE socket entries read |
-| Socket types touched | `sse-ide` (SSE connection), `ws-ide` (WebSocket connection) |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| File I/O (indirect, daemon path) | `daemon.status.json` read/written for daemon handshake |
+| Telemetry: `tengu_ext_ide_command` | Fired on every `/ide` invocation (status or open); loc +10631298 |
+| Telemetry: `ide_detect` | Fired after IDE scan completes; loc +5211929 |
+| Telemetry: `ide_detect_failed` | Fired when IDE scan encounters an error; loc +5211993 |
+| Telemetry: `ide_open_project` | Fired on successful project-open action; loc +10631851 |
+| Telemetry: `ide_open_project_failed` | Fired when the open action fails; loc +10631958 |
+| Hook registration | None detected in depth-2 traversal for this command directly |
+| appState changes | IDE selection state updated via `kM4`; config read via `KXH` |
+| File I/O | On linux, forks a `ps aux` subprocess to enumerate running IDE processes; loc +5215463 |
+| UI rendering | Renders bold IDE names via `M6.bold` (+10631912); presents an interactive selection list when multiple IDEs are found |
+| Restart hint | Conditionally displays "restart your IDE" guidance (+10632516) when extension state is degraded |
 
 ---
 
@@ -241,21 +264,17 @@ Analysis basis: CC v2.1.143 bundle.js:+5211929 (`ide_detect` literal), +5211993 
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis. Supports VS Code, Cursor, Windsurf, and JetBrains-family IDEs. `open` sub-command with interactive selection. SSE and WebSocket IDE socket modes present. |
+| v2.1.143 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Invoking `/ide open` before the extension is installed** — The command detects IDEs only through active SSE-IDE or WS-IDE sockets. If no IDE has the Claude Code extension running, the message "No IDEs with Claude Code extension detected." appears and no further action is taken. Install and enable the extension in the IDE first.
-
-2. **Expecting `/ide` to launch an IDE from scratch** — The command connects to an already-running IDE instance via its socket. It does not start a new IDE process; an IDE must already be open.
-
-3. **Running on Linux without a visible process list** — On Linux, detection falls back to a `ps aux` grep. If the IDE process name does not match any of the recognised patterns (e.g. a non-standard wrapper script), detection will silently return zero results.
-
-4. **Assuming JetBrains IDEs are always detected on macOS** — JetBrains IDE detection uses a separate normalisation path (`jetbrains` literal). The IDE must be running and the Claude Code plugin must have registered its socket; merely having the IDE open is insufficient.
-
-5. **Using an unrecognised argument** — The command only recognises `open` as a sub-command argument (per `argumentHint: "[open]"`). Any other string is silently ignored and the status panel is shown instead.
+1. **Running `/ide open` with no IDE running** — If no IDE process with the Claude Code extension is detected, the command exits immediately with `"No IDEs with Claude Code extension detected."` No project is opened.
+2. **Dismissing the IDE selection prompt** — If multiple IDEs are found and the user cancels the selection UI, the command exits silently with `"No IDE selected."` and does not open any IDE.
+3. **Extension not enabled** — An IDE process may be detected but the extension state may be `"installed"` or `"disabled"`, resulting in a status display rather than a functional connection. The hint to "restart your IDE" is shown in this path.
+4. **WSL path confusion** — On WSL environments the scanner checks `/mnt/c/Users/...` paths but skips system accounts (`Public`, `Default`, `Default User`, `All Users`). Using `/ide open` from a WSL shell targeting a Windows IDE may produce unexpected path mappings.
+5. **JetBrains IDE not listed** — JetBrains IDEs are detected via `ps aux` grep on Linux, which requires the IDE to currently be running. Installed-but-not-running JetBrains IDEs will not appear.
 
 ---
 
@@ -265,150 +284,131 @@ Analysis basis: CC v2.1.143 bundle.js:+5211929 (`ide_detect` literal), +5211993 
 
 | Identifier | Role |
 |---|---|
-| `ix_` | Top-level `/ide` command entry-point function |
-| `EP7` | JSX render function for the `/ide` UI component |
-| `S6` | App-state store accessor (reads global app state) |
-| `Uh6` | State-store subscription helper |
-| `Fd` | State field selector / getter |
-| `__` | Command output / print utility |
-| `GV` | Terminal output renderer |
-| `A` | Active IDE-connection map (Map object) |
-| `D` | Daemon / background-session manager |
-| `G6` | IDE-connection normaliser and registry |
-| `m76` | IDE-connection entry constructor |
-| `p76` | IDE-connection entry validator |
-| `Ts` | String normalisation utility (Unicode) |
-| `xH` | Raw string-to-normalised-form converter |
-| `jF` | Feature-flag / experiment resolver |
-| `Ci6` | IDE-connection registration handler |
-| `lA_` | Growthbook experiment event emitter |
-| `eA_` | IDE-connection event dispatcher |
-| `N6` | Config file watcher initialiser |
-| `x6` | Config path resolver |
-| `z9_` | Config change debouncer |
-| `H$H` | Config file reader and migration helper |
-| `nhL` | File-watch subscription manager |
-| `JZq` | Daemon status file writer (`daemon.status.json`) |
-| `ha` | Daemon log helper |
-| `d1` | Async-local-storage store getter |
-| `r06` | Daemon status path resolver |
-| `hH` | JSON serialiser wrapper |
-| `IG6` | Platform memory sampler (macOS gate) |
-| `$o_` | Background spare PTY process spawner |
-| `F1` | Feature-flag reader (ok path) |
-| `SH` | Feature-flag "sad" state handler |
-| `mH` | Feature-flag "bad" state handler |
-| `o7q` | Spare-socket path builder |
-| `eQ` | Auth-socket path resolver |
-| `a7q` | Alternate spare-socket path builder |
-| `pq5` | Spawn argument array validator |
-| `JM` | Array type guard |
-| `bq5` | Spawned background-process descriptor builder |
-| `Bk` | PTY-pid-file path resolver |
-| `DNH` | PTY-pid directory path builder |
-| `NH` | Error-normaliser / logger |
-| `v_` | Error constructor wrapper |
-| `zq` | Error string formatter |
-| `A$A` | Error code extractor |
-| `kNK` | Circular log-buffer manager |
-| `w` | Background-session dispatch loop |
-| `C` | Session supervisor connector |
-| `Z_K` | Real-path / stat resolver for session socket |
-| `$8` | Filesystem error code classifier |
-| `MK5` | Version-file path builder for Claude binary |
-| `p58` | Claude binary version-path joiner |
-| `z` | Daemon stop / control socket writer |
-| `xN` | Outbound daemon message builder |
-| `Ox` | Daemon shutdown race-condition handler |
-| `x` | Session idle-timeout manager |
-| `h` | Idle-timer handle holder |
-| `m` | Idle-timer interval reference |
-| `Oo_` | Daemon claim-frame sender |
-| `Gd_` | Auth-token directory writer |
-| `zW6` | Auth directory path builder |
-| `Ex_` | Auth file path resolver |
-| `v` | Log-level formatter |
-| `XH` | String coercion wrapper |
-| `uq5` | Claim-send timeout wrapper |
-| `mq5` | Net-socket claim connector |
-| `L8` | Promise-timeout utility |
-| `r8` | Retrying socket connector |
-| `xq5` | Claim-frame serialiser |
-| `mp` | Binary frame encoder (Buffer-based) |
-| `jo_` | Daemon session lifecycle manager |
-| `K` | Session-state column formatter |
-| `IK` | Job-directory path resolver |
-| `b0` | Job-directory base path builder |
-| `s1` | Job-roster file reader / parser |
-| `R6` | JSON parser wrapper |
-| `rw` | Roster active-state classifier |
-| `lE` | Active-entry filter helper |
-| `Bf` | Job-file atomic writer |
-| `eO` | Atomic file write (randomised temp + rename) |
-| `o2` | Job-cache invalidator |
-| `SoH` | Roster file watcher |
-| `Qp` | Roster file reader with error handling |
-| `_j7` | Roster directory + file initialiser |
-| `wLH` | PTY-pid-file path builder (secondary) |
-| `gp` | PTY socket path resolver |
-| `Wx_` | PTY transport-type selector |
-| `koH` | PTY socket directory path builder |
-| `rf` | IDE-list formatter for display |
-| `rgH` | IDE scanning and enumeration orchestrator |
-| `T_8` | Per-IDE connection-file scanner |
-| `TM4` | Single IDE directory enumerator |
-| `C9` | Filesystem access-error classifier |
-| `WM4` | IDE process name → IDE type mapper |
-| `dtA` | Shell command runner for process scanning |
-| `$_` | Shell execution wrapper |
-| `bA1` | Process-output regex extractor |
-| `W` | Skills / tools change debouncer |
-| `I3H` | Config-change hook dispatcher |
-| `L4` | Policy-settings hook runner |
-| `j2` | Generic hook executor |
-| `IBH` | Hook-eligibility checker |
-| `LY8` | Hook result accumulator |
-| `rHH` | Hook type-router |
-| `PqH` | Prompt-hook handler |
-| `Cz8` | MCP-tool hook handler |
-| `Ft1` | Function-hook handler |
-| `JrH` | Hook state-cache clearer |
-| `P` | IPC message framer / parser |
-| `j` | IPC write-channel reference |
-| `Vf` | IPC connection ender |
-| `cq5` | Daemon protocol message dispatcher |
-| `lq5` | Lease record constructor |
-| `M` | Session-state aggregator |
-| `Bw` | Background-service label provider |
-| `Do_` | Dispatch-pending-set manager |
-| `s8K` | Dispatch stale-drop timer |
-| `C2` | Claude binary path joiner |
-| `d$` | Real-path normaliser for binary path |
-| `A5H` | JSONL tail-file reader |
-| `Qq5` | Session memory-pressure checker |
-| `p` | Periodic write flusher |
-| `V` | Snapshot version tracker |
-| `z6H` | Session-state serialiser for snapshots |
-| `dq5` | Attach-and-resume orchestrator |
-| `N` | Away-summary generator |
-| `AH` | Voice / audio-session manager |
-| `r` | Permission-response filter |
-| `F` | MCP tool-use filter |
-| `g` | Composite filter (MCP + permission) |
-| `l` | PTY write-channel reference |
-| `c` | Outbound message filter |
-| `HZ6` | IPC connection data-writer |
-| `G` | Session-stream subscription handler |
-| `X` | MCP connection state manager |
-| `iT8` | MCP transport initialiser |
-| `iA1` | Process signal sender (`process.kill`) |
-| `Vj` | IDE display-name formatter |
-| `m1` | String index-based slicer |
-| `J8` | Feature-sad logger |
-| `Y8` | State-store initialiser |
-| `pY_` | IDE-open project orchestrator |
-| `kM4` | IDE-specific project-open command builder |
-| `KP` | Claude config reader entry point |
-| `KXH` | Full config loader (reads all config layers) |
-| `pn` | IDE-status panel sub-renderer |
-| `jP7` | IDE-status footer renderer |
+| `EP7` | Main async handler for `/ide` command (arbor_handler) |
+| `ix_` | IDE connection/session listing helper (maps over active IDE connections) |
+| `rgH` | IDE detection orchestrator (scans processes, builds candidate list) |
+| `T_8` | IDE candidate path builder (enumerates install locations) |
+| `TM4` | Per-candidate IDE path resolver (handles symlinks, WSL paths, dedup) |
+| `WM4` | IDE candidate mapper (maps raw entries through dtA classifier) |
+| `dtA` | IDE process-string parser (extracts PID and name tokens) |
+| `Vj` | IDE type classifier (lowercases process name, maps to vscode/cursor/windsurf/jetbrains) |
+| `m1` | String slice/indexOf helper used by Vj for name extraction |
+| `bA1` | Regex match helper used in IDE name extraction |
+| `pY_` | Open-project dispatcher (entry point for `open` sub-command) |
+| `kM4` | Open-project implementation (resolves config, sends open request per IDE type) |
+| `KP` | Config accessor used within open-project flow |
+| `KXH` | Core config loader/accessor (reads IDE settings, rejects on pre-init access) |
+| `iA1` | Process kill helper used during IDE detection cleanup |
+| `S6` | Async store getter used in status collection |
+| `Uh6` | Store accessor helper (calls ph6.getStore) |
+| `Fd` | Fallback/default value helper used in store retrieval |
+| `__` | Utility function called by S6 (delegates to GV) |
+| `GV` | Lower-level utility reached from `__` |
+| `D` | IDE daemon/session normalizer (normalizes connection state, manages sessions) |
+| `G6` | IDE connection state resolver (checks sMH/nA_ sets, maps to status strings) |
+| `N6` | IDE file watcher / state persistence coordinator |
+| `H$H` | Config file reader with backup/migration logic |
+| `nhL` | File watch setup helper (calls di6.watchFile/unwatchFile) |
+| `Ci6` | IDE connection registrar (checks for duplicates, adds to nA_ set) |
+| `lA_` | New IDE connection initializer (generates UUID, emits event) |
+| `eA_` | IDE connection event handler (wD9, R_, aE9, VRH sub-handlers) |
+| `$o_` | Daemon background spare process spawner |
+| `Oo_` | Background session claim handler (connects via Unix socket) |
+| `jo_` | Background job lifecycle manager (handles job states: done/killed/stopped/failed/crashed/blocked/working/idle/resuming) |
+| `w` | Active daemon session manager (dispatches to IDE workers, manages memory) |
+| `C` | IDE worker session object (handles write/kill/NH operations) |
+| `Z_K` | Worker path resolver (realpath + stat) |
+| `MK5` | Worker version verifier |
+| `p58` | Version join/format helper |
+| `z` | Daemon stop controller (emits daemon_stop / daemon_stop_failed) |
+| `xN` | Stop request writer (pushes to wF queue) |
+| `Ox` | Stop sequencer (Promise.race/all, process.exit) |
+| `NH` | Error normalizer (xH + zq + kNK pipeline) |
+| `v_` | Error-to-string converter |
+| `zq` | Error code extractor |
+| `A$A` | Error code formatter |
+| `kNK` | Circular queue shift/push helper |
+| `x` | Worker idle/retire timer (retireIfSettled, setTimeout/clearTimeout) |
+| `cq5` | Daemon protocol message dispatcher (handles all message types: ping/nudge/yield/lease/shutdown/dispatch/reply/resize/attach/stream/state/subscribe etc.) |
+| `s8K` | Stale dispatch detector / timeout calculator |
+| `Qq5` | Spare-pool size calculator |
+| `dq5` | Job phase inspector / kill coordinator |
+| `SoH` | Roster file reader/writer |
+| `Qp` | Roster parse/validate helper |
+| `_j7` | Roster write helper (mkdir + atomic write via eO) |
+| `jo_` | Job roster entry manager |
+| `Bf` | File write coordinator (uses eO for atomic writes) |
+| `eO` | Atomic file write helper (randomBytes temp name → rename) |
+| `rw` | Active-state labeler (maps to "active" string) |
+| `lE` | Activity state helper (bGH sub-function) |
+| `Gd_` | Claim file writer (mkdir + writeFile + JSON.stringify) |
+| `zW6` | Socket path resolver |
+| `Ex_` | Auth path builder |
+| `wLH` | PID file path builder |
+| `gp` | PTY path builder |
+| `Wx_` | tJ7 wrapper |
+| `koH` | PTY socket path helper |
+| `Bk` | PTY-PID file path builder |
+| `DNH` | PTY-PID directory resolver |
+| `pq5` | Argument array validator (JM helper) |
+| `JM` | Array.isArray check helper |
+| `bq5` | Spawn result object builder (Object.assign) |
+| `IK` | Job path resolver (SP.join + b0) |
+| `b0` | Base job directory resolver |
+| `s1` | Job metadata file reader/writer (stat, readFile, JSON cache) |
+| `R6` | JSON.parse wrapper |
+| `K` | Column formatter (L.map + padEnd) |
+| `p` | Write buffer flusher |
+| `V` | Generic value container/accessor |
+| `z6H` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| `N` | Away-summary generator (cache-age check, rate-limit guard, KM8/Te7/jlq) |
+| `AH` | Voice/focus session manager (G.current, setTimeout, recording state) |
+| `r` | Permission-allow handler |
+| `F` | MCP tool filter (c6.filter, P6.has) |
+| `g` | MCP tool runner composite (F + $) |
+| `l` | Write relay (Oc_ sub-function) |
+| `c` | Output filter (o.filter) |
+| `HZ6` | Socket frame writer (H.destroy / H.write) |
+| `G` | Transport factory (f26 + iT8) |
+| `X` | SDK/SSE transport handler (Promise.all, aKH, Dn, NH) |
+| `iT8` | Transport type discriminator |
+| `IG6` | Platform memory checker (macos → 1024 MB threshold) |
+| `JZq` | Daemon status file writer (daemon.status.json) |
+| `ha` | lfH helper used in status write |
+| `d1` | AsyncLocalStorage store reader (znL.getStore) |
+| `r06` | Status file path builder (wZq.join + x8) |
+| `hH` | JSON.stringify wrapper |
+| `F1` | Feature flag reader (SH + mH helpers) |
+| `SH` | Feature flag "yes"/"on" check |
+| `mH` | Feature flag negative check |
+| `rf` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| `Y8` | $_ + S6 composite (used in EP7 branching) |
+| `$_` | Config/state lookup (KXH, D, _SK, NH) |
+| `igH` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| `TT` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| `pn` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| `jP7` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| `L4` | Config-change event handler (V6, Yy, QX, sE, S6) |
+| `j2` | Hook runner (full hook execution pipeline) |
+| `I3H` | Hook + config-change dispatcher |
+| `IBH` | Hook presence checker (H.some) |
+| `rHH` | Policy settings handler (PqH, Cz8, Ft1, LY8) |
+| `W` | Skills/debounce dispatcher (z.add, clearTimeout, setTimeout, I3H, IBH) |
+| `JrH` | vz8.clear helper |
+| `P` | Daemon protocol frame parser/writer |
+| `j` | Inner write stream (→ w) |
+| `Vf` | Frame end writer (H.end + hH) |
+| `mp` | Binary frame builder (Buffer.alloc, writeUInt32BE, writeUInt8, copy) |
+| `mq5` | Socket connect helper (qE8.connect, K.once, K.end) |
+| `uq5` | Claim send with timeout (5000 ms; +14485619) |
+| `xq5` | Claim frame builder (fU.buildClaimFrame) |
+| `M` | Lease table manager (SvH, THK, L.get/values) |
+| `Bw` | Background-service label helper (tMH) |
+| `Do_` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| `C2` | Path join + hV + YO composite |
+| `d$` | Path realpath + normalize helper |
+| `A5H` | File open + readline interface helper |
+| `LY8` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| `PqH` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| `Cz8` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| `Ft1` | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |

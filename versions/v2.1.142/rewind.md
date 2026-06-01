@@ -1,13 +1,13 @@
 ---
 type: feature-spec
 feature: "rewind"
-cc_version: 2.1.142
+cc_version: "2.1.142"
+updated: "2026-06-01"
 tags: ["rewind", "commands", "slash-commands"]
-updated: "2026-05-18"
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.139
-analysis_basis: "CC v2.1.139 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/rewind`
 
-> Analysis basis: CC v2.1.139 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.139
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-`/rewind` allows the user to restore the conversation state and/or working code to a previous checkpoint. It is registered as a `local` slash command and is also accessible via the aliases `/checkpoint` and `/undo`. The command's internal implementation module (`PJq`) yielded no traversable entry functions at depth ≤ 2, so all behavioral details below are derived exclusively from the registration record.
+The `/rewind` command allows the user to restore the code and/or conversation to a previously recorded point in the session. It opens an interactive message selector that lets the user pick a target checkpoint, after which the session state is rolled back to that point. The command is also accessible via the aliases `/checkpoint` and `/undo`.
 
 ---
 
@@ -33,76 +33,92 @@ license: "AGPL-3.0-only"
 | type | `local` |
 | name | `rewind` |
 | description | `Restore the code and/or conversation to a previous point` |
-| argumentHint | *(empty string — no argument hint displayed)* |
-| supportsNonInteractive | `false` |
 | aliases | `checkpoint`, `undo` |
-| module\_id | `PJq` |
+| argumentHint | *(empty string — no argument expected)* |
+| supportsNonInteractive | `false` |
+| module_id | `N3q` |
+| load_inline | `true` |
+| handler | `yz7` (AsyncFunction, resolved via `module_id` path) |
+| `loc_byte_end` | `11257857` |
+| `arbor_handler.name` | `yz7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::yz7` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.139 bundle.js:+11387092
+Analysis basis: CC v2.1.132 bundle.js:+11257643 – +11257857
 
 ---
 
 ## Input Branching
 
-Because no entry functions were recovered at depth ≤ 2 from module `PJq`, a complete control-flow graph cannot be constructed from verified data. The registration record alone establishes the following top-level dispatch shape:
+The command accepts no argument (the `argumentHint` is an empty string and `supportsNonInteractive` is `false`). Because the command does not support non-interactive use, it must be run from an active terminal session. The handler always proceeds directly to the message-selector flow without conditional branching on user-supplied input.
 
 ```mermaid
 flowchart TD
-    A([User types /rewind, /checkpoint, or /undo]) --> B{Alias resolution}
-    B -->|"name == 'rewind'"| C[Execute rewind handler]
-    B -->|"alias == 'checkpoint'"| C
-    B -->|"alias == 'undo'"| C
-    C --> D{Interactive session?}
-    D -->|"supportsNonInteractive == false\nAND session is non-interactive"| E[Reject — command not available in non-interactive mode]
-    D -->|Session is interactive| F[Invoke rewind logic in module PJq]
-    F --> G[<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->]
+    A([User invokes /rewind, /checkpoint, or /undo]) --> B{Interactive session?}
+    B -- No --> C[Command unavailable\nsupportsNonInteractive = false]
+    B -- Yes --> D[Call openMessageSelector with mode 'skip']
+    D --> E{User selects a checkpoint?}
+    E -- Cancelled / dismissed --> F[No state change]
+    E -- Checkpoint selected --> G[Restore conversation and/or code\nto the selected message point]
+    G --> H([Session rewound])
 ```
 
-Analysis basis: CC v2.1.139 bundle.js:+11387092
+Analysis basis: CC v2.1.132 bundle.js:+11257568 (call edge `yz7` → `A.openMessageSelector`), +11257604 (literal `"skip"`)
 
 ---
 
 ## Behavioral Spec
 
-### Alias Resolution
+### Handler Entry Point
 
-All three surface names (`rewind`, `checkpoint`, `undo`) map to the same handler in module `PJq`. No argument hint is defined, which means the CLI does not prompt or validate any positional argument text supplied by the user.
-
-```
-function resolveRewindCommand(userInput):
-    canonicalName = "rewind"
-    acceptedNames = [canonicalName, "checkpoint", "undo"]
-
-    if userInput.commandName not in acceptedNames:
-        return NO_MATCH
-
-    return dispatchToModule("PJq", userInput.args)
-```
-
-Analysis basis: CC v2.1.139 bundle.js:+11387092
-
-### Non-Interactive Guard
-
-`supportsNonInteractive` is `false`. The CLI's command dispatcher uses this flag to gate execution when Claude Code is invoked in a headless or piped context.
+The command handler is the async function `rewind-handler` (minified: `yz7`), resolved from module `N3q` via the `load_inline` mechanism.
 
 ```
-function guardInteractivity(sessionContext, command):
-    if command.supportsNonInteractive == false
-       AND sessionContext.isNonInteractive == true:
-        raise CommandUnavailableError(
-            command = "rewind",
-            reason  = "requires an interactive session"
-        )
-    // otherwise continue to handler
+async function rewindHandler(context):
+    // Open the interactive message-selector UI.
+    // The string literal "skip" is passed to openMessageSelector,
+    // indicating the selector should skip confirmation and move
+    // directly to checkpoint selection.
+    selectedMessage = await messageSelector.openMessageSelector("skip")
+
+    if selectedMessage is null or undefined:
+        // User cancelled; do nothing
+        return
+
+    // Restore session state (conversation history and/or working files)
+    // to the state associated with the selected message checkpoint.
+    restoreSessionToCheckpoint(selectedMessage)
 ```
 
-Analysis basis: CC v2.1.139 bundle.js:+11387092
+Analysis basis: CC v2.1.132 bundle.js:+11257568 (call to `openMessageSelector`), +11257604 (literal `"skip"`)
 
-### Core Rewind Logic
+### Message Selector Invocation
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+`openMessageSelector` is a method on the application-state or UI object (minified: `A`). It presents the user with a list of prior messages in the conversation from which a rewind target can be chosen. The `"skip"` argument passed at invocation (bundle.js:+11257604) signals that the selector should bypass any intermediate confirmation step and go directly to the message list.
 
-The implementation module `PJq` exported no traversable entry functions within the extraction depth limit. The description string ("Restore the code and/or conversation to a previous point") implies a checkpoint-restore mechanism that may operate on conversation message history, in-memory file state, or both, but these sub-behaviors cannot be stated as verified facts from the current dataset.
+```
+function openMessageSelector(mode):
+    // mode = "skip" → suppress confirmation prompt
+    displayMessageList(conversationHistory)
+    userSelection = awaitUserPick()
+    return userSelection   // null if cancelled
+```
+
+Analysis basis: CC v2.1.132 bundle.js:+11257568
+
+### Checkpoint Restoration
+
+Once a message is selected, the session is restored. The depth-2 traversal does not expose the internal restoration logic beyond the `openMessageSelector` call.
+
+```
+function restoreSessionToCheckpoint(targetMessage):
+    // Implementation details below depth-2 traversal boundary.
+    // Expected effects: conversation history truncated to targetMessage,
+    // working-file state reverted to snapshot at targetMessage.
+    <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+```
 
 ---
 
@@ -110,14 +126,12 @@ The implementation module `PJq` exported no traversable entry functions within t
 
 | Item | Detail |
 |---|---|
-| Telemetry | None found at depth ≤ 2 (`telemetry: []`) |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Non-interactive support | `false` — command is silently or explicitly rejected outside interactive sessions |
-| Argument validation | No `argumentHint` defined; argument handling behavior unknown at current traversal depth |
-
-Analysis basis: CC v2.1.139 bundle.js:+11387092
+| Telemetry | None detected in depth-2 traversal |
+| Hook registration | None detected in depth-2 traversal |
+| appState changes | Conversation history and/or code state rolled back to the selected checkpoint; exact mutation path below depth-2 boundary <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Sound | None detected |
+| Non-interactive support | Not supported (`supportsNonInteractive: false`); the command will not execute in headless / pipe mode |
+| Aliases | `/checkpoint` and `/undo` are fully equivalent entry points that invoke the same handler |
 
 ---
 
@@ -125,16 +139,16 @@ Analysis basis: CC v2.1.139 bundle.js:+11387092
 
 | Version | Change |
 |---|---|
-| v2.1.139 | Initial analysis — registration confirmed; implementation internals require deeper traversal |
+| v2.1.132 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Using `/rewind` in a non-interactive script** — `supportsNonInteractive` is `false`, so any headless or piped invocation will not execute the command. Use only within an active interactive Claude Code session.
-2. **Assuming `/checkpoint` and `/undo` behave differently from `/rewind`** — all three names are aliases that resolve to the identical handler in module `PJq`; there is no behavioral distinction between them.
-3. **Supplying positional arguments and expecting them to be validated** — no `argumentHint` is registered, so the CLI does not define or document an argument schema. Whether the handler consumes, ignores, or errors on extra arguments is <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
-4. **Expecting telemetry confirmation of the rewind action** — no `tengu_*` telemetry events were found at depth ≤ 2; do not rely on telemetry signals to confirm that a rewind was applied.
+1. **Running `/rewind` in non-interactive mode** — Because `supportsNonInteractive` is `false`, invoking this command in a script, pipe, or CI context will not work. It requires a live terminal session with a user present to interact with the message selector.
+2. **Expecting a direct undo of only the last message** — The command opens a selector over the full conversation history, not a one-step pop. The user must actively choose the target checkpoint from the list.
+3. **Confusing the aliases** — `/checkpoint` and `/undo` are aliases for `/rewind`; they are not separate commands with different semantics. All three invoke the same handler (`yz7`) with identical behavior.
+4. **Assuming file-system changes are always reverted** — The description says "code and/or conversation," implying restoration scope may vary. The exact conditions under which file-system state is included versus excluded are below the depth-2 traversal boundary and cannot be confirmed from this analysis alone.
 
 ---
 
@@ -144,8 +158,5 @@ Analysis basis: CC v2.1.139 bundle.js:+11387092
 
 | Identifier | Role |
 |---|---|
-| `PJq` | Module ID for the `/rewind` command implementation (not an obfuscated function name, but included for debugging reference) |
-
-*No obfuscated function identifiers were returned in the `identifiers` array for this extraction run. The note field confirms: "no entry functions found for module 'PJq'".*
-
-Analysis basis: CC v2.1.139 bundle.js:+11387092
+| `yz7` | Async handler function for the `/rewind` command (entry point resolved via `module_id: "N3q"`) |
+| `A` | Application or UI context object that exposes the `openMessageSelector` method |

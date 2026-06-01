@@ -2,11 +2,12 @@
 type: feature-spec
 feature: "color"
 cc_version: "2.1.143"
-updated: "2026-05-18"
+updated: "2026-06-01"
 tags: ["color", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: "2.1.133"
+analysis_basis: "CC v2.1.133 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -14,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/color`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.133 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.133
 
 ---
 
 ## Overview
 
-The `/color` command sets the prompt bar color for the current Claude Code session. It accepts an optional color name or hex value, validates it against a known color list, persists the choice via `appState`, and emits a telemetry event. When invoked with no argument (or the literal `"default"`), it resets the prompt bar to its default color.
+The `/color` command sets or resets the prompt bar color for the current Claude Code session. When invoked with a recognized color name, it applies that color to the UI prompt bar; when invoked with `"default"` (or no recognized color argument), it resets the bar to the default color. The command is blocked in swarm teammate sessions, where colors are controlled exclusively by the team leader.
 
 ---
 
@@ -29,166 +30,145 @@ The `/color` command sets the prompt bar color for the current Claude Code sessi
 
 | Field | Value |
 |---|---|
-| type | `local-jsx` |
-| name | `color` |
-| description | Set the prompt bar color for this session |
-| argumentHint | *(none)* |
-| immediate | `true` |
-| module_id | `iqq` |
+| `type` | `local-jsx` |
+| `name` | `color` |
+| `description` | `Set the prompt bar color for this session` |
+| `argumentHint` | `null` |
+| `immediate` | `true` |
+| `module_id` | `Qo9` |
+| `load_inline` | `true` |
+| `loc_byte` | `9844233` |
+| `loc_byte_end` | `9844450` |
+| `loc_line` | `5513` |
+| `arbor_handler.name` | `j67` |
+| `arbor_handler.fqn` | `claude-2.1.133::j67` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.143 bundle.js:+10102359
+Analysis basis: CC v2.1.133 bundle.js:+9844233
+
+**Notes:**
+- `immediate: true` means the command executes synchronously upon slash-command dispatch — no additional confirmation step is required from the user.
+- The handler is an `AsyncFunction` (`j67`) resolved via the `module_id` path (`Qo9`). The callGraph entry point `j67 → H, L38` (at bundle.js:+9843151, +9843159) is the real handler; the Arbor-resolved name `j67` is preferred over any synthetic BFS bookkeeping identifier.
 
 ---
 
 ## Input Branching
 
+Four distinct paths exist based on swarm role, argument presence/value, and color list membership — a Mermaid flowchart is used.
+
 ```mermaid
 flowchart TD
-    A["/color [argument]"] --> B{Is session a\nswarm teammate?}
-    B -- Yes --> C["Return error:\n'Cannot set color: This session is a swarm\nteamate. Teammate colors are assigned by\nthe team leader.'"]
-    B -- No --> D{Argument\nprovided?}
-    D -- No argument\nor 'default' --> E["Reset color to default\nEmit 'Session color reset to default'"]
-    D -- Argument present --> F["Normalize: toLowerCase()"]
-    F --> G{Is normalized value\nin known color list?}
-    G -- Yes --> H["Apply color via setAppState\nPersist via agent-color log entry\nEmit tengu_agent_color_set telemetry"]
-    G -- No --> I["Build error message:\nlist valid colors joined by ', '\nReturn error to user"]
-    E --> J["setAppState with default color"]
-    H --> K["Render JSX confirmation\nvia renderResponse helper"]
-    J --> K
+    A([User invokes /color &lt;arg&gt;]) --> B{Is session a\nswarm teammate?}
+    B -- Yes --> C[Return error:\n'Cannot set color: This session is\na swarm teammate. Teammate colors\nare assigned by the team leader.']
+    B -- No --> D{Arg provided?}
+    D -- No arg --> E[Pick random color\nfrom available list\nvia Math.floor + Math.random]
+    D -- Arg provided --> F[Normalize to lowercase\nvia _.toLowerCase]
+    F --> G{Arg == 'default'?}
+    G -- Yes --> H[Reset to default color\nEmit 'Session color reset to default']
+    G -- No --> I{Arg in known\ncolor list X67?}
+    I -- Yes --> J[Apply named color\nvia setAgentColor / telemetry]
+    I -- No --> K[List valid colors\nvia q3.join ', '\nReturn error with suggestions]
+    E --> J
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10101336, +10101347, +10101519, +10101537, +10101561, +10101583, +10101665, +10101730, +10101787
+Analysis basis: CC v2.1.133 bundle.js:+9843220 (swarm check), +9843366 (random pick), +9843403 (toLowerCase), +9843421 (X67.includes), +9843445 (q3.includes), +9843467 (q3.join), +9843565 ("default" literal), +9843231 (swarm error string), +9843673 (reset message)
 
 ---
 
 ## Behavioral Spec
 
-### Swarm-Teammate Guard
+### 1. Entry Point and Swarm Guard
 
-When the command handler is invoked, it first checks whether the current session is operating as a swarm teammate (i.e., a subordinate agent whose color is managed externally by the team leader). If so, it immediately returns without modifying state.
+The async handler `j67` is called with the session context object and the raw argument string.
 
 ```
-function swarmTeammateGuard(sessionContext):
-    store = getGlobalStore()
-    if store indicates current session is swarm teammate:
+async function colorCommandHandler(sessionContext, rawArg):
+    isSwarmTeammate = checkSwarmRole(sessionContext)   // calls storeGet (m7 → pP → Qg8.getStore)
+    if isSwarmTeammate:
         return errorResult(
             "Cannot set color: This session is a swarm teammate. " +
             "Teammate colors are assigned by the team leader."
         )
-    return null  // no error; continue
+    proceed to argument resolution (see §2)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10101336, +10101347, +2167959, +2166818
+Analysis basis: CC v2.1.133 bundle.js:+9843220 (swarm check call), +9843231 (error literal), +2125187 (store lookup), +2124046 (Qg8.getStore)
 
----
-
-### Color Argument Normalization and Validation
-
-The raw argument string is normalized to lowercase before comparison. The implementation maintains a static list of valid color names (`knownColorList`). If the normalized value is found in that list, processing continues. Otherwise, the list is joined with `", "` and returned as part of a human-readable error.
+### 2. Argument Resolution
 
 ```
-function normalizeAndValidate(rawArgument, knownColorList):
-    normalized = rawArgument.toLowerCase()
-    if knownColorList.includes(normalized):
-        return { valid: true, value: normalized }
-    else:
-        validOptions = knownColorList.join(", ")
-        return { valid: false, message: "Invalid color. Valid options: " + validOptions }
+function resolveColorArgument(rawArg, availableColors):
+    if rawArg is absent or empty:
+        randomIndex = Math.floor(Math.random() * availableColors.length)
+        return availableColors[randomIndex]             // random selection
+    normalized = rawArg.toLowerCase()
+    if normalized == "default":
+        return "default"
+    if availableColors.includes(normalized):            // X67.includes check
+        return normalized
+    // Invalid color supplied — build suggestion string
+    suggestions = availableColors.join(", ")            // q3.join with literal ", "
+    return invalidColorError(normalized, suggestions)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10101519, +10101537, +10101561, +10101583, +10101591
+Analysis basis: CC v2.1.133 bundle.js:+9843366 (Math.floor), +9843377 (Math.random), +9843403 (toLowerCase), +9843421 (X67.includes), +9843445 (q3.includes), +9843467 (q3.join), +9843475 (", " literal), +9843565 ("default" literal)
 
----
+### 3. Color Application
 
-### Random Color Selection
-
-When no argument is supplied and the command is not performing a reset, the implementation can select a color at random using `Math.floor(Math.random() * listLength)` to pick an index into the color list.
+When a valid named color (not `"default"`) is resolved:
 
 ```
-function pickRandomColor(knownColorList):
-    index = Math.floor(Math.random() * knownColorList.length)
-    return knownColorList[index]
+function applyColor(resolvedColor, sessionContext):
+    logAgentColorEvent("agent-color", resolvedColor)    // CJ6 → wVH log writer, "agent-color" key
+    setStandaloneAgentContext(sessionContext, resolvedColor)  // A.setStandaloneAgentContext
+    emitTelemetry("tengu_agent_color_set")              // CJ6 → d, loc_byte 11833049
+    scheduleContextFileUpdate(sessionContext)            // tn6 subtree (file I/O)
+    renderColorConfirmation(resolvedColor)               // P67 subtree → JSX result
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10101482, +10101493
+Analysis basis: CC v2.1.133 bundle.js:+9843603 (CJ6 call), +9843614 (A.setStandaloneAgentContext), +9843653 (tn6 call), +9843662 (P67 call), +11832965 ("agent-color" literal), +11833049 (telemetry event)
 
----
-
-### Default / Reset Path
-
-When the resolved color value equals the string `"default"`, the command resets the prompt bar color to the application default and produces the confirmation message `"Session color reset to default"`.
+### 4. Default / Reset Path
 
 ```
-function applyColorOrReset(resolvedColor, appStateWriter):
-    if resolvedColor == "default":
-        appStateWriter.setAppState({ promptBarColor: "default" })
-        return successResult("Session color reset to default")
-    else:
-        appStateWriter.setAppState({ promptBarColor: resolvedColor })
-        persistColorEntry(resolvedColor)   // writes "agent-color" log entry
-        emitTelemetry("tengu_agent_color_set")
-        return successResult(resolvedColor)
+function resetToDefault(sessionContext):
+    setStandaloneAgentContext(sessionContext, "default")
+    return systemMessage("Session color reset to default")
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10101681, +10101730, +10101787
+Analysis basis: CC v2.1.133 bundle.js:+9843565 ("default" literal), +9843673 ("Session color reset to default" literal), +9843177 ("system" message type literal)
 
----
+### 5. Context File Update (`tn6` subtree)
 
-### Color Persistence (agent-color log entry)
-
-On a successful non-default color selection, the implementation appends a structured log entry tagged `"agent-color"` to the session's append-only log file. This uses `appendFileSync` after optionally creating the containing directory with `mkdirSync`. The log entry body is serialized with `JSON.stringify`. Internal file-size thresholds of `384` and `448` bytes are observed during this operation.
+The `tn6` function manages persistence of the color setting to a context file on disk. It orchestrates several sub-operations:
 
 ```
-function persistColorEntry(colorValue, logFilePath):
-    entryPayload = jsonSerialize({ type: "agent-color", color: colorValue })
-    ensureDirectoryExists(dirname(logFilePath))   // mkdirSync
-    appendToFile(logFilePath, entryPayload)        // appendFileSync
-    emitTelemetry("tengu_agent_color_set")
+async function persistColorToContextFile(sessionContext, color):
+    resolvedPaths = buildContextFilePaths(sessionContext)   // xL → VW, Cj.join
+    basename = getContextBasename(sessionContext)            // vW → Cj.basename
+    existingEntries = readContextFileEntries(resolvedPaths) // r9 → Rj.stat, Rj.readFile
+    updatedEntries = mergeColorEntry(existingEntries, color, basename)
+    writeContextFile(resolvedPaths, updatedEntries)         // Pf → iY (atomic write via randomBytes + rename)
+    evictStaleCache(resolvedPaths)                          // lP → QfH.delete
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+12144217, +12144238, +12144322, +12140052, +12140073, +12140100, +12140112, +12140124, +12140144
+Analysis basis: CC v2.1.133 bundle.js:+3883618 (tn6 entry), +3880692 (Cj.join), +3880767 (Cj.basename), +3881437 (Rj.stat), +3881823 (Rj.readFile), +2867005 (Xa8.randomBytes for atomic write), +2867052 (Lo.writeFile), +2867105 (Lo.rename), +3881298 (QfH.delete cache eviction)
 
----
+### 6. Result Rendering (`P67` subtree)
 
-### Known Color List Enumeration
-
-The implementation populates the valid color name list by calling `Object.keys` on a color-map object (`colorMapObject`). This means valid color names are the keys of that map, which are resolved at runtime.
+`P67` retrieves the current app state and renders a JSX confirmation component:
 
 ```
-function buildKnownColorList(colorMapObject):
-    return Object.keys(colorMapObject)   // runtime-derived list of valid names
+function renderColorResult(resolvedColor, appState):
+    state = H.getAppState()                             // P67 → H.getAppState
+    formattedLabel = formatColorLabel(resolvedColor)    // dl helper
+    paddedLine = L(formattedLabel)                      // L → f.padEnd with "  " padding
+    return Qt(/* JSX confirmation node */)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10101040
-
----
-
-### Response Rendering
-
-The command's JSX render function (`renderResponse`) uses a `padEnd` operation (pad width: `40` characters) when formatting color names in its output display, and maps over color entries to produce formatted rows.
-
-```
-function renderColorResponse(colorEntries):
-    rows = colorEntries.map(entry =>
-        entry.name.padEnd(40) + "  " + entry.swatch
-    )
-    return renderJSX(rows)
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+10101928, +10101963, +10102015, +10102033, +14526168, +14526181, +14528099, +40 (literal value at +14528173)
-
----
-
-### App State Write
-
-After validation, the color value is committed to the live session state via `setAppState`. This is a synchronous in-memory write that causes the prompt bar UI to re-render immediately (consistent with `immediate: true` in registration).
-
-```
-function commitToAppState(colorValue, appStateRef):
-    appStateRef.setAppState({ promptBarColor: colorValue })
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+10101730
+Analysis basis: CC v2.1.133 bundle.js:+9843759 (H.getAppState), +9843814 (dl), +9843819 (Promise.resolve), +9843849 (JzH), +9843901 (L), +9843919 (Qt), +14179342 (f.padEnd), +14179363 ("  " padding literal)
 
 ---
 
@@ -196,14 +176,13 @@ Analysis basis: CC v2.1.143 bundle.js:+10101730
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_agent_color_set` emitted on every successful non-default color application (bundle.js:+12144322) |
-| Hook registration | Registers a hook via `at_.register` through the `h9` → `KL` call chain (bundle.js:+56977, +12115214) |
-| appState changes | `promptBarColor` field updated synchronously via `_.setAppState` (bundle.js:+10101730) |
-| Persistent log entry | Appends a JSON record tagged `"agent-color"` to the session log file via `appendFileSync` (bundle.js:+12140073) |
-| Directory creation | `mkdirSync` called to ensure log directory exists before append (bundle.js:+12140112) |
+| Telemetry | `tengu_agent_color_set` (bundle.js:+11833049) — fired once per successful named-color application |
+| Agent context mutation | `A.setStandaloneAgentContext` updates the in-memory standalone agent context with the new color value (bundle.js:+9843614) |
+| Context file write | `tn6` subtree performs an atomic write (random-bytes temp file → rename) to persist the color to the session's on-disk context file (bundle.js:+9843653) |
+| Cache eviction | `lP → QfH.delete` evicts the stale parsed-context cache entry after write (bundle.js:+3881298) |
+| Log entry | `CJ6 → wVH` appends a structured log entry keyed `"agent-color"` (bundle.js:+11832965) using `appendFileSync` (bundle.js:+11829593) |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Swarm guard | Blocks execution and returns an error string if session is a swarm teammate (bundle.js:+10101347) |
-| Reset confirmation | Returns the literal string `"Session color reset to default"` when color is reset (bundle.js:+10101787) |
+| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 
 ---
 
@@ -211,21 +190,17 @@ Analysis basis: CC v2.1.143 bundle.js:+10101730
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis |
+| v2.1.133 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Passing a color name with mixed or upper case**: The command normalizes input via `.toLowerCase()` before validation. However, users may be surprised that `"Red"` or `"RED"` are treated identically to `"red"`. Always pass lowercase values to be explicit.
-
-2. **Attempting to set color in a swarm teammate session**: The command will immediately return the error `"Cannot set color: This session is a swarm teammate. Teammate colors are assigned by the team leader."` Color cannot be overridden from within the teammate agent itself.
-
-3. **Expecting persistence across unrelated sessions**: The `agent-color` log entry and `appState` write are scoped to the current session. A fresh session will not automatically inherit a previously set color unless the session-startup logic replays the log.
-
-4. **Passing an unrecognized color name**: The valid color list is derived from `Object.keys` of a runtime color map. If a color name is not in that map, the command returns an error listing all valid options separated by `", "`. Use `/color` with no argument first to see the full list if unsure.
-
-5. **Assuming `/color` is asynchronous**: The registration field `immediate: true` means the command executes synchronously before any pending input is processed. Side effects (appState write, file append) happen before the prompt returns.
+1. **Invoking `/color` in a swarm teammate session.** The command is unconditionally blocked for swarm teammates; only the team leader session can assign teammate colors. The error is returned immediately before any argument is evaluated (bundle.js:+9843231).
+2. **Passing an unrecognized color name.** If the argument does not match any entry in the internal color list (`X67`) and is not `"default"`, the command returns an error listing all valid options (joined by `", "`). Callers should use the suggestion list rather than guessing (bundle.js:+9843445–+9843475).
+3. **Expecting synchronous file persistence before the command returns.** The context file write (`tn6`) is async; downstream code reading the color from disk should await the persistence cycle rather than reading immediately after the command resolves.
+4. **Passing `"Default"` (capitalized) instead of `"default"`.** The argument is normalized to lowercase before comparison (bundle.js:+9843403), so mixed-case variants of `"default"` are handled correctly — but passing arbitrary capitalized color names that don't match any list entry after lowercasing will still fall through to the error path.
+5. **Assuming no-argument invocation leaves color unchanged.** When invoked without an argument, the command picks a **random** color from the available list (bundle.js:+9843366–+9843377), not a no-op. Pass `"default"` explicitly to reset.
 
 ---
 
@@ -235,50 +210,51 @@ Analysis basis: CC v2.1.143 bundle.js:+10101730
 
 | Identifier | Role |
 |---|---|
-| `tO7` | Top-level command module / entry point (exports registration and handler) |
-| `dD8` | Main command handler function (core `/color` logic) |
-| `eO7` | JSX render function for the color command response |
-| `gD8` | Known color list builder (calls `Object.keys` on color map) |
-| `q5` | Swarm-teammate session guard helper |
-| `p2` | Global store accessor (calls `ti8.getStore`) |
-| `V6` | React/JSX element factory (UI rendering primitive) |
-| `GV` | JSX fragment or base component |
-| `g5` | Inline text / styled-text JSX component builder |
-| `CU` | Text styling helper (calls `GV`) |
-| `__` | Additional text/style helper (calls `GV`) |
-| `B26` | Color persistence / log-entry writer |
-| `QZ` | Log-entry formatter (builds structured log record) |
-| `Ip` | Log-entry type discriminator or sub-formatter |
-| `H4H` | File append helper (calls `appendFileSync`, `mkdirSync`) |
-| `x6` | File-existence / stat check utility |
-| `hH` | JSON serializer wrapper (calls `JSON.stringify`) |
-| `KL` | Hook registration dispatcher |
-| `h9` | Low-level hook registrar (calls `at_.register`) |
-| `d` | Telemetry emitter (emits `tengu_agent_color_set`) |
-| `_` | App-state writer reference (exposes `setAppState`) |
-| `_t6` | File-system context / job-queue manager |
-| `IK` | Job path resolver |
-| `b0` | Job sub-path builder |
-| `x0` | Basename resolver for job files |
-| `H` | Random / timer utility (calls `Math.random`, `setTimeout`) |
-| `s1` | File read/cache manager (reads, parses, and caches files) |
-| `$8` | Internal async utility / micro-task helper |
-| `L8` | Low-level async primitive |
-| `v` | Content normalization / token-processing helper |
-| `G5K` | Token stream processor |
-| `P7` | String redaction / sanitization helper |
-| `cSH` | Content-safety handler |
-| `Z5K` | Streaming file writer with byte-length tracking |
-| `R6` | JSON parse wrapper |
-| `o2` | Cache-entry deletion helper |
-| `Bf` | Atomic file-write orchestrator |
-| `eO` | Atomic write primitive (random bytes + rename) |
-| `NH` | Error logging / error queue manager |
-| `v_` | Error normalization helper |
-| `xH` | String coercion wrapper |
-| `zq` | Error formatting helper |
-| `A$A` | Error context builder |
-| `kNK` | Bounded error queue (shift/push circular buffer) |
-| `Qi` | Color swatch / preview renderer |
-| `K` | Row formatter for color list display (calls `padEnd`) |
-| `pHH` | Final response wrapper / JSX container |
+| `j67` | Main async command handler (`colorCommandHandler`); Arbor-resolved entry point |
+| `L38` | Core color resolution and dispatch logic |
+| `m7` | Swarm-role store accessor wrapper |
+| `pP` | Store lookup helper (calls `Qg8.getStore`) |
+| `v6` | Shared utility (referenced across multiple callers; exact role varies by call site) |
+| `ef` | JSX/text formatting helper used in result construction |
+| `tg` | Sub-helper called by `ef` |
+| `LA` | Sub-helper called by `ef` |
+| `CJ6` | Agent color log writer orchestrator |
+| `HN` | Log entry formatting sub-function (called by `CJ6`) |
+| `wVH` | File-append log writer (calls `appendFileSync`, `mkdirSync`) |
+| `F6` | Sub-helper used in log write path |
+| `SH` | JSON serializer wrapper (calls `JSON.stringify`) |
+| `RK` | Async state tracker (calls `y1`) |
+| `y1` | In-flight request set manager (`d08.add` / `d08.delete`) |
+| `d` | Telemetry emission helper (fires `tengu_agent_color_set`) |
+| `A` | Agent context object (exposes `setStandaloneAgentContext`, `toUpperCase`) |
+| `tn6` | Context file persistence orchestrator |
+| `xL` | Context file path resolver |
+| `VW` | Path join sub-helper |
+| `vW` | Context file basename resolver |
+| `H` | Session/app state object (exposes `getAppState`, `slice`, `includes`) |
+| `r9` | Context file entry reader (stat + readFile + cache logic) |
+| `D8` | Utility used in file reading and persistence paths |
+| `w8` | Low-level utility (called by `D8`, `iY`) |
+| `k` | Content processing / MIME handling helper |
+| `Ztq` | Sub-helper in content processing chain |
+| `Uf` | String redaction / truncation utility |
+| `LkH` | String utility wrapper (calls `UnA`) |
+| `vtq` | File content read-and-parse helper |
+| `p6` | JSON parse wrapper |
+| `lP` | Cache eviction helper (calls `QfH.delete`) |
+| `Pf` | Atomic context file write orchestrator |
+| `iY` | Atomic write implementation (randomBytes → writeFile → rename) |
+| `fH` | Error/queue management helper |
+| `HA` | Error construction helper |
+| `kH` | String coercion helper |
+| `yq` | Queue drain helper |
+| `J9_` | Queue item processor (calls `kH`) |
+| `NJL` | Queue shift/push manager |
+| `P67` | Result rendering function (retrieves app state, returns JSX confirmation) |
+| `dl` | Color label formatter helper |
+| `L` | Pad/format line builder (calls `f.padEnd`) |
+| `Qt` | JSX result node constructor |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

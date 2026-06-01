@@ -2,11 +2,12 @@
 type: feature-spec
 feature: "setup-bedrock"
 cc_version: "2.1.143"
-updated: "2026-05-18"
+updated: "2026-06-01"
 tags: ["setup-bedrock", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -14,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/setup-bedrock`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/setup-bedrock` command launches an interactive reconfiguration flow for Amazon Bedrock integration within Claude Code. It allows users to update authentication credentials, AWS region selection, and model pin settings without restarting the CLI. The command renders a JSX-based UI component and emits a telemetry event at invocation time to track setup initiation.
+`/setup-bedrock` is a local JSX command that launches an interactive reconfiguration wizard for Amazon Bedrock authentication, allowing the user to update credentials, AWS region, or pinned model identifiers. The command renders a JSX component as its response and fires a telemetry event at startup to record that the Bedrock setup flow was initiated.
 
 ---
 
@@ -32,78 +33,84 @@ The `/setup-bedrock` command launches an interactive reconfiguration flow for Am
 | type | `local-jsx` |
 | name | `setup-bedrock` |
 | description | `Reconfigure Amazon Bedrock authentication, region, or model pins` |
-| module_id | `BJq` |
-| loc_line | `6668` |
+| isHidden | `null` (not hidden; appears in the command palette) |
+| module_id | `RKq` |
+| load_inline | `true` (handler resolved via inline `load:()=>Promise.resolve(…)` shape) |
+| handler | `OM7` (AsyncFunction; resolved via `module_id` path in Arbor symbol graph) |
+| `loc_byte_end` | `10916104` |
+| `arbor_handler.name` | `OM7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::OM7` |
+| `arbor_handler.n_hits` | `1` |
 
-Analysis basis: CC v2.1.143 bundle.js:+11221744
+Analysis basis: CC v2.1.132 bundle.js:+10915872 – +10916104
 
 ---
 
 ## Input Branching
 
-The depth-2 call graph for this command is narrow: the command handler calls a telemetry helper and then delegates entirely to a JSX component renderer. No multi-branch conditional logic was observed at this traversal depth.
+The depth-2 call graph for this command is compact: the handler (`OM7`) makes exactly two outward calls — a telemetry emission and a JSX element construction. No branching on user-supplied arguments was detected at this traversal depth.
 
 ```mermaid
 flowchart TD
-    A[User invokes /setup-bedrock] --> B[Command handler: setupBedrockCommand]
+    A([User invokes /setup-bedrock]) --> B[Handler OM7 is called]
     B --> C[Emit telemetry: tengu_bedrock_setup_started]
-    C --> D[Call JSX createElement with BedrockSetupComponent]
-    D --> E[Return rendered JSX tree to CLI shell]
+    C --> D[Call JSX element factory Vm.createElement]
+    D --> E([Return rendered Bedrock setup component to shell])
 ```
 
-> Note: Internal branching within the rendered JSX component (e.g., auth method selection, region picker, model pin configuration) operates below depth-2 and is not captured in the extracted call graph.
+> If argument-driven branching exists (e.g., `--region`, `--profile` flags), it resides inside the JSX component tree and was not surfaced at depth ≤ 2.
 > <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
 ## Behavioral Spec
 
-### Command Handler Invocation
+### Handler Entry Point — `setupBedrockHandler`
 
-When the user types `/setup-bedrock` in the CLI shell, the registered `local-jsx` handler is dispatched. The handler performs two sequential operations before yielding control to the React rendering layer.
+The primary handler is the AsyncFunction identified as `OM7` in the bundle, resolved unambiguously via the `module_id → RKq` path in the Arbor symbol graph.
 
 ```
-function setupBedrockCommand(context):
+async function setupBedrockHandler(context):
+
+    // Step 1 — Announce setup start to telemetry
     emitTelemetry("tengu_bedrock_setup_started")
-    component = createElement(BedrockSetupComponent, context.props)
-    return component
-```
 
-Analysis basis: CC v2.1.143 bundle.js:+11221021, +11221057
+    // Step 2 — Construct the Bedrock configuration JSX element
+    element = jsxElementFactory(BedrockSetupComponent, props(context))
 
-### Telemetry Emission
-
-The telemetry event is fired unconditionally at the start of the handler, before any UI is rendered. This ensures setup attempts are tracked even if the user abandons the flow.
-
-```
-function emitSetupTelemetry():
-    fire("tengu_bedrock_setup_started")
-    // No conditional guard; fires on every invocation
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+11221023
-
-### JSX Component Rendering
-
-The command type is `local-jsx`, meaning the return value of the handler is a React element tree that the CLI shell mounts into its terminal UI layer. The `createElement` call at the top of the handler constructs this tree.
-
-```
-function renderBedrockSetupUI(props):
-    element = op.createElement(BedrockSetupComponent, props)
+    // Step 3 — Return the element for rendering in the CLI shell
     return element
-    // Shell is responsible for mounting and unmounting the component
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11221057
+Analysis basis: CC v2.1.132 bundle.js:+10915149 (telemetry call), +10915185 (JSX factory call)
 
-### Numeric Constant
+### Telemetry Emission — `emitTelemetry`
 
-A numeric literal with value `1` is present in the broader bundle context reachable from this command's module.
+At the very start of the handler, before any UI is rendered, a single telemetry event is dispatched. This event signals that a user has initiated the Bedrock reconfiguration flow and is used to measure feature adoption and funnel entry.
 
-Numeric constant: `1` (bundle.js:+56028)
+```
+function emitTelemetry(eventName):
+    // Calls the internal telemetry dispatch helper (identifier: d)
+    // eventName = "tengu_bedrock_setup_started"
+    dispatchAnalyticsEvent(eventName)
+```
 
-> Note: The precise role of this constant within the `/setup-bedrock` flow could not be determined at depth-2 traversal. It may relate to a step index, retry limit, or version flag within the Bedrock setup wizard.
-> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+Analysis basis: CC v2.1.132 bundle.js:+10915151
+
+### JSX Rendering — `buildSetupComponent`
+
+After telemetry fires, the handler delegates all interactive configuration logic to a JSX component rendered inline in the CLI shell. The component is instantiated via the framework's element factory (`Vm.createElement`). The component is responsible for gathering Bedrock-specific configuration from the user (credentials, region, model pins) as described by the command's registered description.
+
+```
+function buildSetupComponent(context):
+    props = derivePropsFromContext(context)
+    return jsxElementFactory(BedrockSetupComponent, props)
+    // jsxElementFactory corresponds to Vm.createElement in the bundle
+```
+
+Analysis basis: CC v2.1.132 bundle.js:+10915185
 
 ---
 
@@ -111,11 +118,11 @@ Numeric constant: `1` (bundle.js:+56028)
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_bedrock_setup_started` — fired unconditionally on every invocation (bundle.js:+11221023) |
+| Telemetry | `tengu_bedrock_setup_started` — fired once at handler entry (bundle.js:+10915151) |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| appState changes | Presumed to occur inside the rendered JSX component (e.g., persisting updated Bedrock credentials/region/model pins); not surfaced at depth ≤ 2 |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Config persistence | Expected (region, auth, model pins) but not confirmed at depth-2 traversal <!-- TODO: needs --depth 4 --> |
+| Filesystem / config writes | Expected (re-configuration of Bedrock auth/region/model); not confirmed at this traversal depth |
 
 ---
 
@@ -123,19 +130,17 @@ Numeric constant: `1` (bundle.js:+56028)
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis — `local-jsx` command registered in module `BJq`; telemetry event `tengu_bedrock_setup_started` confirmed |
+| v2.1.132 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Running `/setup-bedrock` expecting a non-interactive output**: Because this command is of type `local-jsx`, it always renders an interactive terminal UI component. It does not accept inline arguments to silently update settings in a single command invocation.
-
-2. **Assuming the telemetry event indicates completion**: The `tengu_bedrock_setup_started` event fires at the moment of invocation, not upon successful configuration. Abandoning the wizard mid-flow still results in the event being recorded.
-
-3. **Expecting the command to validate existing credentials on its own**: The depth-2 call graph shows no validation call at the handler entry point. Credential validation, if any, is handled inside the rendered JSX component and is not part of the initial dispatch path.
-
-4. **Confusing `/setup-bedrock` with a one-time setup path**: The description explicitly states "Reconfigure", meaning this command is intended for use both during initial setup and for subsequent changes to region, authentication, or model pin settings. It is safe to invoke on an already-configured environment.
+1. **Expecting a text response.** Because `type` is `local-jsx`, the command returns a rendered component, not a prose reply. Scripted consumers that parse stdout text will not receive structured output from this command.
+2. **Assuming the command accepts CLI flags directly.** No argument-driven branching was detected at depth ≤ 2. Any sub-options (e.g., `--region`, `--profile`) are handled inside the JSX component itself and are not pre-validated at the handler level.
+3. **Treating the command as idempotent without side effects.** The command is intended to _mutate_ Bedrock configuration (credentials, region, model pins). Running it unintentionally will launch the interactive wizard and may overwrite existing settings.
+4. **Confusing `/setup-bedrock` with a first-time setup flow.** The description explicitly says "Reconfigure", implying it operates on an existing Bedrock installation. Using it before any Bedrock configuration exists may produce unexpected component state.
+5. **Missing the telemetry event in offline/air-gapped environments.** The `tengu_bedrock_setup_started` event is emitted synchronously at handler entry. In environments where telemetry is blocked, ensure that the event dispatch failure does not halt the handler before the JSX component is returned.
 
 ---
 
@@ -145,5 +150,5 @@ Numeric constant: `1` (bundle.js:+56028)
 
 | Identifier | Role |
 |---|---|
-| `oZ7` | Command handler function for `/setup-bedrock`; entry point that fires telemetry and calls createElement |
-| `d` | Telemetry or utility helper called at the start of the command handler; receives the setup-started event |
+| `OM7` | Primary async handler for `/setup-bedrock`; entry point resolved via `module_id → RKq` (Arbor resolution path: `module_id`) |
+| `d` | Internal telemetry/analytics dispatch helper; called at bundle.js:+10915149 to emit `tengu_bedrock_setup_started` |

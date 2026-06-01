@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "compact"
 cc_version: "2.1.143"
-updated: "2026-05-18"
+updated: "2026-06-01"
 tags: ["compact", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/compact` command reduces context window usage by replacing the current conversation history with a concise AI-generated summary. When invoked, it calls the compaction pipeline (with an optional custom instruction string), then replaces the message history with a `compact_boundary` marker and a synthesized summary, freeing up context for continued work. The command supports both interactive and non-interactive (SDK/CLI pipe) execution modes.
+`/compact` frees up context window space by requesting a summarization of the current conversation and replacing the conversation history with that summary. The command accepts optional custom instructions to guide the summarization, and supports both manual (explicit user invocation) and automatic (reactive, triggered by context pressure) operating modes. After compaction the session state, hooks, and UI are updated to reflect the newly condensed context.
 
 ---
 
@@ -36,6 +36,15 @@ The `/compact` command reduces context window usage by replacing the current con
 | supportsNonInteractive | `true` |
 | thinClientDispatch | `post-text` |
 | module_id | `mKq` |
+| load_inline | `true` |
+| loc_byte | `10132282` |
+| loc_byte_end | `10132595` |
+| loc_line | `5726` |
+| arbor_handler.name | `vz7` |
+| arbor_handler.fqn | `claude-2.1.143::vz7` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
 Analysis basis: CC v2.1.143 bundle.js:+10132282
 
@@ -43,323 +52,303 @@ Analysis basis: CC v2.1.143 bundle.js:+10132282
 
 ## Input Branching
 
-The top-level handler (function `commandHandler`, mangled `vz7`) performs the following decision tree before dispatching the compaction pipeline:
+The handler has 4+ distinct branches: no-messages guard, custom-instructions trim, manual compaction path, and two reactive compaction sub-paths. A Mermaid flowchart is used.
 
 ```mermaid
 flowchart TD
-    A["/compact [instructions] invoked"] --> B{Is conversation\nnon-empty?}
-    B -- "No messages" --> C[Emit error:\n'No messages to compact'\nand abort]
-    B -- "Has messages" --> D{Trim instructions\nargument}
-    D --> E{autoCompactEnabled\nflag present in config?}
-    E -- "No / manual" --> F[Run compaction pipeline\nwith trigger='compact_manual']
-    E -- "Yes / auto" --> G[Run compaction pipeline\nwith trigger='compact_auto']
-    F --> H{Compaction result}
-    G --> H
-    H -- "prompt_too_long" --> I[Emit error:\n'Compaction failed · conversation\ncould not be reduced below\nthe context limit']
-    H -- "media_too_large" --> J[Emit error:\n'Compaction failed · attached\nmedia exceeds size limits']
-    H -- "cancelled / abort" --> K[Emit: 'Compaction canceled.']
-    H -- "success" --> L[Update appState with\ncompactMetadata; emit\n'Compacted N tokens' UI message;\nregister Ctrl+O transcript toggle]
-    H -- "other error" --> M[Emit 'unknown error']
+    A["/compact invoked"] --> B{Message history<br/>non-empty?}
+    B -- "No messages" --> C["Throw / return error:<br/>No messages to compact"]
+    B -- "Has messages" --> D{Custom instructions<br/>argument provided?}
+    D -- "No / empty string" --> E["instructions = undefined"]
+    D -- "Non-empty after trim" --> F["instructions = trimmed arg"]
+    E & F --> G["Call compactionOrchestrator<br/>(Nz7)"]
+    G --> H["Gather system prompt context<br/>(uKq → qG)"]
+    H --> I["Run PreCompact hooks<br/>(lg / j2 → hook runner)"]
+    I --> J{Hook blocks<br/>compaction?}
+    J -- "Blocked" --> K["Emit warning:<br/>compaction-blocked-by-hook<br/>Return immediate warning"]
+    J -- "Not blocked" --> L["Invoke compaction agent<br/>(frH → A6q)"]
+    L --> M{Compaction<br/>mode?}
+    M -- "compact_manual" --> N["Full conversation<br/>compaction path"]
+    M -- "compact_auto /<br/>compact_full" --> O["Reactive / auto<br/>compaction path"]
+    N & O --> P{API call result}
+    P -- "Error: prompt_too_long" --> Q["Retry: strip media<br/>(compact_ptl_retry)"]
+    P -- "Error: media_too_large" --> R["Retry stripped;<br/>if unstrippable → fail"]
+    P -- "No summary text" --> S["Emit compact_no_summary;<br/>surface failure message"]
+    P -- "Success" --> T["Replace conversation<br/>with summary (sn)"]
+    T --> U["Reset session state,<br/>flush caches, clear hooks"]
+    U --> V["Update UI transcript<br/>(xKq → toggleTranscript)"]
+    V --> W["Emit compact_end<br/>telemetry; show user<br/>'Compacted N messages'"]
+    Q --> P
+    R --> P
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10131366 (entry), +10131391 (empty-check), +10131397 (no-messages literal), +10131429 (trim), +10131495 (pipeline dispatch), +10131559 (state update), +10129509 (prompt_too_long message), +10129632 (media_too_large message), +10131902 (cancellation message)
+Analysis basis: CC v2.1.143 bundle.js:+10131366, +10131391, +10131429, +10131495, +10131559, +10131622, +10131694, +10131860
 
 ---
 
 ## Behavioral Spec
 
-### 1. Entry Point: Command Handler
+### 1. Entry Guard — Empty History Check
 
 ```
-function commandHandler(userArgs, context):
-    // Validate there is something to compact
-    messageList = context.getMessages()
-    if messageList is empty:
-        throw Error("No messages to compact")   // loc +10131397
-
-    instructions = userArgs.trim()              // loc +10131429
-
-    // Determine trigger type
-    trigger = "compact_manual"                  // loc +9559224
-    if context.config.autoCompactEnabled:       // loc +9578699
-        trigger = "compact_auto"                // loc +9559209
-
-    // Execute the compaction pipeline
-    result = await runCompactionPipeline(instructions, trigger, context)
-
-    // Handle pipeline outcome
-    handleCompactionResult(result, context)
+async function compactCommandHandler(args, context):
+    messages = getMessageHistory(context)  // T3 → t$7
+    if messages is empty:
+        throw Error("No messages to compact")
+    customInstructions = args.trim()       // H.trim at +10131429
+    if customInstructions == "":
+        customInstructions = undefined
+    return compactionOrchestrator(context, customInstructions)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10131366
+Analysis basis: CC v2.1.143 bundle.js:+10131391 (Error), +10131397 (literal "No messages to compact"), +10131429 (H.trim)
 
 ---
 
-### 2. Compact Boundary Insertion
+### 2. Compaction Orchestrator (compactionOrchestrator / `Nz7`)
 
-Before the summary is built, the message-list helper (function `insertCompactBoundary`, mangled `T3`) slices the conversation and inserts a synthetic boundary marker.
-
-```
-function insertCompactBoundary(messages):
-    // Insert role:"system", type:"compact_boundary" sentinel   // loc +9993344
-    // at index 1 (after the first message)                     // loc +9993398, +9993403
-    boundary = { role: "system", type: "compact_boundary" }
-    return [messages[0], boundary, ...messages.slice(1)]        // loc +9993497
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+9993322, +9993344, +9993398, +9993403, +9993497
-
----
-
-### 3. Compaction Pipeline Orchestration
-
-The pipeline function (function `compactionOrchestrator`, mangled `Nz7`) drives the full lifecycle:
+This is the top-level async coordinator, which begins with a `performance.now` timestamp, spawns parallel initialization, and then delegates to the compaction agent runner.
 
 ```
-async function compactionOrchestrator(instructions, trigger, context):
-    startTime = performance.now()               // loc +10128970
+async function compactionOrchestrator(context, customInstructions):
+    startTime = performance.now()           // +10128970
+    progressStatus = "compact_progress"     // +10128833
 
-    // Stage 1: Report progress
-    emit progress("compact_progress")           // loc +10128833
-
-    // Stage 2: Fire PreCompact hooks
-    emit progress("hooks_start")                // loc +10128864
-    hookResult = await runPreCompactHooks(context)  // loc +10128887
-    if hookResult.blocked:
-        return { status: "compaction-blocked-by-hook" }   // loc +9558570
-
-    // Stage 3: Signal SDK status
-    emit sdkStatus("compacting")               // loc +10128949
-
-    // Stage 4: Gather prompt inputs in parallel
-    [agentContext, toolPermCtx] = await Promise.all([
-        buildAgentContext(context),            // loc +10129032
-        buildToolPermissionContext(context),   // loc +10129107
+    // Run PreCompact hook set
+    [systemPromptParts, hookResult] = await Promise.all([
+        buildSystemPromptContext(context),  // uKq
+        runPreCompactHooks(context)         // lg/j2
     ])
 
-    // Stage 5: Stream mode determination
-    emit streamMode("requesting")              // loc +10129189, +10129208
+    if hookResult.blocksCompaction:
+        return { type: "warning",
+                 reason: "compaction-blocked-by-hook" }  // +9558570
 
-    // Stage 6: Run summarization (main API call)
-    emit compactStart("compact_start")         // loc +10129305
-    summary = await runSummarizationAgent(
-        instructions, agentContext, toolPermCtx, trigger
-    )
+    // Emit sdk_status = "compacting"  // +10128949
+    setStreamMode("requesting")         // +10129208
 
-    // Stage 7: On error, classify and surface
-    if summary.error:
-        classifyAndEmitError(summary.error)    // loc +10129438
+    result = await runCompactionAgent(
+        context, systemPromptParts, customInstructions
+    )                                   // frH + A6q
 
-    // Stage 8: Post-compact cleanup and state update
-    await runPostCompactCleanup(context)       // loc +10129894
-    updateAppState("compactMetadata", summary) // loc +10129841
+    if result.error == "prompt_too_long":
+        // tengu_compact_ptl_retry at +9560397
+        result = await retryStrippingMedia(...)
 
-    // Stage 9: Emit final UI notification
-    emit compactEnd("compact_end")             // loc +10130357
-
-    return { status: "success" }               // loc +10130558
+    if result.success:
+        applyCompactedState(context, result.summary)  // sn
+        updateTranscriptUI(context)                    // xKq
+        emitCompactEnd(startTime)                      // +10130357
+        return buildSuccessMessage(result)
+    else:
+        return buildFailureMessage(result.errorKind)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10128970, +10128833, +10128864, +10128887, +10128949, +10129019, +10129107, +10129189, +10129305, +10129438, +10129894, +10129841, +10130357, +10130558
+Analysis basis: CC v2.1.143 bundle.js:+10128970 (performance.now), +10129019 (Promise.all), +10129107 (uKq), +10129133 (xS_), +10129336 (ow_), +10129438 (Error), +10129894 (sn)
 
 ---
 
-### 4. Summarization Agent
+### 3. System-Prompt Context Builder (`uKq`)
 
-The summarization function (function `runSummarizationAgent`, mangled `frH`) constructs the API request and handles the summarization response:
+Assembles the current agent system prompt, app state, and tool permission context to pass as context to the summarization agent.
 
 ```
-async function runSummarizationAgent(instructions, agentCtx, toolPermCtx, trigger):
-    startTime = performance.now()          // loc +9559249
+async function buildSystemPromptContext(context):
+    appState      = context.getAppState()             // H.getAppState +10130830
+    toolPerms     = context.getToolPermissionContext() // +10130908
+    fullPrompt    = buildSystemPrompt(appState, toolPerms)  // Tb
+    [promptParts, kzResult, ewResult] = await Promise.all([...])
+    // +10131163
+    return { appState, toolPerms, fullPrompt, ... }
+```
 
-    // Tool-use is blocked during compaction
-    // Any tool call returns: { decision: "deny",
-    //   reason: "Tool use is not allowed during compaction" }  // loc +9569337, +9569352
+Analysis basis: CC v2.1.143 bundle.js:+10130830, +10130854 (qG), +10130897, +10130908, +10131163
 
-    // The compaction agent system prompt
-    systemPrompt = "You are a helpful AI assistant tasked with summarizing conversations."
-                                           // loc +9571334
+---
 
-    // Build message set: pre-compact sliced messages
-    messages = buildCompactionMessages(agentCtx)  // loc +9560207
+### 4. Pre-Compact Hook Runner (`lg` → `j2`)
 
-    // Emit telemetry for cache prefix
-    emit("tengu_compact_cache_prefix")     // loc +9559944
+Executes all registered `PreCompact` hooks (literal `"PreCompact"` at +12222308) before compaction proceeds, collects their results, and checks for a block signal.
 
-    // Issue the API call
-    response = await issueApiCall(
-        systemPrompt, messages, instructions, trigger
-    )
+```
+async function runPreCompactHooks(context):
+    hookDefs = collectHooksOfType("PreCompact")   // +12222308 "PreCompact"
+    results  = await executeHooks(hookDefs, context)  // j2
+    blocked  = results.some(r => r.decision == "block")
+    return { blocked, results }
+```
 
-    // Handle response
+Analysis basis: CC v2.1.143 bundle.js:+12222308 (literal "PreCompact"), +12222389 (j2 call), +12222480 (K.filter)
+
+---
+
+### 5. Compaction Agent Invocation (`frH` → `A6q`)
+
+`frH` is the compaction session runner. It sets up an ephemeral sub-agent with a restricted permission context (tool use denied during compaction), sends the message history as its prompt, and streams back a text-only summary.
+
+```
+async function runCompactionAgent(context, systemParts, customInstructions):
+    // Classify compaction mode
+    mode = context.isAutoCompact ? "compact_auto" : "compact_manual"
+    // Literal "compact_auto" at +9559209, "compact_manual" at +9559224
+
+    // Build summarizer system prompt
+    // "You are a helpful AI assistant tasked with summarizing conversations."
+    // literal at +9571334
+
+    // Block tool use during compaction
+    // "Tool use is not allowed during compaction" literal at +9569352
+
+    // Determine messages to summarize via eHq
+    messagesToSummarize = sliceMessageWindow(history)  // eHq
+
+    // Emit tengu_compact telemetry (+9562230)
+
+    // Call API via Jhq (the main query loop)
+    response = await queryAPI(summarizationMessages)
+
     if response has no text content:
-        // emit compact_no_summary
-        emit("tengu_compact_failed")       // loc +9572553
-        return { error: "no_summary",
-                 message: "Failed to generate conversation summary - response did not contain valid text content" }
-                                           // loc +9560765
-
-    if response is prompt_too_long:
-        // Retry once with media stripped          // loc +9560357
-        emit("tengu_compact_ptl_retry")
-        response = retryWithoutMedia(messages, instructions)
-        if still fails:
-            return { error: "compact_prompt_too_long" }  // loc +9560357
-
-    if response is api_error:
-        // Log up to 60 chars of error            // loc +9560941
-        emit("tengu_compact_failed")
-        return { error: "compact_api_error" }     // loc +9561003
+        // "compact_no_summary" event at +9560666
+        return { success: false, errorKind: "no_summary",
+                 message: "Failed to generate conversation summary..." }
 
     summaryText = extractText(response)
-
-    // Restore file references into summary
-    await restoreFileReferences(summaryText)      // loc +9561402
-
-    // Emit telemetry for full compact
-    emit("tengu_compact",
-         { trigger: trigger, type: "compact_full" })   // loc +9562230, +9561378
-
-    return { status: "success", summary: summaryText }
+    return { success: true, summary: summaryText, mode }
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+9559249, +9559334, +9559354, +9560207, +9560357, +9560665, +9560765, +9561003, +9561378, +9562230
+Analysis basis: CC v2.1.143 bundle.js:+9559209, +9559224, +9559249 (performance.now), +9559354 (_.getToolPermissionContext), +9559582 (lg/hooks), +9559944 (tengu_compact_cache_prefix), +9560207 (eHq), +9560666 (compact_no_summary), +9561378 (compact_full), +9562230 (tengu_compact)
 
 ---
 
-### 5. Reactive (Auto) Compaction
+### 6. Message Window Slicing (`eHq`)
 
-When `autoCompactEnabled` is set, a separate reactive path (function `reactiveCompactionHandler`, mangled `ow_`) runs automatically as the context window fills:
+Determines which messages from the conversation history to include in the summarization prompt, trimming to fit context limits. Uses `Math.max`, `Math.floor`, `Math.min` to compute offsets and a 20% headroom factor (literal `0.2` at +9558248).
 
 ```
-async function reactiveCompactionHandler(context):
-    startTime = performance.now()          // loc +5476044
+function sliceMessageWindow(history):
+    n       = history.length
+    start   = Math.max(0, Math.floor(n * headroomFactor))
+    end     = n
+    sliced  = history.slice(start, end)     // q.slice at +9558304
+    // Strip attachments not needed for summary (FBH / KTH)
+    return filterAttachmentsForSummary(sliced)
+```
 
-    // Guard: require at least 2 message groups
-    groups = groupMessages(context.messages)
+Analysis basis: CC v2.1.143 bundle.js:+9558078 (H.slice), +9558189 (KZ), +9558217 (Math.max), +9558228 (Math.floor), +9558248 (0.2), +9558259 (Math.min), +9558304 (q.slice)
+
+---
+
+### 7. Post-Compact State Reset (`sn`)
+
+After the summary is obtained, `sn` performs a comprehensive cleanup: resets the conversation message store, flushes caches, clears hook registrations, and signals sub-systems to refresh.
+
+```
+function applyCompactedState(context, summaryText):
+    // Insert summary as new conversation seed
+    replaceConversationWithSummary(context, summaryText)  // T1H
+    // Clear precomputed compact cache
+    // tengu_precomputed_compact_discarded → K98
+
+    // Reset state stores
+    clearLaqCache()          // $98 → lAq.clear  +9876532
+    clearXz6Cache()          // rq1 → Xz6.clear  +5398693
+    clearPwCache()           // rq1 → Pw_.clear  +5398705
+    resetAutonomousLoop()    // bz4.resetAutonomousLoopDelivered +5472860
+    clearHookRegistry()      // tj
+
+    // Emit post_compact_cleanup (+5472751)
+    // Mark session as compacted (post_compact at +5477646)
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+10131622, +5472735 (T1H), +5472745 (K98), +5472798 (F$6), +5472813 (Pn), +5472823 ($98), +5472829 (rq1), +5472835 (CK1), +5472841 (an), +5472860 (bz4.resetAutonomousLoopDelivered), +5472910 (tj)
+
+---
+
+### 8. UI Update after Compact (`xKq`)
+
+Registers a keybinding (`ctrl+o` / `app:toggleTranscript`), displays a dim-formatted count of compacted messages, and joins message summaries for display.
+
+```
+function updateTranscriptUI(context):
+    // Toggle transcript action registered
+    // "app:toggleTranscript" at +10130635
+    // "ctrl+o" keybinding at +10130667
+    // "Global" scope at +10130658
+
+    summaryLine = "Compacted " + messageCount  // +10130774
+    displayLine = M6.dim(summaryLine)          // M6.dim at +10130767
+    K.join(", ")                               // +10130787
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+10130619 (AnH/Zd4), +10130632 (Lj), +10130635, +10130658, +10130667, +10130767, +10130774, +10130787
+
+---
+
+### 9. Reactive / Auto-Compact Path (`ow_` → `aK1`)
+
+When context pressure triggers automatic compaction, `ow_` orchestrates a reactive compact attempt distinct from the manual path. It checks that there are at least 2 message groups (literal `"Reactive compact: fewer than 2 groups, nothing to compact"` at +5448092), computes `compact_reactive` metrics, calls the core compaction routine, and on success emits `tengu_reactive_compact_succeeded`.
+
+```
+async function reactiveCompactOrchestrator(context):
+    // tengu_reactive_compact_attempt at +5448815
+    groups = groupMessages(context.history)   // H98
+
     if groups.length < 2:
-        log("Reactive compact: fewer than 2 groups, nothing to compact")
-                                           // loc +5448092
-        emit status: "too_few_groups"      // loc +5448182
+        // "too_few_groups" at +5448182; return early
+        return { skipped: true, reason: "too_few_groups" }
+
+    result = await performCompaction(groups)  // jz4 → reactive-compact
+
+    if result.failed:
+        // tengu_reactive_compact_failed at +5476293
+        emitFailure(result)
         return
 
-    // Guard: require at least one assistant message
-    if no assistant message in group:
-        log("Reactive compact: no assistant messages in summarize set, bailing")
-                                           // loc +5448654
-        emit status: "exhausted"           // loc +5448756
-        return
-
-    emit("tengu_reactive_compact_attempt") // loc +5448815
-
-    // Run summarization (reuses summarization agent)
-    result = await runReactiveSummarization(context)  // loc +5476108
-
-    if result.error == "media_too_large":
-        log("Reactive compact: summarize hit media-size error, retrying stripped")
-                                           // loc +5449446
-        result = retryWithoutMedia(context)
-        if result.error:
-            emit status: "media_unstrippable"  // loc +5449561
-
-    if result.error:
-        emit("tengu_reactive_compact_failed")  // loc +5476293
-        emit("compact_reactive", { status: result.error })  // loc +5476527
-        return
-
-    // On success
-    emit("tengu_reactive_compact_succeeded")   // loc +5478255
-    emit("compact_reactive", { status: "success" })
-
-    // Fire PostCompact hook
-    await runPostCompactHook(context)          // loc +5477646
-
-    return result
+    // tengu_reactive_compact_succeeded at +5478255
+    applyReactiveCompactedState(context, result)
+    emitPostCompact()   // post_compact at +5477646
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+5476044, +5448092, +5448182, +5448654, +5448815, +5476108, +5449446, +5449561, +5476293, +5476527, +5478255, +5477646
+Analysis basis: CC v2.1.143 bundle.js:+5476014 (Gj), +5476044 (performance.now), +5476108 (H98), +5476211 (m0), +5476291 (d), +5476361 (cD), +5476524 (J8), +5476583 (mH), +5476690 (aK1), +5448092, +5448182, +5448815
 
 ---
 
-### 6. Post-Compact Cleanup
+### 10. Auto-Compact Configuration Check (`T3` → `US_`)
 
-After a successful compaction (function `postCompactCleanup`, mangled `sn`), several state resets occur:
+`T3` → `US_` reads the `autoCompactEnabled` configuration key (literal at +9578699) and converts the string representation (`"auto"`, integers, percentages) to a numeric threshold or boolean.
 
 ```
-function postCompactCleanup(context):
-    emit("post_compact_cleanup")           // loc +5472751
-
-    // Reset precomputed compact if stale
-    discardPrecomputedCompact()            // loc +5456309 (tengu_precomputed_compact_discarded)
-
-    // Clear caches
-    clearLaqCache()                        // loc +9876532
-    clearXz6Cache()                        // loc +5398693
-    clearPwCache()                         // loc +5398705
-
-    // Reset autonomous loop state
-    resetAutonomousLoopDelivered()         // loc +5472860
-
-    // Clear all MCP/tool state
-    clearToolPermissionState()             // loc +5472841, +5472835
-
-    // Signal post-compact to context manager
-    resetContextManager(context)           // loc +5472915
+function readAutoCompactConfig(config):
+    raw = config.autoCompactEnabled    // +9578699
+    if raw == "auto":                  // +9576641
+        return AUTO_THRESHOLD
+    if raw.endsWith("%"):              // +9576670
+        pct = parseFloat(raw)          // +9576688
+        return Math.round(pct * 1000 / 100)  // +9576855
+    parsed = parseInt(raw, 10)         // +9576762
+    if Number.isFinite(parsed):        // +9576808
+        return parsed
+    return DEFAULT
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+5472751, +5472745, +5472798, +5472823, +5472829, +5472835, +5472841, +5472860, +5472915
+Analysis basis: CC v2.1.143 bundle.js:+9993474 (t$7), +9578699 (literal "autoCompactEnabled"), +9576611 (H.trim), +9576641 ("auto"), +9576670 (_.endsWith), +9576688 (parseFloat), +9576762 (parseInt), +9576808 (Number.isFinite), +9576855 (Math.round)
 
 ---
 
-### 7. UI Notification and State Update
+### 11. Compact Boundary Marker (`T3` / `t$7`)
 
-After successful compaction (function `emitCompactionUI`, mangled `xKq`), the UI is updated:
-
-```
-function emitCompactionUI(summary, context):
-    // Dim the transcript view
-    M6.dim(...)                            // loc +10130767
-
-    // Display "Compacted N tokens" message
-    message = "Compacted " + formatTokenCount(summary.tokens)  // loc +10130774
-
-    // Register keyboard shortcut
-    registerAction({
-        id:    "app:toggleTranscript",     // loc +10130635
-        scope: "Global",                   // loc +10130658
-        key:   "ctrl+o",                   // loc +10130667
-    })
-
-    // Join lines for display
-    output = lines.join(...)               // loc +10130787
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+10130635, +10130658, +10130667, +10130767, +10130774, +10130787
-
----
-
-### 8. PreCompact Hook Integration
-
-The compaction pipeline fires a `PreCompact` hook before summarizing:
+A special message type `"compact_boundary"` (literal at +9993344) with role `"system"` (literal at +9993322) is inserted at index 1 or 0 of the message array to mark where old history was truncated. The values `1` and `0` appear at +9993398 and +9993403.
 
 ```
-function runPreCompactHook(context):
-    // Hook type: "PreCompact"              // loc +12222308
-    hookResult = await executeHook("PreCompact", {
-        conversation: context.messages,
-        instructions: context.instructions,
-    })
-    if hookResult.decision == "block":
-        return {
-            blocked: true,
-            reason: "compaction blocked by PreCompact hook",  // loc +9558604
-            type:   "compaction-blocked-by-hook",            // loc +9558570
-        }
-    return { blocked: false }
+function insertCompactBoundaryMarker(messages):
+    marker = { role: "system",           // "system" at +9993322
+               type: "compact_boundary", // "compact_boundary" at +9993344
+               content: summaryText }
+    messages.splice(1, 0, marker)        // index 1 at +9993398, 0 at +9993403
+    return messages
 ```
 
-The companion `PostCompact` hook type (`"PostCompact"`) is also registered and fires after the summary is applied.
-Analysis basis: CC v2.1.143 bundle.js:+12222308, +12252453, +9558570, +9558604
+Analysis basis: CC v2.1.143 bundle.js:+9993322, +9993344, +9993398, +9993403, +9993474, +9993497
 
 ---
 
@@ -367,16 +356,17 @@ Analysis basis: CC v2.1.143 bundle.js:+12222308, +12252453, +9558570, +9558604
 
 | Item | Detail |
 |---|---|
-| Telemetry — compact events | `tengu_compact` (+9562230), `tengu_compact_cache_prefix` (+9559944), `tengu_compact_cache_sharing_success` (+9570142), `tengu_compact_cache_sharing_fallback` (+9570727), `tengu_compact_failed` (+9572553), `tengu_compact_ptl_retry` (+9560397) |
-| Telemetry — reactive compact | `tengu_reactive_compact_attempt` (+5448815), `tengu_reactive_compact_succeeded` (+5478255), `tengu_reactive_compact_failed` (+5476293), `tengu_precomputed_compact_discarded` (+5456309) |
-| Telemetry — post-compact file restore | `tengu_post_compact_file_restore_success` (+9573035), `tengu_post_compact_file_restore_error` (+9573077) |
-| Hook registration | `PreCompact` hook fires before summarization (+12222308); `PostCompact` hook fires after summary is applied (+12252453) |
-| appState changes | `compactMetadata` key updated with summary result (+10129841); context manager and tool-permission state are reset during post-compact cleanup |
-| Keyboard shortcut registered | `app:toggleTranscript` → `ctrl+o` registered in Global scope after successful compaction (+10130635, +10130667) |
-| Cache clears | Internal LRU caches `lAq`, `Xz6`, `Pw_` are cleared (+9876532, +5398693, +5398705) |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Autonomous loop state | `resetAutonomousLoopDelivered` called after compaction (+5472860) |
-| compact_boundary marker | Synthetic `{ role: "system", type: "compact_boundary" }` message inserted at index 1 of the new history (+9993344) |
+| Telemetry — compact core | `tengu_compact` (+9562230), `tengu_compact_cache_prefix` (+9559944), `tengu_compact_cache_sharing_success` (+9570142), `tengu_compact_cache_sharing_fallback` (+9570727), `tengu_compact_failed` (+9572553), `tengu_compact_ptl_retry` (+9560397), `tengu_compact_no_summary` (emitted via `compact_no_summary` literal at +9560666) |
+| Telemetry — reactive compact | `tengu_reactive_compact_attempt` (+5448815), `tengu_reactive_compact_failed` (+5476293), `tengu_reactive_compact_succeeded` (+5478255), `tengu_precomputed_compact_discarded` (+5456309) |
+| Telemetry — OTEL compaction span | `"compaction"` attribute on OTEL span (+4868914), `compact_end` event (+10130357) |
+| Telemetry — other | `tengu_compact_full` literal `compact_full` at +9561378, `compact_reactive` at +5476527, `compact_start` at +10129305, `compact_progress` at +10128833 |
+| Hook registration | `PreCompact` hooks run before compaction via `lg/j2`; `PostCompact` hook type registered (literal `"PostCompact"` at +12252453) runs after successful compaction |
+| appState changes | `getAppState` / `setAppState` called via `Sw_`; conversation message store replaced with summary; `compactMetadata` field written (+10129841); session marked `post_compact` |
+| Context cache resets | `lAq.clear` (+9876532), `Xz6.clear` (+5398693), `Pw_.clear` (+5398705) |
+| Autonomous loop reset | `bz4.resetAutonomousLoopDelivered` (+5472860) |
+| UI keybinding | `ctrl+o` → `app:toggleTranscript` registered in `Global` scope (+10130635, +10130658, +10130667) |
+| Sound | None detected in depth-2 traversal |
+| Stream status | `sdk_status` set to `"compacting"` (+10128949), `stream_mode` set to `"requesting"` (+10129189), `"manual"` mode literal at +10129044 |
 
 ---
 
@@ -390,17 +380,11 @@ Analysis basis: CC v2.1.143 bundle.js:+12222308, +12252453, +9558570, +9558604
 
 ## Common Mistakes
 
-1. **Running `/compact` on an empty session** — The command immediately throws `"No messages to compact"` and exits. There must be at least one existing message before invoking it. Analysis basis: CC v2.1.143 bundle.js:+10131397
-
-2. **Expecting tool calls during compaction** — Any tool-use request issued by the summarization agent is automatically denied with `"Tool use is not allowed during compaction"`. Custom instructions must not rely on tool results. Analysis basis: CC v2.1.143 bundle.js:+9569337, +9569352
-
-3. **Assuming `/compact` preserves the full transcript** — After compaction the conversation history is replaced by the `compact_boundary` marker plus a single summary message. All prior turns are dropped from context. Analysis basis: CC v2.1.143 bundle.js:+9993344
-
-4. **Ignoring the `PreCompact` hook block path** — If a configured `PreCompact` hook returns a block decision, compaction is silently abandoned. The caller receives no summary and the history is unchanged. Analysis basis: CC v2.1.143 bundle.js:+9558570, +9558604
-
-5. **Confusing manual `/compact` with reactive auto-compact** — The reactive path (triggered automatically near the context limit) goes through a separate code route (`ow_` / `reactiveCompactionHandler`) with additional guards on message-group count. Manually invoking `/compact` skips those guards. Analysis basis: CC v2.1.143 bundle.js:+5448092, +5476044
-
-6. **Expecting instant completion in non-interactive mode** — Because `supportsNonInteractive` is `true` and `thinClientDispatch` is `"post-text"`, SDK/pipe callers receive the result only after the full summarization stream completes. Analysis basis: CC v2.1.143 bundle.js:+10132282
+1. **Invoking `/compact` on a fresh session** — The handler guards against an empty message history and immediately errors with "No messages to compact" (bundle.js:+10131397). The command requires at least one prior exchange.
+2. **Expecting tool calls during compaction** — The summarization sub-agent runs with tool use explicitly denied ("Tool use is not allowed during compaction", bundle.js:+9569352). Any hook or agent that expects tool availability will be blocked.
+3. **Assuming `autoCompactEnabled: true` uses a boolean** — The config value is parsed as a threshold percentage or the special string `"auto"` (bundle.js:+9578699, +9576641). Passing a bare `true` is coerced via `parseInt`, which yields `NaN` and falls back to the default threshold.
+4. **Canceling mid-compact and expecting a clean state** — If the user cancels, the message "Compaction canceled." (literal at +10131902) is shown, but the partial state reset in `sn` may not complete; a subsequent manual `/compact` is advisable.
+5. **Providing custom instructions that are only whitespace** — The handler trims the argument (bundle.js:+10131429); a blank or whitespace-only argument is treated identically to providing no instructions.
 
 ---
 
@@ -410,288 +394,279 @@ Analysis basis: CC v2.1.143 bundle.js:+12222308, +12252453, +9558570, +9558604
 
 | Identifier | Role |
 |---|---|
-| `vz7` | Top-level `/compact` command handler |
-| `T3` | Compact-boundary insertion helper |
-| `t$7` | Message-list slicer used by boundary insertion |
-| `UP` | Boundary marker constructor |
-| `MqH` | Compaction config reader / dispatcher |
-| `vz6` | Configuration validation helper |
-| `E_` | General error constructor / emitter |
-| `G6` | Telemetry event emitter |
-| `Ts` | SDK-status broadcaster |
-| `Ci6` | Telemetry deduplication cache helper |
-| `N6` | Structured telemetry payload builder |
-| `yX` | `autoCompactEnabled` config parser |
-| `xH` | String coercion utility |
-| `nG` | Config key normalizer |
-| `wAH` | Config value accessor |
-| `dc` | Model-string classifier |
-| `G1` | Model family resolver |
-| `Fy` | First-party API route selector |
-| `hw` | AWS / Bedrock API route selector |
-| `DAH` | Model token-limit lookup |
-| `Gl6` | Model output-token cap resolver |
-| `Pw` | Compact progress event emitter |
-| `j98` | Compact mode flag reader (`autoCompactEnabled`) |
-| `r0` | Config object accessor |
-| `f7` | Legacy/default config reader |
-| `US_` | Context-percentage parser (`auto` → float) |
-| `Nz7` | Compaction pipeline orchestrator |
-| `KZ` | Message-to-API-format converter |
-| `k47` | Role/type filter for compaction messages |
-| `WFH` | Message role normalizer (`assistant`/`user`) |
-| `Hh_` | Full message serializer (all content types) |
-| `lg` | System-prompt and tool-definition builder |
-| `L4` | System-prompt assembler |
-| `V6` | System-prompt template joiner |
-| `Yy` | System-prompt segment appender |
-| `QX` | Effort-value injector |
-| `sE` | Effort string (`"high"`) mapper |
-| `A` | Effort-value calculator |
-| `QZ` | System-prompt formatter |
-| `S6` | Environment context injector |
-| `j2` | Agent query executor (main API loop) |
-| `bm` | Policy-settings extractor |
-| `v` | Debug-mode flag reader |
-| `_4H` | Error-flag injector |
-| `cQ_` | Hook-type resolver for tool hooks |
-| `GSq` | MCP server list reader |
-| `dQ_` | Hook filter for blocking hooks |
-| `TSq` | Hook execution scheduler |
-| `hH` | JSON serialization helper |
-| `NH` | Structured error logger |
-| `mH` | App-state mutation helper |
-| `cPH` | Cache-prefix hash writer |
-| `SZ` | Request abort/timeout controller |
-| `d6H` | Delta-state updater |
-| `hh` | Hook progress reporter |
-| `g28` | Hook metadata assembler |
-| `QQ_` | MCP tool-result handler |
-| `c28` | JSON-vs-plain-text output detector |
+| `vz7` | Main `/compact` command handler (AsyncFunction; Arbor handler) |
+| `T3` | Message history accessor / compact-boundary inserter |
+| `t$7` | Inner message array helper called by T3 |
+| `UP` | Helper called by t$7 |
+| `MqH` | Auto-compact configuration reader (wraps vz6, yX, Pw, G1, j98) |
+| `vz6` | Inner config read helper (calls E_, G6) |
+| `G6` | Tool permission / session cache helper |
+| `Ts` | Context utility called by G6 |
+| `Ci6` | Cache membership check helper |
+| `N6` | Session/message state node builder |
+| `yX` | Config value parser (parseInt, isNaN, nG, dc, DAH, Gl6) |
+| `nG` | Config token normalizer |
+| `wAH` | String-to-config helper |
+| `dc` | Model config discriminator |
+| `G1` | Model string classifier |
+| `Fy` | Provider type classifier |
+| `hw` | API provider helper |
+| `DAH` | Default config accessor |
+| `Gl6` | Numeric config resolver |
+| `Pw` | Configuration reader |
+| `j98` | Session config aggregator (calls r0, E_, G6, US_) |
+| `r0` | Raw config reader |
+| `f7` | Config field extractor |
+| `US_` | Auto-compact threshold string parser (trim, endsWith, parseFloat, parseInt, Number.isFinite, Math.round) |
+| `Nz7` | Compaction orchestrator (top-level async coordinator) |
+| `KZ` | Token counter / context-size helper |
+| `k47` | Context measurement helper (calls WFH, Hh_) |
+| `WFH` | Context window size calculator |
+| `Hh_` | Message normalizer for token counting |
+| `lg` | PreCompact hook runner + result collector |
+| `L4` | Hook type loader |
+| `j2` | Hook executor / main hook dispatch loop |
+| `bm` | Hook policy accessor |
+| `v` | Message role normalizer |
+| `_4H` | Hook context builder |
+| `cQ_` | Hook definition collector |
+| `dQ_` | Hook filter helper |
 | `gQ_` | HTTP hook executor |
-| `WSq` | Hook output parser |
-| `mLH` | Multi-line log helper |
-| `l28` | Subprocess hook spawner |
-| `SH` | App-state reader |
-| `M` | MCP server manager |
-| `SvH` | MCP server connection runner |
-| `THK` | MCP server update applier |
-| `B95` | MCP client pool manager |
-| `uKq` | Pre-compaction context collector |
-| `qG` | System-prompt construction dispatcher |
-| `Ad_` | Locale-string formatter |
-| `yz8` | Object-value system-prompt mapper |
-| `R_` | Memory-prompt loader |
-| `fd_` | Environment-info builder |
-| `CU7` | Environment-info dispatcher |
-| `QO6` | Output-style system-prompt injector |
-| `qU7` | Output-style resolver |
-| `jU7` | Context-management prompt builder |
-| `K56` | Memory-file loader (`CLAUDE.md` etc.) |
-| `ZU7` | Working-directory context builder |
-| `EU7` | Additional-workspace context builder |
-| `IU7` | Scratchpad context builder |
-| `vU7` | Fast-mode context builder |
-| `yU7` | Brief-mode flag reader |
-| `RU7` | Context-management mode resolver |
-| `WU7` | Raw environment-variable injector |
-| `NK1` | GrowthBook feature-flag loader |
-| `OU7` | Context-hint builder |
-| `zU7` | Worktree-isolation context builder |
-| `YU7` | Worktree environment-info helper |
-| `DU7` | Deferred-tool context builder |
-| `PU7` | MCP-instruction context builder |
-| `VV9` | Auto-memory context builder |
-| `FMH` | Provider-route context injector |
-| `Tb` | System-prompt getter / main-thread guard |
-| `HK` | Main-thread system-prompt accessor |
-| `_J` | Subagent system-prompt accessor |
-| `wY8` | Message normalizer for wire format |
-| `xS_` | Model-context-window validator |
-| `ow_` | Reactive-compaction entry point |
-| `Gj` | Context-usage snapshot reader |
-| `zOH` | Token-usage cache accessor |
-| `Pr9` | Context-capacity evaluator |
-| `c$6` | Compact-trigger threshold reader |
-| `H98` | Reactive-summarization batch runner |
-| `hQH` | Message batch assembler |
-| `vK1` | Token-count estimator (math) |
-| `jz4` | Single reactive-compact API caller |
-| `Pz4` | Per-group token estimator |
-| `m0` | Model + effort resolver for compact |
-| `cD` | API-error classifier |
-| `J8` | App-state delta applicator |
-| `aK1` | Full reactive-compact lifecycle manager |
-| `T1H` | Post-compact session-start emitter |
-| `U$6` | Header-entry builder |
-| `UTH` | Cache-control header builder |
-| `Xg` | Compact-request header assembler |
-| `Z$6` | Cache-checkpoint header accessor |
-| `ASH` | Anti-caching header stripper |
-| `FQH` | Context-cache key builder |
+| `WSq` | Hook output parser (prefix-style) |
+| `c28` | Hook JSON output parser |
+| `QQ_` | MCP hook executor |
+| `l28` | Shell hook executor |
+| `SZ` | Abort controller helper for hooks |
+| `g28` | Hook cleanup helper |
+| `mLH` | Hook metadata logger |
+| `NH` | Error logger |
+| `mH` | App state message writer |
+| `cPH` | Completion push helper |
+| `hh` | Hook event emitter |
+| `d6H` | Hook duration recorder |
+| `SH` | Session state accessor |
+| `SvH` | MCP server update helper |
+| `THK` | MCP client update applier |
+| `B95` | MCP connection manager |
+| `uKq` | System-prompt context builder (getAppState, getToolPermissionContext, Tb) |
+| `qG` | Full system prompt assembler |
+| `Ad_` | System prompt header builder |
+| `yz8` | Object-value prompt serializer |
+| `R_` | Prompt section renderer |
+| `_U7` | Style prompt section builder |
+| `AU7` | Agent prompt section builder |
+| `fd_` | Environment prompt section builder |
+| `CU7` | CWD-change prompt builder |
+| `QO6` | Context-window auto-compact prompt builder |
+| `qU7` | Auto-compact prompt injector |
+| `jU7` | Memory/context scheduling prompt builder |
+| `K56` | Memory file loader and prompt builder |
+| `ZU7` | Environment info (simple) builder |
+| `EU7` | Environment info (full) builder |
+| `fU7` | Language section builder |
+| `MU7` | Output style section builder |
+| `IU7` | Background session section builder |
+| `vU7` | Worktree isolation section builder |
+| `NU7` | Scratchpad section builder |
+| `yU7` | Brief mode section builder |
+| `RU7` | Focus/compact mode section builder |
+| `WU7` | Session-level system prompt builder |
+| `NK1` | CLAUDE.md / memory file loader |
+| `VV9` | Memory prompt combiner |
+| `FMH` | Flags/feature helper |
+| `Tb` | Agent system-prompt builder (getSystemPrompt) |
+| `HK` | System prompt cache |
+| `_J` | System prompt template builder |
+| `wY8` | Message content normalizer |
+| `xS_` | Stream state initializer |
+| `ow_` | Reactive compact orchestrator |
+| `Gj` | Cache context helper |
+| `zOH` | Cache membership checker |
+| `Pr9` | Cache prefix builder |
+| `c$6` | Cache slot helper |
+| `H98` | Message group splitter for reactive compact |
+| `hQH` | Message group push helper |
+| `vK1` | Group size calculator (Math.max, Math.floor) |
+| `jz4` | Core reactive compaction executor |
+| `Pz4` | Group size recalculator |
+| `m0` | Effort + context parameter builder |
+| `cD` | Compaction diagnostics helper |
+| `J8` | Session state writer |
+| `aK1` | Post-compaction state applier (main reactive compact finisher) |
+| `T1H` | Conversation replace helper |
+| `U$6` | Object-from-entries helper |
+| `UTH` | UUID token tracker |
+| `Xg` | Attachment reference builder |
+| `Z$6` | Cache map helper |
+| `ASH` | Async state helper |
+| `FQH` | Context-limit helper |
 | `Nz6` | UUID generator wrapper |
-| `Xe` | Telemetry event batcher |
-| `mz4` | Parallel summarization runner |
-| `XzH` | Prompt + messages assembler for API |
-| `aw_` | Latest-cache-entry accessor |
-| `SA8` | Round-duration metric helper |
-| `yA8` | Token-count by-message-type tabulator |
-| `sn` | Post-compact cleanup orchestrator |
-| `K98` | Precomputed-compact state reader |
-| `q98` | Precomputed-compact slot getter |
-| `mK1` | Precomputed-compact metrics emitter |
-| `F$6` | Compact-transcript formatter |
-| `XT` | Transcript segment builder |
-| `Pn` | Post-compact plugin-hook runner |
-| `Pe` | Hook-type dispatcher (DI8/EI8) |
-| `EI8` | Hook event type validator |
-| `rq1` | Tool-whitelist cache resetter |
-| `CK1` | Tool-permission set resetter |
-| `an` | Permission-context resetter |
-| `tj` | Output-token counter resetter |
-| `iw_` | In-progress cleanup helper |
-| `CTH` | App-state `setState` caller |
-| `xKq` | UI-notification emitter (compact complete) |
-| `AnH` | Agent-model configuration reader |
-| `Zd4` | Model alias resolver |
-| `Lj` | Keyboard-shortcut registrar |
-| `ma6` | Action registry getter |
-| `pa6` | Key-binding helper |
-| `XOH` | OTEL metric emitter |
-| `OL` | OTEL event builder |
-| `dFH` | OTEL resource attribute builder |
-| `pt` | Progress-state updater |
-| `Yi9` | `setState` helper for progress |
-| `frH` | Summarization-agent driver (manual compact) |
-| `kQH` | Compact-mode flag reader |
-| `tA8` | Input-text trimmer |
-| `w8` | New UUID + abort-controller factory |
-| `A6q` | Core agent query runner (streaming) |
-| `XZ` | Agent-turn loop |
-| `Sw_` | Tool-permission context builder for agent |
-| `pm` | Random-bytes session-ID generator |
-| `iC` | Turn-result classifier |
-| `Dz4` | Turn-result payload builder |
-| `fqH` | Max-output-tokens calculator |
-| `BMH` | Per-model output-token limit table |
-| `gt` | Token-cap validator |
-| `ZT` | Last-assistant-message finder |
-| `rS` | Content-block array normalizer |
-| `pX6` | Tool-selection and tool-search runner |
-| `qZH` | Tool-name lowercaser / classifier |
-| `sIH` | Built-in-tool presence checker |
-| `iS_` | Tool-type router |
-| `G47` | Deferred-tool resolver |
-| `Cw_` | Content-block flattener |
-| `eA8` | Attachment normalizer |
-| `dL7` | File-reference filter |
-| `cL7` | Message content serializer |
-| `bS_` | Recursive content serializer |
-| `sHq` | Surrogate-pair splitter |
-| `viH` | Full agent-query pipeline |
-| `aS_` | Query setup helper |
-| `Jhq` | Streaming API call handler |
-| `i0` | Message-history builder |
-| `E$7` | Thinking-block injector |
-| `iR_` | Image reference remover |
-| `k$7` | Loading-state message builder |
-| `N$7` | Content-type serializer |
-| `y$7` | Tool-result presence checker |
-| `N` | Away-summary generator |
-| `WD8` | Orphaned-thinking detector |
-| `p$7` | Request-ID generator |
-| `NW` | Network-error classifier |
-| `rZ_` | Rate-limit back-off helper |
-| `GD8` | Tool-deferred payload builder |
-| `tS` | Tool-name formatter for search |
-| `sR_` | Tool-result array builder |
-| `Z$7` | Tool-result has-content checker |
-| `T` | Remote-control state reader |
-| `V$7` | Thinking-block has-signature checker |
-| `XL` | Tool-list filter (allowed/denied) |
-| `D1q` | Deferred-tool list splitter |
-| `h$7` | Tool-input validator |
-| `Y` | Output writer (supervisor) |
-| `o9q` | Token push helper |
-| `U$7` | MCP tool-schema builder |
-| `W` | Streaming event batcher |
-| `S$7` | Deferred-tool payload builder |
-| `wJ6` | Orphaned-thinking filter |
-| `H37` | First-message-content extractor |
-| `DJ6` | Duplicate-message deduplicator |
-| `_37` | Message slice helper |
-| `R$7` | Trailing-whitespace-only message remover |
-| `r9q` | Message history finalizer |
-| `a9q` | Tool-result appender |
-| `v$7` | Image block validator |
-| `eHq` | Context-slice builder for compact |
-| `FBH` | Media-size error detector |
-| `KTH` | Token-overage detector |
-| `Cf_` | Token-count parser from error text |
-| `$m` | File-path prefix detector |
-| `z98` | File-reference attachment normalizer |
-| `lL7` | At-mention file loader |
-| `qr6` | `@`-prefix detector |
-| `H9` | File-path validator and resolver |
+| `Xe` | Tool deferred-set helper |
+| `mz4` | Multi-part compact result aggregator |
+| `XzH` | Prompt assembly helper (L4, j2) |
+| `aw_` | Away-summary helper |
+| `SA8` | Token rounding helper |
+| `yA8` | Message metrics reporter |
+| `sn` | Post-compact state reset and cleanup |
+| `K98` | Precomputed compact cache invalidator |
+| `mK1` | Cache entry reaper |
+| `F$6` | XT cleanup helper |
+| `XT` | Cache store cleanser |
+| `Pn` | Sub-state purge helper |
+| `Pe` | Permission entry cleaner |
+| `DI8` | DI store cleaner |
+| `EI8` | EI store cleaner |
+| `$98` | lAq cache clearer |
+| `rq1` | Xz6+Pw_ cache clearer |
+| `CK1` | Conversation message store clearer |
+| `an` | Message array flusher |
+| `tj` | Output-token counter reset |
+| `iw_` | Post-cleanup callback runner |
+| `CTH` | V$6 setState caller (state update finalizer) |
+| `xKq` | UI transcript toggle + compact summary display |
+| `AnH` | Keyboard shortcut registrar |
+| `Zd4` | Action-registry updater |
+| `Lj` | Keybinding registry adder |
+| `XOH` | OTEL metrics emitter for compaction span |
+| `OL` | OTEL event emitter |
+| `dFH` | OTEL attribute builder |
+| `pt` | Yi9 state setter caller |
+| `Yi9` | V$6.setState caller for post-compact display |
+| `frH` | Compaction session runner (manual + auto) |
+| `kQH` | Compact cache-hit checker |
+| `tA8` | Message text trimmer |
+| `w8` | Session UUID + message builder |
+| `A6q` | Compaction agent query loop |
+| `$o1` | Cache-lookup helper |
+| `UiH` | Cache get/set wrapper |
+| `Mo1` | Cache miss handler |
+| `XZ` | Agent turn executor |
+| `Sw_` | App-state reader/writer for agent turns |
+| `pm` | Random bytes generator |
+| `je` | Context-limit loader |
+| `iC` | Turn completion handler |
+| `nA8` | Abort-check helper |
+| `JzH` | Turn metadata writer |
+| `sA8` | Turn state setter |
+| `Dz4` | Turn data aggregator |
+| `bw_` | Backoff / wait helper |
+| `fqH` | Output token cap reader (BMH + gt) |
+| `BMH` | Max-token model table lookup |
+| `gt` | Token parse/validate helper |
+| `ZT` | Last-message finder |
+| `rS` | Array-type check helper |
+| `pX6` | Tool search mode decision |
+| `H_` | Identity/env helper |
+| `qZH` | Model name lowercaser |
+| `sIH` | Tool search enablement check |
+| `iS_` | Tool search index helper |
+| `G47` | Tool search group builder |
+| `Cw_` | Message content flattener |
+| `eA8` | Effort accessor |
+| `dL7` | Deferred-tool filter |
+| `cL7` | Content block mapper |
+| `bS_` | Block serializer |
+| `sHq` | Surrogate-pair aware char helper |
+| `viH` | Compaction query builder (aS_ + Jhq) |
+| `aS_` | Summarization request assembler |
+| `Jhq` | Main API query driver (the full streaming query loop) |
+| `i0` | Message normalization pipeline |
+| `E$7` | Message expansion helper |
+| `k$7` | Message kind discriminator |
+| `N$7` | Null/empty content normalizer |
+| `y$7` | Thinking-block detector |
+| `WD8` | Orphan-thinking filter |
+| `p$7` | UUID stamper for messages |
+| `NW` | Text content extractor |
+| `GD8` | TD8/s9q tool-use normalizer |
+| `tS` | Tool-search content transformer |
+| `sR_` | Recursive message serializer |
+| `Z$7` | Tool-result content serializer |
+| `V$7` | Content-block array checker |
+| `D1q` | Delta message builder |
+| `h$7` | Media-type filter |
+| `o9q` | Content push helper |
+| `U$7` | Text chunk joiner |
+| `S$7` | Tool-use summary writer |
+| `wJ6` | Thinking-block orphan filter |
+| `H37` | Message head/tail splitter |
+| `DJ6` | Tool-use dedup filter |
+| `_37` | Array slice helper |
+| `R$7` | Message re-sequencer |
+| `r9q` | Message role partitioner |
+| `a9q` | Message push helper |
+| `v$7` | Full-content slice helper |
+| `eHq` | Summarization window slicer |
+| `FBH` | Attachment type checker |
+| `KTH` | Array-some helper for attachment types |
+| `Cf_` | Attachment token-size parser |
+| `$m` | Content-block prefix checker |
+| `z98` | File-attachment context builder |
+| `lL7` | File permission collector |
+| `qr6` | Permission prefix checker |
+| `H9` | Path normalizer (home-dir expand, normalize) |
 | `iL7` | At-mention attachment builder |
-| `mT` | File read and encoding helper |
-| `J0H` | `CLAUDE.md` memory-file reader |
-| `ky_` | Tool-call runner (read/execute) |
-| `DrH` | Tool permission validator |
-| `OpH` | Tool-name prefix stripper |
-| `x6` | Path join helper |
-| `Z17` | File read with token estimate |
-| `hI` | OTEL at-mention metric emitter |
-| `qXH` | Line-count estimator |
-| `H7` | Index-of helper |
-| `L9` | UUID v4 generator |
-| `V5` | Math.round wrapper |
-| `J98` | Local-agent task context builder |
-| `S$` | Task-list formatter |
-| `AiH` | Task-join helper |
-| `Y98` | Plan-file reference builder |
-| `uT` | File content type tagger |
-| `w98` | Tool-permission context for compact |
-| `D98` | Permission-set snapshot builder |
-| `nL7` | Token-slice helper |
-| `PzH` | Tool-search pool builder |
-| `Sy_` | Tool-pool diff tracker |
-| `UQH` | Tool-list builder with permission context |
-| `OD_` | Tool-schema builder |
-| `Sq` | String cast helper |
-| `ZnH` | Tool-allowance cache manager |
-| `HLH` | JD8 flatMap tool helper |
-| `zO6` | Disallowed-tool filter |
-| `O_8` | Case-insensitive tool-name matcher |
-| `$D_` | Formatted tool-list renderer |
-| `lM4` | Tool-list join helper |
-| `fq` | Hook-runner (command/MCP) |
-| `Cl8` | Shell hook executor |
-| `Rl8` | Shell hook result parser |
-| `Uw` | Hook environment builder |
-| `BQH` | MCP tool-call hook runner |
-| `l91` | MCP permission tracker |
-| `um` | Plugin hook loader and runner |
-| `TK` | String table lookup |
-| `aY` | Policy-type classifier |
-| `I8` | Permission policy resolver |
-| `nFH` | Plugin permission injector |
-| `sRH` | Structured log appender |
-| `T8` | File log writer |
-| `Jz6` | Full agent-loop entry (with hooks) |
-| `L2` | Agent main loop (with hook callbacks) |
-| `g5` | System-prompt renderer |
-| `CU` | Prompt-section builder |
-| `GV` | Template literal helper |
-| `__` | Markdown separator renderer |
-| `ZP` | CLI/remote context switch |
-| `$F` | CLI context builder |
+| `mT` | Path-relative formatter |
+| `J0H` | CLAUDE.md entry builder |
+| `ky_` | File-read attachment builder |
+| `DrH` | Read-result wrapper |
+| `_R6` | Path validator |
+| `OpH` | Path operator checker |
+| `Z17` | File content slicer with token cap |
+| `hI` | File render helper |
+| `qXH` | Token count floorer |
+| `H7` | String index helper |
+| `L9` | Request UUID generator |
+| `V5` | Token round helper |
+| `J98` | Local-agent attachment builder |
+| `S$` | Task attachment builder |
+| `AiH` | Task row formatter |
+| `Y98` | Plan-file attachment builder |
+| `uT` | Plan entry formatter |
+| `w98` | Tool-permission attachment builder |
+| `D98` | Deferred-tool attachment builder |
+| `MI8` | Deferred-tool map setter |
+| `nL7` | Tool slice helper |
+| `PzH` | Tool permission context serializer |
+| `Sy_` | Tool permission set builder |
+| `UQH` | Tool permission list builder |
+| `OD_` | Permission entry formatter |
+| `Sq` | String coercer |
+| `ZnH` | Tool filter helper |
+| `HLH` | JD8 flat-map helper |
+| `zO6` | Tool name filter |
+| `O_8` | Case-insensitive tool name matcher |
+| `$D_` | lM4 permission formatter |
+| `lM4` | Permission join builder |
+| `fq` | Hook permission context builder |
+| `Uw` | Hook context assembler |
+| `BQH` | Permission-boundary tool push helper |
+| `l91` | Permission delta tracker |
+| `um` | Plugin hook loader |
+| `aY` | I8/_A hook type loader |
+| `I8` | jC6/WB hook resolver |
+| `nFH` | Plugin hook entry builder |
+| `sRH` | Hook timing logger |
+| `T8` | File append logger |
+| `Jz6` | Sub-agent conversation runner (L4, L2) |
+| `L2` | Sub-agent main loop |
+| `g5` | Context efficiency formatter |
+| `CU` | Efficiency helper (GV) |
+| `__` | Efficiency join helper |
+| `ZP` | $F/Sq/xH/G6 context assembler |
+| `$F` | Prompt prefix builder |
 | `a76` | REPL context accessor |
-| `Ez6` | REPL expansion preprocessor |
-| `Jz4` | REPL expansion parser |
-| `Wn` | Token-usage snapshot updater |
-| `_6q` | Compact-failure renderer |
-| `XH` | String coercion (String cast) |
-| `tN` | Error-history circular buffer |
-| `uc9` | Error-cache getter/setter |
-| `FS_` | Compact-mode string constant accessor |
+| `Ez6` | Expression expander (Jz4) |
+| `Jz4` | Expression normalizer (replace/match/trim) |
+| `Wn` | Cache slot writer |
+| `_6q` | Final result formatter |
+| `XH` | String coercion wrapper |
+| `tN` | Result cache (E_, uc9) |
+| `uc9` | LRU cache get/set |
+| `FS_` | xH-based formatting helper |
+| `hH` | JSON.stringify wrapper |
+| `id` | Identity function |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

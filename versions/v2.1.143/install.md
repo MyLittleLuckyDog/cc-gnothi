@@ -2,11 +2,12 @@
 type: feature-spec
 feature: "install"
 cc_version: "2.1.143"
+updated: "2026-06-01"
 tags: ["install", "commands", "slash-commands"]
-updated: "2026-05-18"
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -14,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/install`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/install` slash command triggers the installation of a Claude Code native build onto the host system. It accepts an optional options argument and is registered as a local JSX command, meaning its output is rendered through the JSX UI layer rather than as plain text. Based on its description and registration metadata, this command is the primary entry point for native-build provisioning within the Claude Code CLI.
+The `/install` command triggers installation of the Claude Code native build from within the CLI REPL session. It is registered as a `local-jsx` command, meaning its UI surface is rendered as a JSX component rather than a plain text response. The command accepts optional flags via its `[options]` argument hint.
 
 ---
 
@@ -31,35 +32,41 @@ The `/install` slash command triggers the installation of a Claude Code native b
 |---|---|
 | type | `local-jsx` |
 | name | `install` |
-| description | Install Claude Code native build |
+| description | `Install Claude Code native build` |
 | argumentHint | `[options]` |
+| handler (arbor) | `call` (Method, resolved via `direct` path) |
+| arbor fqn | `claude-2.1.132::call` |
+| loc_byte | `12200298` |
+| loc_byte_end | `12200588` |
+| loc_line | `9061` |
+| `arbor_handler.name` | `call` |
+| `arbor_handler.kind` | `Method` |
+| `arbor_handler.resolution_path` | `direct` |
+| `arbor_handler.fqn` | `claude-2.1.132::call` |
+| `arbor_handler.n_hits` | `1` |
 
-Analysis basis: CC v2.1.143 bundle.js:+12535702
+Analysis basis: CC v2.1.132 bundle.js:+12200298 – +12200588
 
 ---
 
 ## Input Branching
 
-> **⚠ Depth-2 traversal limitation**: The AST extraction returned an empty `callGraph`, empty `literals`, and empty `telemetry` array, with the note `"no entry functions found for module 'undefined'"`. This indicates the implementation module was not resolved during traversal. The branching logic below is therefore derived solely from the registration metadata (`argumentHint: "[options]"`) and the command type (`local-jsx`).
+The AST traversal at depth ≤ 2 did not recover call-graph edges or string literals for this command. The handler (`call`, resolved directly within the registration byte range `+12200298`–`+12200588`) appears to be a self-contained inline method on the registration object.
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-Based on the available registration data, the command accepts an optional `[options]` argument. The minimal branching model implied by the metadata is:
+Based on the registration shape, the following high-level branching is inferred from the `[options]` argument hint and the `local-jsx` render type:
 
 ```mermaid
 flowchart TD
-    A([User invokes /install]) --> B{Options argument present?}
-    B -- "No argument" --> C[Run install with defaults]
-    B -- "Argument provided" --> D[Parse options string]
-    D --> E{Valid option token?}
-    E -- "Valid" --> F[Run install with parsed options]
-    E -- "Invalid / unrecognized" --> G[Render error or usage hint via JSX]
-    C --> H[Render install progress/result via JSX]
-    F --> H
+    A([User types /install]) --> B{Arguments provided?}
+    B -- "No args" --> C[Run default native-build install]
+    B -- "One or more options" --> D[Parse option flags]
+    D --> E[Apply options to install routine]
+    E --> C
+    C --> F[Render JSX result component]
+    F --> G([Display install outcome to user])
 ```
 
-> All paths above are inferred from registration fields only.
-> Analysis basis: CC v2.1.143 bundle.js:+12535702
+Analysis basis: CC v2.1.132 bundle.js:+12200298
 
 ---
 
@@ -67,62 +74,30 @@ flowchart TD
 
 ### Command Dispatch
 
-Because the command type is `local-jsx`, the CLI renders its output using the JSX rendering pipeline rather than emitting raw terminal text. The high-level dispatch flow is:
+Because the `call` handler is resolved directly (`resolution_path: direct`) inside the registration object's byte span, no separate module export or `load_ident` wrapper is involved. The REPL dispatches the command synchronously to the inline `call` method.
 
 ```
-function handleInstallCommand(rawInput):
-    options = parseOptionalArgument(rawInput)  // may be empty/null
-    result  = invokeNativeBuildInstall(options)
-    return renderAsJSX(result)
+function handleInstallCommand(userInput):
+    options = parseOptions(userInput.args)   // "[options]" hint
+    result  = callInlineHandler(options)     // "call" method at +12200298
+    renderJSX(result)                        // local-jsx render path
+    return rendered UI component
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+12535702
+Analysis basis: CC v2.1.132 bundle.js:+12200298
 
-### Argument Parsing
+### Render Path
 
-The `argumentHint` field value `[options]` (square-bracket notation) denotes that the argument is **optional**. When absent, the command is expected to fall back to a default installation path or configuration.
-
-```
-function parseOptionalArgument(rawInput):
-    if rawInput is null or rawInput is empty:
-        return DEFAULT_INSTALL_OPTIONS   // implementation-defined default
-    tokens = split(rawInput, whitespace)
-    return buildOptionsObject(tokens)
-```
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-### Native Build Installation
-
-The exact steps of the native build installation (binary download, path configuration, permission setting, etc.) are not resolvable from the depth-2 traversal data.
+The `local-jsx` type distinguishes this command from `prompt`-type or `local` (plain-text) commands. The return value of the `call` method is a JSX element that the CLI shell mounts into its terminal UI renderer rather than printing raw text.
 
 ```
-function invokeNativeBuildInstall(options):
-    // Step 1: Validate environment preconditions
-    // Step 2: Locate or fetch native build artifact
-    // Step 3: Write artifact to target path
-    // Step 4: Configure system integration (e.g., PATH, shell hooks)
-    // Step 5: Return structured result (success | failure | already-installed)
-    // --- Implementation detail not recoverable at traversal depth 2 ---
+function renderInstallResult(jsxElement):
+    mount(jsxElement, terminalUIRoot)
+    // output is managed by the JSX component lifecycle,
+    // not by a simple console.log
 ```
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-### JSX Output Rendering
-
-As a `local-jsx` command, the result object is passed to the CLI's JSX rendering layer. The rendered output may include progress indicators, success confirmation, or error details depending on the result state.
-
-```
-function renderAsJSX(result):
-    if result.status == "success":
-        return <InstallSuccessView details=result.details />
-    else if result.status == "already-installed":
-        return <AlreadyInstalledView version=result.version />
-    else:
-        return <InstallErrorView message=result.errorMessage />
-```
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+Analysis basis: CC v2.1.132 bundle.js:+12200298
 
 ---
 
@@ -130,12 +105,12 @@ function renderAsJSX(result):
 
 | Item | Detail |
 |---|---|
-| Telemetry | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> No `tengu_*` events were recovered during traversal. |
+| Telemetry | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| File system | Expected side effect: writes native build binary to a target path on the host. Exact path not recoverable at depth 2. |
-| Shell/PATH | Expected side effect: may modify shell configuration or PATH to expose the installed binary. Not confirmed at depth 2. |
+| Filesystem side effects | Expected (native build installation), but specifics not recoverable at depth ≤ 2 |
+| JSX render | Yes — `local-jsx` type mounts a component into the terminal UI |
 
 ---
 
@@ -143,16 +118,16 @@ function renderAsJSX(result):
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis. Command registered at bundle.js:+12535702 (line 9176). |
+| v2.1.132 | Initial analysis — command registered as `local-jsx`, handler `call` resolved directly at bundle offset +12200298 |
 
 ---
 
 ## Common Mistakes
 
-1. **Omitting the options argument when a specific install target is needed** — because the argument is optional, omitting it silently uses defaults; users expecting a custom install path must supply the appropriate option token explicitly.
-2. **Running `/install` in an environment where the native build is already present** — the command may no-op or emit an "already installed" message rather than upgrading; consult version management commands for upgrade flows.
-3. **Expecting plain-text output** — because the command type is `local-jsx`, its output is rendered through the JSX UI layer and may not behave identically to text-only commands in non-interactive or piped contexts.
-4. **Assuming full details from this spec** — the traversal returned an empty call graph, empty literals, and empty telemetry. Behavioral claims beyond registration fields require a deeper traversal (`--depth 4` or higher) for confirmation.
+1. **Expecting plain-text output**: Because `/install` is `local-jsx`, its output is a rendered component. Piping or capturing stdout may not capture the full install feedback.
+2. **Omitting the `[options]` flag review**: The argument hint indicates options are supported; invoking without reviewing available flags may skip configuration steps (e.g., target directory, channel selection).
+3. **Assuming the handler is a separate module**: The `call` handler is inlined directly in the registration object (resolution path `direct`), so looking for a separate exported function in the bundle will not locate it.
+4. **Running `/install` in a non-interactive shell**: The `local-jsx` render path requires the CLI's terminal UI context; non-interactive or piped invocations may fail or produce no visible output.
 
 ---
 
@@ -162,4 +137,6 @@ function renderAsJSX(result):
 
 | Identifier | Role |
 |---|---|
-| *(none recovered)* | The depth-2 AST traversal returned an empty `identifiers` array for this command. No obfuscated identifiers are available to map. Re-run extraction with `--depth 4` targeting the resolved module to populate this table. |
+| `call` | Inline handler method on the `/install` registration object; entry point for the command (arbor fqn: `claude-2.1.132::call`, resolved `direct` at +12200298) |
+
+> **Note on traversal depth**: The AST extraction at depth ≤ 2 returned an empty call graph, empty literals, and empty telemetry for this command. The `call` handler identity is confirmed via Arbor direct resolution, but internal implementation details require `--depth 4` re-extraction to fully document.

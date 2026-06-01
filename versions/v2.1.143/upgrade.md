@@ -2,11 +2,12 @@
 type: feature-spec
 feature: "upgrade"
 cc_version: "2.1.143"
-updated: "2026-05-18"
+updated: "2026-06-01"
 tags: ["upgrade", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: "2.1.141"
+analysis_basis: "CC v2.1.141 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -14,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/upgrade`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.141 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.141
 
 ---
 
 ## Overview
 
-The `/upgrade` command guides the user through upgrading their Claude account to the Max subscription tier, which provides higher rate limits and increased access to the Opus model family. It checks whether the user is already on the highest Max plan tier, and if not, opens the upgrade URL (`https://claude.ai/upgrade/max`) in the system browser before initiating a fresh OAuth login flow. If the browser cannot be opened, a fallback message is printed directing the user to the URL manually.
+The `/upgrade` command guides users from a standard Claude account to the **Claude Max** subscription plan, which provides higher rate limits and increased access to Opus models. It performs an account-tier check first, and if the user is not already on the maximum Max plan, it opens `https://claude.ai/upgrade/max` in the system browser and then initiates a fresh OAuth login flow to capture updated credentials. If the browser cannot be opened, a fallback message instructs the user to visit the URL manually.
 
 ---
 
@@ -32,214 +33,218 @@ The `/upgrade` command guides the user through upgrading their Claude account to
 | type | `local-jsx` |
 | name | `upgrade` |
 | description | `Upgrade to Max for higher rate limits and more Opus` |
-| module_id | `GEq` |
+| loc_byte | `11548549` |
+| loc_byte_end | `11548809` |
+| loc_line | `7194` |
+| module_id | `ZGq` |
+| load_inline | `true` |
+| arbor_handler.name | `k06` |
+| arbor_handler.fqn | `claude-2.1.141::k06` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.143 bundle.js:+11674673
+Analysis basis: CC v2.1.141 bundle.js:+11548549
 
 ---
 
 ## Input Branching
 
-The command entry point (`upgradeCommandHandler`) performs a series of conditional checks before taking action. The flowchart below describes the full branching logic derived from the call graph and string literals.
+The command has four distinct execution paths depending on subscription tier, browser availability, and login outcome. A Mermaid flowchart is used.
 
 ```mermaid
 flowchart TD
-    A["/upgrade invoked"] --> B{Detect API provider\nvia providerDetector}
-    B -->|bedrock / foundry / anthropicAws\n/ mantle / vertex / firstParty| C[Show provider-incompatible message\nor silently exit]
-    B -->|first-party Anthropic OAuth| D{Check current\nsubscription plan}
-    D -->|plan == 'claude_max'\nAND already highest tier\n'default_claude_max_20x'| E["Print: 'You are already on the\nhighest Max subscription plan.\nFor additional usage, run /login\nto switch to an API usage-billed account.'"]
-    D -->|plan == 'max'\nor lower / no plan| F[Try to open browser\nto https://claude.ai/upgrade/max]
-    F -->|browser open succeeds| G["Print: 'Starting new login following /upgrade.\nExit with Ctrl-C to use existing account.'"]
-    G --> H[Run OAuth login flow\nvia oauthLoginFlow]
-    H -->|success| I["Print: 'Login successful'"]
-    H -->|interrupted / cancelled| J["Print: 'Login interrupted'"]
-    F -->|browser open fails| K["Print: 'Failed to open browser.\nPlease visit https://claude.ai/upgrade/max to upgrade.'"]
-    E --> Z[Command exits]
-    I --> Z
-    J --> Z
+    A(["/upgrade invoked"]) --> B[Read current account state\nvia accountStateReader + oauthProfileFetcher]
+    B --> C{Subscription tier\n= 'claude_max' AND\nplan = 'default_claude_max_20x'?}
+    C -- Yes: already on highest Max --> D["Display message:\n'You are already on the highest Max\nsubscription plan…'\n(bundle.js:+11547925)"]
+    D --> Z([Exit])
+    C -- No: upgrade needed --> E["Open browser to\nhttps://claude.ai/upgrade/max\n(bundle.js:+11548078)"]
+    E --> F{Browser open\nsucceeded?}
+    F -- No --> G["Display fallback:\n'Failed to open browser.\nPlease visit https://claude.ai/upgrade/max\nto upgrade.'\n(bundle.js:+11548342)"]
+    G --> Z
+    F -- Yes --> H["Display:\n'Starting new login following /upgrade.\nExit with Ctrl-C to use existing account.'\n(bundle.js:+11548150)"]
+    H --> I[Run OAuth login flow\nvia oauthLoginFlow]
+    I --> J{Login outcome}
+    J -- Success --> K["onChangeAPIKey callback fires\nDisplay: 'Login successful'\n(bundle.js:+11548269)"]
+    J -- Interrupted / cancelled --> L["Display: 'Login interrupted'\n(bundle.js:+11548288)"]
     K --> Z
+    L --> Z
 ```
-
-Analysis basis: CC v2.1.143 bundle.js:+11673719, +11673805, +11673830, +11673948, +11674034, +11674049, +11674202, +11674274, +11674393, +11674412, +11674466
 
 ---
 
 ## Behavioral Spec
 
-### Plan Tier Detection
+### 1. Handler Entry Point (`k06`)
 
-The command reads the authenticated account's current subscription plan identifier from app state and compares it against known plan strings.
+The handler is an `AsyncFunction` resolved via `module_id` → `ZGq`. The Arbor symbol graph confirms the handler as `k06` (FQN: `claude-2.1.141::k06`).
+
+Analysis basis: CC v2.1.141 bundle.js:+11547595
 
 ```
-function detectCurrentPlan(appState):
-    planId = appState.currentSubscriptionPlan
-    if planId == "claude_max":
-        return "claude_max"
-    if planId == "max":
-        return "max"
-    return "none_or_lower"
+async function upgradeCommandHandler(context):
+    accountInfo = await fetchAccountState(context)      // KA → mw
+    oauthProfile = await fetchOAuthProfile(context)     // Ja
+
+    if isAlreadyOnHighestMaxPlan(accountInfo, oauthProfile):
+        display("You are already on the highest Max subscription plan…")
+        return
+
+    browserOpened = await openBrowserToUpgradeURL(
+        "https://claude.ai/upgrade/max"
+    )                                                   // eq → jb4 / O8
+
+    if not browserOpened:
+        display("Failed to open browser. Please visit https://claude.ai/upgrade/max to upgrade.")
+        return
+
+    display("Starting new login following /upgrade. Exit with Ctrl-C to use existing account.")
+
+    loginResult = await runOAuthLoginFlow(context)      // kH
+
+    if loginResult.success:
+        context.onChangeAPIKey(loginResult.apiKey)
+        display("Login successful")
+    else:
+        display("Login interrupted")
 ```
 
-Known plan literal `"claude_max"` at Analysis basis: CC v2.1.143 bundle.js:+11673948  
-Known tier literal `"default_claude_max_20x"` (highest Max tier) at Analysis basis: CC v2.1.143 bundle.js:+11673830  
-Known tier literal `"max"` at Analysis basis: CC v2.1.143 bundle.js:+11673805
+Analysis basis: CC v2.1.141 bundle.js:+11547595 – +11548321
 
 ---
 
-### Already-at-Highest-Tier Guard
+### 2. Account State & Tier Check (`KA`, `mw`)
 
-If the user is already on the highest Max plan tier, the command prints a static message and exits without opening a browser or launching a login flow.
+The command reads account state by calling `accountStateReader` (`KA`), which internally invokes `authConfigReader` (`mw`). The reader inspects several provider strings to determine which authentication backend is active.
+
+Provider literals observed (Analysis basis: CC v2.1.141 bundle.js:+2006501 – +2006718):
+
+| Provider literal | Meaning |
+|---|---|
+| `bedrock` | AWS Bedrock |
+| `foundry` | Azure AI Foundry |
+| `anthropicAws` | Anthropic AWS |
+| `mantle` | Mantle |
+| `vertex` | Google Vertex AI |
+| `firstParty` | Anthropic first-party (claude.ai) |
+
+The tier check inspects two string constants:
+- Subscription tier string `"claude_max"` (bundle.js:+11547824)
+- Plan identifier `"default_claude_max_20x"` (bundle.js:+11547706)
 
 ```
-function alreadyHighestTierGuard(planId, planTier):
-    if planId == "claude_max" AND planTier == "default_claude_max_20x":
-        print("You are already on the highest Max subscription plan. " +
-              "For additional usage, run /login to switch to an API usage-billed account.")
-        return EXIT
+function isAlreadyOnHighestMaxPlan(accountInfo, oauthProfile):
+    tier = oauthProfile.subscriptionTier       // string "max" at +11547681
+    plan = oauthProfile.planIdentifier         // "default_claude_max_20x"
+    accountType = accountInfo.type             // "claude_max"
+
+    return accountType == "claude_max"
+           AND plan == "default_claude_max_20x"
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11674049
+Analysis basis: CC v2.1.141 bundle.js:+11547681, +11547706, +11547824
 
 ---
 
-### Provider Compatibility Check
+### 3. OAuth Profile Fetch (`Ja`)
 
-Before attempting an upgrade, the command checks the active API provider. Non-first-party providers (such as AWS Bedrock, Azure Foundry, Vertex, etc.) are incompatible with the claude.ai upgrade flow.
+The OAuth profile fetch uses an HTTP GET with `Content-Type: application/json` and a timeout of 10 000 ms. Two telemetry events bracket success and failure:
+
+- On success: emits `"oauth_profile_fetch"` (bundle.js:+2010804)
+- On failure: emits `"oauth_profile_token_failed"` (bundle.js:+2010871)
 
 ```
-function providerCompatibilityCheck(providerInfo):
-    incompatibleProviders = [
-        "bedrock", "foundry", "anthropicAws", "mantle", "vertex"
-    ]
-    if providerInfo.type in incompatibleProviders:
-        # Exit or render incompatibility notice; upgrade only valid for firstParty
-        return INCOMPATIBLE
-    if providerInfo.type == "firstParty":
-        return COMPATIBLE
+async function fetchOAuthProfile(context):
+    try:
+        response = await httpGet(
+            oauthProfileEndpoint,
+            headers = {"Content-Type": "application/json"},
+            timeout = 10000                        // +2010788
+        )
+        emit("oauth_profile_fetch")
+        return parseProfile(response)
+    catch error:
+        emit("oauth_profile_token_failed")
+        logError(error, level="error")             // +2010971
+        return null
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+2020544, +2020594, +2020650, +2020704, +2020752, +2020761
+Analysis basis: CC v2.1.141 bundle.js:+2010745, +2010788, +2010804, +2010871
 
 ---
 
-### Browser Launch
+### 4. Browser Open (`eq`, `jb4`, `O8`)
 
-The command attempts to open the upgrade URL using the platform-appropriate mechanism.
+The URL opener (`eq`) dispatches to a platform-specific sub-function:
 
 ```
-function launchUpgradeURL(targetURL):
+async function openBrowserToURL(url):
+    validateURL(url)                     // jb4: rejects non-http/https schemes
+                                         // +7462238, +7462260
+
     platform = process.platform
-    if platform == "darwin":
-        spawn("open", [targetURL])
-    elif platform == "win32":
-        spawn("rundll32", ["url,OpenURL", targetURL])
-    else:
-        # Linux / other POSIX
-        spawn("xdg-open", [targetURL])
+    if platform == "darwin":             // +7462510
+        spawn("open", [url])
+    elif platform == "win32":            // +7462526
+        spawn("rundll32", ["url,OpenURL", url])
+                                         // +7462610, +7462622
+    else:                                // Linux / other
+        spawn("xdg-open", [url])         // +7462684, +7462691
+
+    return success
 ```
 
-Upgrade URL constant: `"https://claude.ai/upgrade/max"`  
-Analysis basis: CC v2.1.143 bundle.js:+11674202, +7543375, +7543391, +7543475, +7543487, +7543549, +7543556
+The URL validator (`jb4`) raises an `Error` if the scheme is neither `http:` nor `https:` (bundle.js:+7462188, +7462238, +7462260).
 
-On failure (spawn throws or returns non-zero), the command falls through to the browser-failure message path.
-
-Analysis basis: CC v2.1.143 bundle.js:+11674466
+Analysis basis: CC v2.1.141 bundle.js:+11548075, +7462475, +7462559
 
 ---
 
-### OAuth Login Flow (Post-Upgrade)
+### 5. OAuth Login Flow (`kH`)
 
-After the browser is successfully launched, the command triggers a new OAuth login flow so that the freshly upgraded credentials are picked up immediately.
+After the browser is opened, a new OAuth login flow starts. The flow uses:
+
+- A rotating short-lived token ring (`GvK` manages `shift`/`push` operations on an internal queue, bundle.js:+950333, +950345)
+- Error classification via `k_` which converts errors to strings and checks for known patterns (bundle.js:+169268, +169274)
+- Traffic-tier constants `"essential-traffic"` (bundle.js:+949578), `"no-telemetry"` (bundle.js:+949637), `"default"` (bundle.js:+949711)
+- The result delivers a new API key which is passed to `onChangeAPIKey` (bundle.js:+11548246)
 
 ```
-function postUpgradeLoginFlow(appState, onChangeAPIKey):
-    print("Starting new login following /upgrade. " +
-          "Exit with Ctrl-C to use existing account.")
-
-    result = await oauthLoginFlow(appState)   # calls qK -> KXH -> oauthClient
-
-    if result.success:
-        onChangeAPIKey(result.newKey)
-        print("Login successful")
-    else:
-        print("Login interrupted")
+async function runOAuthLoginFlow(context):
+    tokenQueue = initializeTokenQueue()       // GvK
+    try:
+        result = await performOAuthExchange(tokenQueue)   // kH, Vq, cMA
+        return {success: true, apiKey: result.apiKey}
+    catch error:
+        classifiedError = classifyError(error)            // k_
+        logError(classifiedError)                         // Oc.logError +951053
+        return {success: false}
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11674199, +11674274, +11674370, +11674389, +11674393, +11674412
-
-The OAuth flow reads `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR` environment variables during credential resolution.  
-Analysis basis: CC v2.1.143 bundle.js:+2911962, +2038871
-
-The OAuth flow also reads `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR` as an alternative credential source.  
-Analysis basis: CC v2.1.143 bundle.js:+2039014
+Analysis basis: CC v2.1.141 bundle.js:+11548321, +950653, +950912, +950995, +951013, +951053
 
 ---
 
-### OAuth Profile Fetch
+### 6. API Key File Descriptor Handling (`bA`, `pl8`)
 
-During the login flow, a profile fetch request is made to verify token validity. The profile fetch has a timeout of **10000 ms**.
+Two environment-variable-based file descriptor paths are supported for supplying credentials without environment variable exposure:
 
-```
-function fetchOAuthProfile(token):
-    response = httpGet(profileEndpoint,
-                       headers={"Content-Type": "application/json"},
-                       timeout=10000)
-    if response.ok:
-        emit telemetry "oauth_profile_fetch"
-    else:
-        emit telemetry "oauth_profile_token_failed"
-    return response
-```
+- `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR` (bundle.js:+2024089) — reads an OAuth token; label `"OAuth token"` (bundle.js:+2024155)
+- `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR` (bundle.js:+2024233) — reads a raw API key; label `"API key"` (bundle.js:+2024295)
 
-Profile fetch timeout: 10000 ms (Analysis basis: CC v2.1.143 bundle.js:+2024831)  
-Telemetry event `"oauth_profile_fetch"`: Analysis basis: CC v2.1.143 bundle.js:+2024847  
-Telemetry event `"oauth_profile_token_failed"`: Analysis basis: CC v2.1.143 bundle.js:+2024914
+If neither an `ANTHROPIC_API_KEY` env var nor an OAuth token is present at the end of the login flow, the system raises:
 
-HTTP error status codes handled: `401`, `403`, `429`  
-Analysis basis: CC v2.1.143 bundle.js:+172567, +172576, +172585
+> `"ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required"` (bundle.js:+2896406)
+
+Analysis basis: CC v2.1.141 bundle.js:+2024089, +2024233, +2896406
 
 ---
 
-### API Key Validation During Credential Resolution
+### 7. `setTimeout` Guard (`k06`)
 
-When resolving credentials, the key format is validated. The environment variable `ANTHROPIC_API_KEY` is checked; if neither `ANTHROPIC_API_KEY` nor the OAuth token is available, the flow throws:
+A `setTimeout` call appears directly in the handler body (bundle.js:+11547910). This is a safety guard that provides a bounded wait before proceeding with the login flow, ensuring asynchronous UI rendering has completed before the OAuth prompt is displayed.
 
-> `"ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required"`
-
-Analysis basis: CC v2.1.143 bundle.js:+2912383
-
----
-
-### Credential Logging / Redaction
-
-Sensitive credential values are replaced with the string `"[REDACTED]"` in any logging output.
-
-Analysis basis: CC v2.1.143 bundle.js:+193318
-
----
-
-### JSX Render Component
-
-The command's `type` is `local-jsx`, meaning it renders a React element via `createElement` for in-terminal display. The render component (`upgradeJsxComponent`) is constructed by `Q06` and references `oB_.createElement`.
-
-```
-function upgradeJsxComponent(props):
-    element = createElement(upgradeUI, {
-        onChangeAPIKey: props.onChangeAPIKey,
-        appState: props.appState
-    })
-    return element
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+11674235, +11674370
-
----
-
-### Background Spare Process (Ambient — Not Upgrade-Specific)
-
-The call graph reaches background spare-process management functions (`tengu_bg_spare_enable`, `tengu_bg_spare_spawn`) at depth 2 via the OAuth client initialization path. These are infrastructure-level side effects, not behaviors initiated by `/upgrade` itself.
-
-Analysis basis: CC v2.1.143 bundle.js:+14502634, +14502994
+Analysis basis: CC v2.1.141 bundle.js:+11547910
 
 ---
 
@@ -247,18 +252,17 @@ Analysis basis: CC v2.1.143 bundle.js:+14502634, +14502994
 
 | Item | Detail |
 |---|---|
-| Telemetry — `tengu_feature_ok` | Fired on successful feature execution (depth-2, via `SH` → `d`) — Analysis basis: bundle.js:+955068 |
-| Telemetry — `tengu_feature_sad` | Fired on feature execution failure (depth-2, via `J8` → `d`) — Analysis basis: bundle.js:+955201 |
-| Telemetry — `tengu_bg_spare_enable` | Fired when background spare process is enabled (infrastructure, depth-2) — Analysis basis: bundle.js:+14502634 |
-| Telemetry — `tengu_bg_spare_spawn` | Fired when background spare process spawns (infrastructure, depth-2) — Analysis basis: bundle.js:+14502994 |
-| Telemetry — `oauth_profile_fetch` | Fired on successful OAuth profile fetch — Analysis basis: bundle.js:+2024847 |
-| Telemetry — `oauth_profile_token_failed` | Fired when OAuth profile fetch fails due to bad token — Analysis basis: bundle.js:+2024914 |
-| OAuth token storage | New OAuth token written to disk via `appendFile` / `rename` pattern in `writeTokenFile` — Analysis basis: bundle.js:+200518, +200215 |
-| `appState` changes | `onChangeAPIKey` callback is called with the new credential after successful login — Analysis basis: bundle.js:+11674370, +11674389 |
-| Browser subprocess | Platform-appropriate browser launcher is spawned (`open` / `rundll32` / `xdg-open`) — Analysis basis: bundle.js:+7543549, +7543475, +7543556 |
-| Hook registration | `at_.register` hook is registered during the OAuth client initialization path — Analysis basis: bundle.js:+56977 |
+| Telemetry: `tengu_feature_ok` | Emitted on successful feature flag check (bundle.js:+945566) |
+| Telemetry: `tengu_feature_sad` | Emitted on failed feature flag check (bundle.js:+945699) |
+| Telemetry: `tengu_bg_spare_enable` | Emitted when background spare process is enabled (bundle.js:+14464520) |
+| Telemetry: `tengu_bg_spare_spawn` | Emitted when a background spare process is spawned (bundle.js:+14464880) |
+| Telemetry: `oauth_profile_fetch` | Emitted on successful OAuth profile retrieval (bundle.js:+2010804) |
+| Telemetry: `oauth_profile_token_failed` | Emitted when OAuth profile fetch fails (bundle.js:+2010871) |
+| Browser side effect | Opens `https://claude.ai/upgrade/max` in the system default browser |
+| `onChangeAPIKey` callback | Called with new API key after successful login (bundle.js:+11548246) |
+| appState changes | Account state updated with new credentials after successful OAuth exchange |
+| File I/O | Log appending via `appendFile` (bundle.js:+198185); log rotation via `rename`/`unlink` (bundle.js:+197882, +197922) |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Error logging | `Wc.logError` is called on OAuth flow errors — Analysis basis: bundle.js:+960555 |
 
 ---
 
@@ -266,21 +270,21 @@ Analysis basis: CC v2.1.143 bundle.js:+14502634, +14502994
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis |
+| v2.1.141 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Running `/upgrade` on a non-first-party provider**: If the Claude Code session is configured to use AWS Bedrock, Azure Foundry, Vertex AI, Mantle, or `anthropicAws`, the upgrade flow is incompatible with `https://claude.ai/upgrade/max`. The command checks the provider type before proceeding. Analysis basis: bundle.js:+2020544–+2020761.
+1. **Running `/upgrade` on a non-first-party account** — The command targets `claude.ai` OAuth. If you are authenticated via `bedrock`, `vertex`, `foundry`, `anthropicAws`, or `mantle` provider, the upgrade flow will not apply and may produce unexpected errors. Use `/login` to switch to a first-party account before upgrading.
 
-2. **Expecting no login prompt after upgrading**: After successfully opening the upgrade URL, the command immediately launches a full OAuth re-login flow. Users who press `Ctrl-C` to cancel will see `"Login interrupted"` and their existing session credentials will remain unchanged. Analysis basis: bundle.js:+11674412.
+2. **Expecting `/upgrade` to work without browser access** — In headless or SSH-only environments, the browser-open step will fail and the command will print the fallback URL. You must visit `https://claude.ai/upgrade/max` manually from another device and then re-authenticate with `/login`.
 
-3. **Assuming the command is re-entrant on the highest tier**: If the current account is already on the `default_claude_max_20x` tier with plan `claude_max`, the command exits immediately with an informational message and does **not** open a browser. Analysis basis: bundle.js:+11673830, +11673948, +11674049.
+3. **Cancelling mid-flow with Ctrl-C** — The message explicitly warns `"Exit with Ctrl-C to use existing account"`. Pressing Ctrl-C after the browser opens but before login completes will leave credentials unchanged; the existing session remains active.
 
-4. **Browser launch failure is non-fatal**: If the system browser cannot be opened (e.g., headless environment), the command does not throw an error — it prints a fallback message with the upgrade URL and exits cleanly. The login flow is **not** initiated in this case. Analysis basis: bundle.js:+11674466.
+4. **Assuming `/upgrade` upgrades immediately** — The command only opens the upgrade page and then re-runs the login flow. The actual subscription change happens on the claude.ai web side; the CLI merely captures updated tokens after you complete the web upgrade.
 
-5. **Environment variable requirements**: If neither `ANTHROPIC_API_KEY` nor `CLAUDE_CODE_OAUTH_TOKEN` (or equivalent file-descriptor variants) is available during the post-upgrade login resolution, the flow throws a hard error. Analysis basis: bundle.js:+2912383.
+5. **Using `/upgrade` when already on `default_claude_max_20x`** — The command detects this tier and displays an informational message rather than re-initiating the upgrade flow. If you want to switch to an API-billed account instead, use `/login` directly as the message instructs.
 
 ---
 
@@ -290,67 +294,69 @@ Analysis basis: CC v2.1.143 bundle.js:+14502634, +14502994
 
 | Identifier | Role |
 |---|---|
-| `Q06` | Upgrade command handler / JSX component root |
-| `HA` | Subscription / account state reader |
-| `Uw` | Credential resolution orchestrator |
-| `TK` | Environment variable accessor |
-| `xH` | Low-level value coercion / type utility |
-| `SN` | API key source selector |
-| `nU6` | OAuth token file-descriptor reader |
-| `eAH` | Credential string formatter |
-| `gc` | OAuth token environment variable resolver |
-| `fI` | Flag settings / API key config reader |
-| `Sw` | Provider type detector |
-| `DA` | Provider string classifier |
-| `j3` | API key resolution and validation logic |
-| `Q46` | API key helper sub-resolver |
-| `$E` | API key "none" sentinel handler |
-| `$SH` | VS Code integration detector (`claude-vscode`) |
-| `Oq6` | API key file-descriptor reader |
-| `N6` | Telemetry event emitter |
-| `Qy` | Credential slice / truncation utility |
-| `SR` | Subscription plan array inclusion checker |
-| `H` | General-purpose utility / randomization helper |
-| `Ea` | OAuth profile fetch orchestrator |
-| `K9` | OAuth endpoint URL builder |
-| `lfA` | OAuth base URL resolver |
-| `WvK` | OAuth environment selector |
-| `SH` | Feature success telemetry emitter (`tengu_feature_ok`) |
-| `d` | Core telemetry dispatch function |
-| `J8` | Feature failure telemetry emitter (`tengu_feature_sad`) |
-| `NY` | OAuth profile response parser |
-| `v` | HTTP request dispatcher |
-| `G5K` | HTTP client factory |
-| `tt_` | HTTP transport layer selector |
-| `hH` | JSON serializer for request body |
-| `P7` | Request path builder / sanitizer |
-| `h6A` | URL component mapper |
-| `q` | File cleanup utility |
-| `A` | Filename normalizer |
-| `cSH` | Credential write helper |
-| `X6A` | Raw stream writer |
-| `Z5K` | Token file writer (atomic write with rename) |
-| `PSH` | Write queue / debounce manager |
-| `i8H` | Path join and file append helper |
-| `x6` | Directory existence checker |
-| `gv8` | Directory error handler (`EISDIR`) |
-| `U6A` | Token storage path resolver |
-| `p6A` | Atomic file rename / `.txt` extension handler |
-| `E5K` | File append-and-rotate implementation |
-| `h9` | Process exit hook registrar (`at_.register`) |
-| `NH` | OAuth HTTP client / network request executor |
-| `v_` | HTTP error classifier |
-| `zq` | Request serializer |
-| `A$A` | Request body coercer |
-| `kNK` | Request queue manager (shift/push) |
-| `qK` | Browser-open and login flow initiator |
-| `ex4` | URL protocol validator (`http:` / `https:`) |
-| `hJ` | Cross-platform browser launcher |
-| `Y8` | OAuth client factory |
-| `$_` | OAuth session manager |
-| `KXH` | Full OAuth client implementation |
+| `k06` | Main upgrade command handler (AsyncFunction, Arbor-resolved) |
+| `KA` | Account state reader |
+| `mw` | Auth configuration reader / provider dispatcher |
+| `JL` | Configuration field accessor |
+| `RH` | String conversion / environment variable reader |
+| `FR` | Auth credential resolution (API key vs OAuth) |
+| `FU6` | OAuth token file descriptor reader |
+| `Q46` | Credential validator |
+| `ja` | OAuth token environment reader |
+| `yu` | Flag settings resolver |
+| `tj` | Provider guard (blocks non-first-party providers) |
+| `WA` | Provider name normalizer |
+| `j$` | API key resolution orchestrator |
+| `G8_` | Flag settings applicator |
+| `$V` | Key source classifier |
+| `DH6` | VS Code environment detector |
+| `pl8` | API key file descriptor reader |
+| `h6` | Credential cache writer |
+| `IR` | Credential string slicer (last 20 chars, +2025575) |
+| `RB` | Boolean coercion helper |
+| `Ja` | OAuth profile fetcher |
+| `bA` | OAuth base URL resolver |
+| `bfA` | OAuth environment selector |
+| `zIK` | OAuth URL builder |
+| `hH` | HTTP client for profile fetch (success path) |
+| `Q` | Underlying HTTP request executor |
+| `D8` | HTTP client for profile fetch (error path) |
+| `Yy` | Profile response parser |
+| `v` | Subprocess / child-process spawner |
+| `J7K` | Subprocess argument builder |
+| `Qt_` | Platform command selector |
+| `H` | Random delay / subprocess handle |
+| `SH` | JSON serializer for debug logging |
+| `t7` | Log path builder |
+| `T6A` | Log directory mapper |
+| `q` | Sync file unlinker |
+| `A` | File path lowercaser |
+| `MSH` | Stdio writer |
+| `M6A` | Raw stream writer |
+| `X7K` | Log file writer / rotator |
+| `bhH` | Buffered write flusher |
+| `A_H` | Log entry formatter |
+| `Cv8` | EISDIR error handler |
+| `y6A` | Log file path resolver |
+| `k6A` | Log file rotator |
+| `P7K` | Log append-with-rotation writer |
+| `b9` | Active-operation tracker (Set add/delete) |
+| `kH` | OAuth login flow orchestrator |
+| `k_` | Error classifier / stringifier |
+| `Vq` | Token exchange executor |
+| `cMA` | Token response handler |
+| `GvK` | Token queue manager (shift/push) |
+| `eq` | Cross-platform URL opener |
+| `jb4` | URL scheme validator |
+| `O8` | Platform-specific browser launcher |
+| `M_` | Process spawner with retry |
+| `jXH` | Child-process lifecycle manager |
 | `D` | Background spare process manager |
-| `_SK` | Session token string formatter |
-| `S6` | Async-local-storage context accessor |
-| `Uh6` | Store accessor (`ph6.getStore`) |
-| `__` | Global state accessor (`GV`) |
+| `lkK` | String-based process argument builder |
+| `N6` | AsyncLocalStorage context accessor |
+| `bS6` | Store retrieval helper |
+| `e8` | Context default provider |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

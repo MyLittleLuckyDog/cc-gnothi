@@ -1,13 +1,13 @@
 ---
 type: feature-spec
 feature: "version"
-cc_version: 2.1.145
-updated: "2026-05-18"
+cc_version: "2.1.145"
+updated: "2026-06-01"
 tags: ["version", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.143
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/version`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/version` command prints the version of Claude Code that is currently running in the active session. Critically, it reports the **session-active** version — the version that was loaded at process start — rather than any newer version that the autoupdate mechanism may have silently downloaded in the background. This distinction is what makes the command useful for diagnosing update-lag discrepancies.
+The `/version` slash command is a local, immediately-executed command that displays the version of Claude Code currently running in the active session. Importantly, it reports the **session-active** version rather than any version that the auto-updater may have staged or downloaded in the background. The output is rendered as a JSX component returned directly by the handler, with no agent round-trip required.
 
 ---
 
@@ -34,91 +34,84 @@ The `/version` command prints the version of Claude Code that is currently runni
 | name | `version` |
 | description | `Print the version this session is running (not what autoupdate downloaded)` |
 | immediate | `true` |
+| load_inline | `true` |
+| load_ident | `dz7` (resolved via `load:()=>Promise.resolve({call: dz7})` inline shape) |
+| handler kind | `AsyncFunction` (Arbor resolution path: `load_ident`) |
+| loc_byte span | `11277970` – `11278177` |
+| `loc_byte_end` | `11278177` |
+| `arbor_handler.name` | `dz7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `load_ident` |
+| `arbor_handler.fqn` | `claude-2.1.132::dz7` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.143 bundle.js:+11593719
-
-### Field Notes
-
-- **`type: local-jsx`** — The command renders its output as a JSX component evaluated locally within the CLI process, rather than being forwarded to the model or handled as a pure text transformation.
-- **`immediate: true`** — The command executes and renders without waiting for any model response or asynchronous operation. As soon as the user submits `/version`, the output is produced synchronously within the CLI render cycle.
+Analysis basis: CC v2.1.132 bundle.js:+11277970
 
 ---
 
 ## Input Branching
 
-The AST traversal at depth ≤ 2 found no call graph entries and no conditional literals for this command. Based on the `immediate: true` registration flag and the absence of branching data, the execution path is linear: the command accepts no arguments, performs no validation, and unconditionally renders the session version string.
+Because `immediate: true` is set on the registration, the command fires the handler as soon as the user submits `/version` — no further argument parsing or confirmation step occurs. The command accepts no arguments; any text following `/version` is ignored at this layer.
 
 ```mermaid
 flowchart TD
-    A([User submits /version]) --> B{Arguments provided?}
-    B -- "None (expected)" --> C[Read session-active version constant]
-    B -- "Any input after /version" --> C
-    C --> D[Render version string as local JSX]
-    D --> E([Output displayed in CLI])
+    A([User submits /version]) --> B{immediate flag set?}
+    B -- yes --> C[Invoke handler dz7 immediately]
+    B -- no --> D[Normal agent dispatch — N/A for this command]
+    C --> E[Construct JSX version element via Kf.createElement]
+    E --> F([Render version string to terminal UI])
 ```
 
-> **Note on argument handling:** The registration object contains no argument schema and the call graph is empty, so any text typed after `/version` is silently ignored. The flowchart reflects this by routing both branches to the same step.
-
-Analysis basis: CC v2.1.143 bundle.js:+11593719
+Analysis basis: CC v2.1.132 bundle.js:+11277970 (registration flags), +11277784 (createElement call)
 
 ---
 
 ## Behavioral Spec
 
-### Version String Resolution
+### Version Display Handler
 
-Because the call graph is empty at depth ≤ 2, the exact internal function names used to retrieve the version constant are not available from the extracted data. The behavior is inferred from the registration fields and the command's stated description.
-
-```
-function resolveSessionVersion():
-    # Read the version that was embedded in the bundle at build time
-    # and loaded when the CLI process started.
-    sessionVersion = readBuildTimeVersionConstant()
-
-    # This value is NOT refreshed from disk or the autoupdate cache.
-    # Even if autoupdate has written a newer bundle to disk,
-    # this function returns the version of the bundle currently in memory.
-    return sessionVersion
-
-
-function handleVersionCommand(userInput):
-    # No argument parsing; userInput is discarded entirely.
-    version = resolveSessionVersion()
-    renderLocalJSX(VersionDisplay, props={ version: version })
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+11593719
-
-> **Entry-function caveat:** The AST note records `"no entry functions found for module 'undefined'"`. The pseudocode above describes the logical behavior derivable from the registration contract; the concrete internal call chain is <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
-
-### JSX Rendering
-
-The `type: local-jsx` registration signals that the output component is rendered inside the CLI's own React/Ink render tree rather than streamed as assistant text. The rendered element displays the version string in the CLI viewport.
+The handler (`dz7`) is an `AsyncFunction` inlined directly into the registration object's `load` property. When invoked, it constructs and returns a React element (via the framework's `createElement` call) that displays the current session version string.
 
 ```
-function renderVersionOutput(version):
-    # Produce a local JSX element — no model roundtrip occurs.
-    element = <VersionBadge value={version} />
-    mountInCLIViewport(element)
+async function versionCommandHandler(commandContext):
+    # Retrieve the version identifier bound at session startup
+    sessionVersion = readSessionVersion(commandContext)
+
+    # Build a renderable UI element containing the version string
+    element = createJSXElement(
+        componentType  = <version display component>,
+        props          = { version: sessionVersion },
+        children       = none
+    )
+
+    # Return element; the CLI shell renders it inline in the terminal
+    return element
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11593719
+Key behavioral points:
 
-### Autoupdate Isolation
+- **Session-pinned version**: The version value is the one loaded when the current CLI process started. It will not reflect a newer binary that the auto-updater may have fetched since startup. This is explicitly called out in the command description.
+- **No network I/O**: The handler makes no outbound calls. All data is available in-process at the time of invocation.
+- **No user input consumed**: The handler ignores any trailing argument text; `immediate: true` means the shell dispatches straight to the handler.
+- **JSX output path**: The `local-jsx` type signals that the return value is a React/JSX node rendered by the terminal UI layer, not a plain text string written to stdout.
 
-The description explicitly states the version shown is "not what autoupdate downloaded." This means:
+Analysis basis: CC v2.1.132 bundle.js:+11277784 (`Kf.createElement` call edge from `dz7`), +11277970 (registration block)
+
+### Auto-Update Version Distinction
+
+The description explicitly distinguishes the session version from the auto-downloaded version. This implies the CLI has a mechanism by which a new binary can be staged without replacing the running process. The `/version` command intentionally does **not** query that staged artifact — it only reports what is currently executing.
 
 ```
-function isAutoupdateVersionShown():
-    # The command reads the in-memory constant set at process startup.
-    # It does NOT:
-    #   - stat the autoupdate download directory
-    #   - parse any manifest or lockfile written by the updater
-    #   - compare against a "latest downloaded" cache entry
-    return false   # autoupdate version is never surfaced here
+function resolveDisplayVersion():
+    # The running process has a version constant baked in at build time
+    runningVersion = PROCESS_VERSION_CONSTANT
+
+    # Auto-updater may have written a newer version to disk,
+    # but /version deliberately ignores that path
+    return runningVersion   # NOT stagedVersion
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11593719 (description field)
+<!-- TODO: staged-version read path not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
@@ -126,13 +119,15 @@ Analysis basis: CC v2.1.143 bundle.js:+11593719 (description field)
 
 | Item | Detail |
 |---|---|
-| Telemetry | None — no `tengu_*` events found in the implementation at depth ≤ 2 |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | None observed; command is read-only with respect to application state |
+| Telemetry | None detected in this command's implementation (telemetry array is empty) |
+| Hook registration | None detected at depth ≤ 2 |
+| appState changes | None — read-only operation |
+| Network I/O | None |
+| File I/O | None detected at depth ≤ 2 |
 | Sound | None |
-| Network I/O | None; version is read from the in-process build-time constant |
-| File I/O | None; autoupdate artifacts on disk are not accessed |
-| Model invocation | None; `immediate: true` bypasses the model entirely |
+| Agent invocation | None — `immediate: true` bypasses the agent entirely |
+
+Analysis basis: CC v2.1.132 bundle.js:+11277970
 
 ---
 
@@ -140,21 +135,16 @@ Analysis basis: CC v2.1.143 bundle.js:+11593719 (description field)
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis — `immediate: true`, `local-jsx` rendering, no telemetry |
+| v2.1.132 | Initial analysis — `local-jsx`, `immediate`, inline `load_ident` handler `dz7` |
 
 ---
 
 ## Common Mistakes
 
-1. **Assuming `/version` reflects the autoupdated binary.** The command explicitly reports the session-active version. If autoupdate downloaded v2.1.200 but the current session was started with v2.1.143, `/version` prints `2.1.143`. Restart the CLI to load the updated bundle.
-
-2. **Passing arguments expecting filtered or formatted output.** The command accepts no arguments. Text typed after `/version` (e.g., `/version --json`) is silently discarded; the output format is fixed by the JSX component.
-
-3. **Confusing `local-jsx` output with assistant messages.** The version output is rendered by the CLI's own component tree, not produced by the model. It will not appear in conversation history exported as assistant turns.
-
-4. **Expecting telemetry confirmation.** Because no telemetry events are fired, operators monitoring `tengu_*` event streams cannot detect when a user runs `/version`. Do not rely on telemetry for audit trails of this command.
-
-5. **Using `/version` to verify a live update took effect.** A new process must be started after autoupdate completes for the new version to be loaded into memory and thus reported by `/version`.
+1. **Assuming `/version` shows the latest downloaded version.** The command is explicitly scoped to the *running session's* version. If the auto-updater has staged a newer release, that version will not appear here until the CLI process is restarted.
+2. **Passing arguments.** The command accepts no arguments. Any text after `/version` is silently ignored because `immediate: true` dispatches directly to the handler without argument parsing.
+3. **Expecting plain-text stdout.** The `local-jsx` type means output is a rendered JSX component in the terminal UI, not a raw string written to standard output. Tooling that scrapes stdout may not capture the version display correctly.
+4. **Confusing this with a `prompt`-type command.** `/version` never sends a message to the Claude agent. It resolves entirely within the CLI process.
 
 ---
 
@@ -164,4 +154,7 @@ Analysis basis: CC v2.1.143 bundle.js:+11593719 (description field)
 
 | Identifier | Role |
 |---|---|
-| *(none)* | The depth-≤-2 AST traversal returned an empty `identifiers` array; no obfuscated identifiers were reachable from the command's entry point. See note: `"no entry functions found for module 'undefined'"`. |
+| `dz7` | Async version command handler; inlined via `load:()=>Promise.resolve({call: dz7})`; constructs and returns the JSX version display element (Arbor FQN: `claude-2.1.132::dz7`) |
+| `Kf` | React (or React-compatible) framework namespace; `Kf.createElement` is the JSX factory called by `dz7` to build the renderable output |
+
+Analysis basis: CC v2.1.132 bundle.js:+11277784, +11277970

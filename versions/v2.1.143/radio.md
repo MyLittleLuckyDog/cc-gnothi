@@ -2,11 +2,12 @@
 type: feature-spec
 feature: "radio"
 cc_version: "2.1.143"
+updated: "2026-06-01"
 tags: ["radio", "commands", "slash-commands"]
-updated: "2026-05-18"
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: "2.1.141"
+analysis_basis: "CC v2.1.141 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -14,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/radio`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.141 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.141
 
 ---
 
 ## Overview
 
-The `/radio` command opens the Claude FM lo-fi radio stream (`https://clau.de/radio`) in the user's default system browser. It is a purely side-effectful, interactive-only command: it launches a platform-appropriate browser-open utility, emits a confirmation message on success, and falls back to a plain-text URL on failure. No AI inference is involved.
+The `/radio` command opens the Claude FM lo-fi radio stream (`https://clau.de/radio`) in the user's default web browser. It is a lightweight, non-interactive local command that delegates to the host OS's URL-opening mechanism and returns a text message confirming the action (or an error message if the browser could not be launched).
 
 ---
 
@@ -33,131 +34,210 @@ The `/radio` command opens the Claude FM lo-fi radio stream (`https://clau.de/ra
 | name | `radio` |
 | description | `Listen to Claude FM lo-fi radio` |
 | supportsNonInteractive | `false` |
-| module\_id | `$Tq` |
+| module_id | `D0q` |
+| load_inline | `true` |
+| loc_byte | `11496727` |
+| loc_byte_end | `11496932` |
+| loc_line | `7182` |
+| arbor_handler.name | `Bv7` |
+| arbor_handler.fqn | `claude-2.1.141::Bv7` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.143 bundle.js:+11622654
+Analysis basis: CC v2.1.141 bundle.js:+11496727
 
 ---
 
 ## Input Branching
 
-The command accepts no user-supplied arguments. All branching is driven by runtime platform detection and whether the browser-open call succeeds.
+The command produces two distinct runtime branches (browser-open success vs. failure) plus an internal OS-dispatch sub-branch (three platform paths). Because the OS dispatch has 3+ paths, a Mermaid flowchart is used.
 
 ```mermaid
 flowchart TD
-    A["/radio invoked"] --> B[Validate target URL scheme]
-    B -->|scheme is http: or https:| C[Detect host platform]
-    B -->|scheme is neither| E[Reject with Error]
-    C -->|darwin| D1["Spawn: open <url>"]
-    C -->|win32| D2["Spawn: rundll32 url,OpenURL <url>"]
-    C -->|other| D3["Spawn: xdg-open <url>"]
-    D1 --> F{Exit code == 0?}
-    D2 --> F
-    D3 --> F
-    F -->|success| G["Emit: 'Opening Claude FM in your browser…'"]
-    F -->|failure| H["Emit fallback: 'Couldn't open the browser. Listen at: https://clau.de/radio'"]
+    A(["/radio invoked"]) --> B["Call openURL with https://clau.de/radio"]
+    B --> C{Validate URL scheme}
+    C -- "not http: or https:" --> D["Throw / reject with Error"]
+    C -- "valid scheme" --> E{Detect OS platform}
+    E -- "darwin" --> F["Spawn: open <url>"]
+    E -- "win32" --> G["Spawn: rundll32 url,OpenURL <url>"]
+    E -- "other (Linux/etc.)" --> H["Spawn: xdg-open <url>"]
+    F & G & H --> I{Process exit code}
+    I -- "success" --> J["Return text message: 'Opening Claude FM in your browser…'"]
+    I -- "failure / exception" --> K["Return text message: 'Couldn't open the browser. Listen at: https://clau.de/radio'"]
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+7543066 (scheme check), +7543375 (darwin), +7543391 (win32), +7543475 (rundll32), +7543549 (open), +7543556 (xdg-open), +11622415 (target URL), +7543341 (exit-code zero check)
+Analysis basis: CC v2.1.141 bundle.js:+11496485, +7462238, +7462510, +7462526, +7462610, +7462684, +7462691, +11496538, +11496606
 
 ---
 
 ## Behavioral Spec
 
-### URL Validation
+### 1. Handler Entry — `radioCommandHandler` (`Bv7`)
 
-Before attempting to open any URL, the open-URL utility validates that the protocol is either `http:` or `https:`. If neither matches, the utility rejects with an `Error` object rather than proceeding.
-
-```
-function validateUrlScheme(targetUrl):
-    parsed = parseUrl(targetUrl)
-    if parsed.protocol not in ["http:", "https:"]:
-        throw Error("unsupported protocol")
-    return parsed
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+7543066, +7543088, +7543016
-
----
-
-### Platform Detection and Browser Launch
-
-After URL validation, the implementation inspects `process.platform` to select the correct system command for opening a URL in the default browser.
+The handler is an `AsyncFunction` resolved via `module_id` → `D0q`.
 
 ```
-function openUrlInBrowser(targetUrl):
-    validateUrlScheme(targetUrl)
-    platform = process.platform
-    if platform == "darwin":
-        command = "open"
-        args    = [targetUrl]
-    else if platform == "win32":
-        command = "rundll32"
-        args    = ["url,OpenURL", targetUrl]
+async function radioCommandHandler(context):
+    targetURL = "https://clau.de/radio"
+    result = await openURLOnHost(targetURL)
+    if result.success:
+        return { type: "text", content: "Opening Claude FM in your browser…" }
     else:
-        command = "xdg-open"
-        args    = [targetUrl]
-    result = spawnProcess(command, args)
-    return result
+        return { type: "text", content: "Couldn't open the browser. Listen at: https://clau.de/radio" }
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+7543375 (darwin branch), +7543391 (win32 branch), +7543475 (rundll32), +7543487 (url,OpenURL argument), +7543549 (open), +7543556 (xdg-open)
+Analysis basis: CC v2.1.141 bundle.js:+11496485, +11496525, +11496538, +11496606
 
 ---
 
-### Command Handler
+### 2. URL Validation — `validateAndOpenURL` (`eq`)
 
-The top-level command handler calls the browser-launch utility with the fixed target URL and selects the appropriate user-facing message based on the outcome.
+Before dispatching to the OS, the URL string is validated. Only `http:` and `https:` schemes are accepted; any other scheme causes an immediate rejection.
 
 ```
-function radioCommandHandler():
-    TARGET_URL = "https://clau.de/radio"
-    try:
-        openUrlInBrowser(TARGET_URL)
-        yield textMessage("Opening Claude FM in your browser…")
-    catch error:
-        yield textMessage(
-            "Couldn't open the browser. Listen at: https://clau.de/radio"
-        )
+function validateAndOpenURL(url):
+    parsed = parseURL(url)
+    if parsed.protocol not in ["http:", "https:"]:
+        raise Error("Invalid URL scheme")
+    return dispatchURLToOS(url)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11622415 (target URL), +11622452 (text message type), +11622465 (success message), +11622533 (fallback message), +11622412 (handler entry point)
+Analysis basis: CC v2.1.141 bundle.js:+7462238, +7462260, +7462188
 
 ---
 
-### Async Render / Output Sink
+### 3. OS-Level URL Dispatch — `dispatchURLToOS` (`O8`)
 
-The text messages yielded by the handler are passed to the terminal output pipeline via an async rendering layer. This layer collects streamed output items and forwards them to the display subsystem. An internal concurrency limit of 10 parallel tasks is applied within this pipeline.
+After validation, the URL is opened using a platform-specific child-process command.
 
-Analysis basis: CC v2.1.143 bundle.js:+1038172 (concurrency limit 10)
+```
+async function dispatchURLToOS(url):
+    platform = process.platform
+
+    if platform == "darwin":
+        spawnProcess("open", [url])
+    else if platform == "win32":
+        spawnProcess("rundll32", ["url,OpenURL", url])
+    else:
+        // Linux and other POSIX systems
+        spawnProcess("xdg-open", [url])
+
+    await processCompletion()
+```
+
+Analysis basis: CC v2.1.141 bundle.js:+7462510, +7462526, +7462610, +7462622, +7462684, +7462691
 
 ---
 
-### Background Process Management (Side Path)
+### 4. Child-Process Spawning — `spawnManagedProcess` (`M_` / `jXH`)
 
-During execution, the runtime's background-spare-process manager may be consulted. It checks available system memory (threshold: 1 000 000 bytes) and uses a polling interval of 2 000 ms when deciding whether to spawn or recycle a spare background worker.
+The actual process spawning is handled by a managed process wrapper that tracks memory, handles lifecycle events, and enforces limits.
 
 ```
-function backgroundSpareCheck():
-    freeMem = os.freemem()
-    if freeMem >= 1_000_000:
-        emitTelemetry("tengu_bg_spare_enable")
-        scheduleSpawn(intervalMs=2000)
-    ...
-    emitTelemetry("tengu_bg_spare_spawn")
+function spawnManagedProcess(command, args, options):
+    // Memory ceiling check (1,000,000 bytes observed)
+    if currentMemoryUsage() > MEMORY_LIMIT:
+        reject with resource error
+
+    process = spawn(command, args, options)
+
+    process.on("eOA" /* data */, handleStdoutChunk)
+    process.on("sx8" /* data */, handleStderrChunk)
+    process.on("tx8" /* close */, handleClose)
+    process.on("Hu8" /* error */, handleError)
+    process.on("MOA" /* exit */, handleExit)
+
+    if error during spawn:
+        return Promise.reject(error)
+
+    // Bind cleanup callbacks
+    onClose = closeHandler.bind(process)
+    onExit  = exitHandler.bind(process)
+
+    registerWithProcessManager(process)
+    return process
 ```
 
-This path is not specific to `/radio`; it is part of the shared runtime lifecycle invoked whenever the command executor runs.
-
-Analysis basis: CC v2.1.143 bundle.js:+14502714 (freemem call), +1038694 (1 000 000 threshold), +14502927 (2 000 ms interval), +14502634 (tengu\_bg\_spare\_enable), +14502994 (tengu\_bg\_spare\_spawn)
+Memory limit constant: `1,000,000` bytes (Analysis basis: CC v2.1.141 bundle.js:+1026380)
+Spawn concurrency pool size constant: `10` (Analysis basis: CC v2.1.141 bundle.js:+1025858)
 
 ---
 
-### Error Logging
+### 5. Process Registry — `registerProcess` (`kH`)
 
-If the spawned process emits an error-level event, the runtime logs it via the shared error-logging facility. The string literal `"error"` is used as the event discriminator for this path.
+Spawned processes are added to a global process registry for lifecycle management. Errors during registration are logged.
 
-Analysis basis: CC v2.1.143 bundle.js:+960530, +960555
+```
+function registerProcess(proc):
+    processKey = buildProcessKey(proc)   // k_
+    registryRecord = buildRecord(proc)   // RH
+    validated = validateEntry(proc)      // Vq
+    resolved = resolveGlobalRef(proc)    // GvK
+
+    globalProcessList.push(registryRecord)   // aRH.push
+
+    if error:
+        logger.logError("error", errorDetail)  // Oc.logError
+```
+
+Analysis basis: CC v2.1.141 bundle.js:+950653, +950666, +950912, +950995, +951013, +951053
+
+---
+
+### 6. Context Store Lookup — `resolveContext` (`N6` / `bS6`)
+
+Before spawning, the command resolves the current execution context via an async-local storage store.
+
+```
+function resolveContext():
+    store = contextStorage.getStore()   // CS6.getStore
+    if store is null:
+        return defaultContext()          // Cd
+    return store
+```
+
+Analysis basis: CC v2.1.141 bundle.js:+955544, +955565, +955595, +955614
+
+---
+
+### 7. Process Manager Lifecycle — `processManagerTick` (`D`)
+
+The process manager runs periodic bookkeeping, including background spare-process management.
+
+```
+function processManagerTick():
+    emit telemetry("tengu_bg_spare_enable")   // at startup
+    freeMemory = os.freemem()                 // HE8.freemem
+    currentTime = Date.now()
+
+    if platform == "windows":
+        applyWindowsPolicy()                  // _o_
+
+    wait(2000 ms)                             // polling interval
+
+    emit telemetry("tengu_bg_spare_spawn")    // when spawning spare
+    scheduleNext(processManagerTick)          // recursive scheduling: D → D
+    enqueue(Q)
+    registerWithRegistry(kH)
+```
+
+Polling interval: `2000` ms (Analysis basis: CC v2.1.141 bundle.js:+14464813)
+
+Analysis basis: CC v2.1.141 bundle.js:+14464520, +14464554, +14464586, +14464600, +14464676, +14464683, +14464721, +14464789, +14464818, +14464878, +14464920
+
+---
+
+### 8. String Conversion Utility — `toStringHelper` (`lkK`)
+
+A utility used during process argument assembly that coerces values to `String`.
+
+```
+function toStringHelper(value):
+    return String(value)
+```
+
+Analysis basis: CC v2.1.141 bundle.js:+1026187
 
 ---
 
@@ -165,12 +245,14 @@ Analysis basis: CC v2.1.143 bundle.js:+960530, +960555
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_bg_spare_enable` (bundle.js:+14502634), `tengu_bg_spare_spawn` (bundle.js:+14502994) — both emitted by the shared background-process manager, not by the radio handler directly |
-| Hook registration | None detected at depth-2 traversal |
-| appState changes | None detected at depth-2 traversal |
-| Sound / media | None — the command only opens a browser URL; audio playback is handled entirely by the browser at `https://clau.de/radio` |
-| Process spawn | One short-lived child process (`open`, `rundll32`, or `xdg-open`) is spawned per invocation and not persisted |
-| Non-interactive support | `false` — the command cannot be used in `--print` / pipe mode |
+| Telemetry: `tengu_bg_spare_enable` | Fired by process manager when background spare-process pool is enabled (bundle.js:+14464520) |
+| Telemetry: `tengu_bg_spare_spawn` | Fired when a background spare process is spawned (bundle.js:+14464880) |
+| Browser side effect | Opens `https://clau.de/radio` in the host's default browser via OS command (`open` / `rundll32` / `xdg-open`) |
+| Process registry | Spawned child process is registered in the global process list (`aRH.push`) |
+| Async-local storage | Context store is read (not mutated) via `CS6.getStore` |
+| Error logging | Spawn errors are routed through `Oc.logError` with level `"error"` |
+| supportsNonInteractive | `false` — command must be invoked in an interactive session |
+| Memory guard | Spawn is gated on a memory ceiling of 1,000,000 bytes |
 
 ---
 
@@ -178,16 +260,16 @@ Analysis basis: CC v2.1.143 bundle.js:+960530, +960555
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis — command registered; opens `https://clau.de/radio` via platform-native browser launcher |
+| v2.1.141 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Running in non-interactive mode.** Because `supportsNonInteractive` is `false`, invoking `/radio` inside a script or with `--print` will be rejected before the handler runs. Use an interactive terminal session.
-2. **Expecting audio inside the terminal.** The command opens a browser tab; no audio is routed through the CLI. If the browser does not launch (e.g., headless server), the fallback message provides the direct URL to use manually.
-3. **Firewall / sandbox blocking `xdg-open` on Linux.** In restricted environments (containers, CI), the xdg-open call may fail silently or return a non-zero exit code. The fallback message will be displayed; copy the URL manually.
-4. **Passing arguments.** The command signature accepts no arguments. Any text after `/radio` is ignored or may cause a parse error depending on the shell integration layer.
+1. **Running in non-interactive mode**: `/radio` sets `supportsNonInteractive: false`. Invoking it from a script or pipe will not produce browser-launch behavior; the command requires an interactive terminal session.
+2. **Expecting audio output inside the terminal**: The command opens a browser URL — it does not embed an audio player in the CLI. If the browser fails to open, the fallback message instructs the user to visit `https://clau.de/radio` directly.
+3. **Firewall / default-browser misconfiguration**: On Linux systems the command relies on `xdg-open`. If no default browser is configured, the URL-open will silently fail and the error message will be displayed instead.
+4. **Scheme-restricted URLs**: The underlying URL-opener only accepts `http:` and `https:` schemes. Any attempt to pass alternative schemes (e.g., via programmatic invocation) will throw immediately before OS dispatch.
 
 ---
 
@@ -197,16 +279,19 @@ Analysis basis: CC v2.1.143 bundle.js:+960530, +960555
 
 | Identifier | Role |
 |---|---|
-| `Yy7` | Radio command entry-point / handler function |
-| `qK` | Open-URL utility (URL validation + platform dispatch + spawn) |
-| `ex4` | URL scheme validator (throws Error on unsupported protocol) |
-| `hJ` | Process-spawn helper called after platform selection |
-| `Y8` | Async output-render pipeline coordinator |
-| `$_` | Async task queue / concurrency-limited executor |
-| `KXH` | Core async queue implementation (manages task scheduling) |
-| `D` | Background spare-process manager (telemetry, freemem, polling) |
-| `_SK` | String conversion utility used within the task queue |
-| `NH` | Error-event handler / error-logging dispatcher |
-| `S6` | Output sink that routes rendered items to the display layer |
-| `Uh6` | AsyncLocalStorage store accessor for the current execution context |
-| `__` | Base display/render primitive (leaf renderer) |
+| `Bv7` | `radioCommandHandler` — async entry point for `/radio`; opens the Claude FM URL |
+| `eq` | `validateAndOpenURL` — validates URL scheme then dispatches to OS opener |
+| `jb4` | `urlSchemeValidator` — checks `http:`/`https:` and throws on invalid schemes |
+| `O8` | `dispatchURLToOS` — platform-switching URL opener (darwin / win32 / other) |
+| `M_` | `spawnManagedProcess` — managed child-process spawner with memory guard |
+| `jXH` | `processLifecycleSetup` — attaches stdout/stderr/close/error/exit event handlers |
+| `D` | `processManagerTick` — periodic process-manager bookkeeping and spare-pool logic |
+| `lkK` | `toStringHelper` — coerces values to `String` during argument assembly |
+| `kH` | `registerProcess` — adds spawned process to global registry |
+| `N6` | `resolveContext` — retrieves current execution context from store |
+| `bS6` | `contextStoreReader` — reads async-local storage via `CS6.getStore` |
+| `e8` | `defaultContextFactory` — produces a default context when store is empty |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "voice"
 cc_version: "2.1.143"
-updated: "2026-05-18"
+updated: "2026-06-01"
 tags: ["voice", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/voice` command toggles voice input mode for Claude Code, accepting an optional subcommand argument (`hold`, `tap`, or `off`) to select the interaction style. It enforces account-level prerequisites (Claude.ai login and environment availability) before applying the requested mode, and emits a telemetry event on every successful state change. When `tap` mode is activated, it also registers a push-to-talk keybinding (`Space` in the `Chat` context).
+The `/voice` command toggles voice input mode in Claude Code, allowing users to switch between three operational sub-modes: `hold` (push-to-talk), `tap` (toggle-to-talk), and `off` (disabled). It validates authentication and environment prerequisites before applying or updating the voice-mode setting, and registers a push-to-talk keybinding when the `hold` sub-mode is activated.
 
 ---
 
@@ -31,10 +31,20 @@ The `/voice` command toggles voice input mode for Claude Code, accepting an opti
 |---|---|
 | type | `local` |
 | name | `voice` |
-| description | Toggle voice mode |
+| description | `Toggle voice mode` |
 | argumentHint | `[hold\|tap\|off]` |
 | supportsNonInteractive | `false` |
+| isHidden | `null` |
 | module_id | `Ivq` |
+| load_inline | `true` |
+| loc_byte | `11931518` |
+| loc_byte_end | `11931760` |
+| loc_line | `7760` |
+| arbor_handler.name | `bb7` |
+| arbor_handler.fqn | `claude-2.1.143::bb7` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `1` |
 
 Analysis basis: CC v2.1.143 bundle.js:+11931518
 
@@ -42,174 +52,209 @@ Analysis basis: CC v2.1.143 bundle.js:+11931518
 
 ## Input Branching
 
-The command handler (identifier: `bb7`) begins by parsing and trimming the raw argument string. It then executes a multi-path decision tree based on authentication state, environment capability, argument value, and settings persistence outcome.
+The handler has 5+ distinct paths based on argument value, authentication state, and environment availability.
 
 ```mermaid
 flowchart TD
-    A(["/voice called"]) --> B[Trim argument string]
-    B --> C{Claude.ai account\npresent?}
-    C -- No --> D["Return error:\n'Voice mode requires a Claude.ai account.\nPlease run /login to sign in.'"]
-    C -- Yes --> E{Voice available\nin environment?}
-    E -- No --> F["Return error:\n'Voice mode is not available.'"]
-    E -- Yes --> G[Parse argument:\nhold / tap / off / empty]
-    G -- off --> H[Disable voice mode\nin settings]
-    H -- settings write fails --> I["Return error:\n'Failed to update settings.\nCheck your settings file for syntax errors.'"]
-    H -- settings write succeeds --> J["Return: 'Voice mode disabled.'"]
-    J --> K[Emit tengu_voice_toggled]
-    G -- hold --> L[Set voice mode = hold\nin settings]
-    L -- settings write fails --> I
-    L -- settings write succeeds --> M[Check microphone\npermission path]
-    M -- unavailable in env --> N["Return: 'Voice mode is not available\nin this environment.'"]
-    M -- available --> O[Emit tengu_voice_toggled]
-    G -- tap --> P[Set voice mode = tap\nin settings]
-    P -- settings write fails --> I
-    P -- settings write succeeds --> Q[Register keybinding\nvoice:pushToTalk → Space in Chat]
-    Q --> R[Emit tengu_voice_toggled]
-    G -- empty/no arg --> S[Toggle current mode\nor show status]
-    S --> T[Apply same\nbranch logic as explicit arg]
+    A["/voice [arg]"] --> B{Parse argument}
+    B --> C{arg is 'hold', 'tap', or 'off'?}
+    C -- No / empty --> D[Validate current mode via Cb7\ntrim + validate token]
+    C -- Yes --> E{Authentication check\nrequires Claude.ai account}
+    E -- Not logged in --> F["Return error text:\n'Voice mode requires a Claude.ai account.\nPlease run /login to sign in.'"]
+    E -- Logged in --> G{Voice availability\ncheck via R_}
+    G -- Not available --> H["Return error text:\n'Voice mode is not available.'"]
+    G -- Available --> I{arg === 'off'?}
+    I -- Yes --> J[Write setting: voice off\nEmit tengu_voice_toggled\nReturn 'Voice mode disabled.']
+    I -- No --> K{Environment supports voice?}
+    K -- No --> L["Return error text:\n'Voice mode is not available in this environment.'"]
+    K -- Yes --> M{arg === 'hold'?}
+    M -- Yes --> N[Register push-to-talk keybinding\nvia Lj: action 'voice:pushToTalk'\ncontext 'Chat', key 'Space']
+    N --> O[Persist settings via p_\nEmit tengu_voice_toggled]
+    M -- No / 'tap' --> O
+    O --> P[Return success / updated mode message]
+    D --> Q{Settings write error?}
+    Q -- Yes --> R["Return error:\n'Failed to update settings. Check your settings file for syntax errors.'"]
+    Q -- No --> P
 ```
-
-Analysis basis: CC v2.1.143 bundle.js:+11928972, +11929112, +11929150, +11929197, +11929333, +11929512, +11929569, +11929629, +11929659, +11929738, +11930779, +11930913
 
 ---
 
 ## Behavioral Spec
 
-### Authentication and Availability Guard
+### Main Handler (`bb7`)
 
-Before any mode logic executes, the command handler checks two preconditions in order.
+The Arbor-resolved handler is `bb7` (AsyncFunction, `claude-2.1.143::bb7`), reached via `module_id` resolution from `Ivq`.
 
-```
-function checkVoicePrerequisites(appState):
-    if not appState.hasClaudeAiAccount():
-        return textResult(
-            "Voice mode requires a Claude.ai account. Please run /login to sign in."
-        )
-    if not voiceIsAvailableInEnvironment(appState):
-        return textResult("Voice mode is not available.")
-    return null  // prerequisites satisfied
-```
-
-- The account-check error message is a fixed string literal.
-  Analysis basis: CC v2.1.143 bundle.js:+11929013
-- The availability-check error message is a fixed string literal.
-  Analysis basis: CC v2.1.143 bundle.js:+11929112
-
-### Argument Normalization
-
-The raw argument string is trimmed of surrounding whitespace before comparison. The recognized token set is exactly `{"hold", "tap", "off"}`. Any other non-empty value is treated as `"invalid"`.
+Analysis basis: CC v2.1.143 bundle.js:+11928972
 
 ```
-function normalizeVoiceArg(rawArg):
-    token = rawArg.trim()
-    if token in {"hold", "tap", "off"}:
-        return token
-    if token == "":
-        return "empty"
-    return "invalid"
+async function voiceCommandHandler(args, appState):
+    rawArg = args.trim()                         // H.trim at +11929264
+
+    // Step 1 — Argument validation via validateVoiceArg (Cb7)
+    validatedMode = validateVoiceArg(rawArg)      // Cb7 at +11929197
+    // Accepted values: "hold", "tap", "off", or empty/null for query
+
+    // Step 2 — Account / auth guard
+    hasAccount = checkClaudeAiAccount(appState)   // YsH / fg_ at +11928972
+    if not hasAccount:
+        return { type: "text",
+                 content: "Voice mode requires a Claude.ai account. Please run /login to sign in." }
+        // literal at +11929013
+
+    // Step 3 — Feature availability guard
+    isAvailable = checkVoiceAvailability(appState) // R_ at +11929150
+    if not isAvailable:
+        return { type: "text",
+                 content: "Voice mode is not available." }
+        // literal at +11929112
+
+    // Step 4 — Dispatch on validated mode
+    if validatedMode === "off":
+        persistVoiceSetting(appState, "off")       // p_ at +11929333
+        emitTelemetry("tengu_voice_toggled", ...)  // at +11929514
+        return { type: "text", content: "Voice mode disabled." }
+        // literal at +11929569
+
+    else if validatedMode === "hold" or "tap":
+        envOk = checkEnvironmentSupport(appState)  // d at +11929512
+        if not envOk:
+            return { type: "text",
+                     content: "Voice mode is not available in this environment." }
+            // literal at +11929813
+
+        if validatedMode === "hold":
+            registerPushToTalkKeybinding()         // Lj at +11930779
+            // Registers action "voice:pushToTalk" in context "Chat"
+            // with default key "Space"
+            // literals at +11930782, +11930801, +11930808
+
+        persistVoiceSetting(appState, validatedMode) // p_ at +11929333
+        emitTelemetry("tengu_voice_toggled", ...)
+        return { type: "text", content: <updated mode message> }
+
+    else:
+        // Invalid argument ("invalid" sentinel from Cb7)
+        return error or usage hint
+        // "invalid" literal at +11928933
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11928889 (`hold`), +11928901 (`tap`), +11928912 (`off`), +11928933 (`invalid`), +11929264 (trim call)
+Analysis basis: CC v2.1.143 bundle.js:+11928972–+11931240
 
-### Mode Application and Settings Persistence
+---
 
-For each recognized mode, the handler writes the new value to user settings via the settings-persistence subsystem. If the write fails (e.g., malformed settings JSON), a fixed error message is returned and no state change is committed.
-
-```
-function applyVoiceMode(mode, settingsWriter):
-    success = settingsWriter.setVoiceMode(mode)
-    if not success:
-        return textResult(
-            "Failed to update settings. Check your settings file for syntax errors."
-        )
-    return null  // caller proceeds with post-write logic
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+11929431
-
-### Off Mode
+### Argument Validation (`Cb7`)
 
 ```
-function handleVoiceOff(settingsWriter, telemetry):
-    err = applyVoiceMode("off", settingsWriter)
-    if err: return err
-    telemetry.emit("tengu_voice_toggled", {mode: "off"})
-    return textResult("Voice mode disabled.")
+function validateVoiceArg(raw):
+    trimmed = raw.trim()                    // H.trim at +11928842
+    if trimmed === "hold":  return "hold"   // literal +11928889
+    if trimmed === "tap":   return "tap"    // literal +11928901
+    if trimmed === "off":   return "off"    // literal +11928912
+    if trimmed === "":      return null     // query current state
+    return "invalid"                        // literal +11928933
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11929569, +11929514
+Analysis basis: CC v2.1.143 bundle.js:+11928842
 
-### Hold Mode
+---
 
-After persisting the setting, the handler checks whether the current runtime environment can actually provide microphone access (e.g., SSH-only or container environments may not). If the environment cannot support voice, a distinct message is returned.
-
-```
-function handleVoiceHold(settingsWriter, telemetry, environment):
-    err = applyVoiceMode("hold", settingsWriter)
-    if err: return err
-    if not environment.supportsVoiceCapture():
-        return textResult("Voice mode is not available in this environment.")
-    telemetry.emit("tengu_voice_toggled", {mode: "hold"})
-    return successResult()
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+11929813, +11929514
-
-### Tap Mode and Push-to-Talk Keybinding Registration
-
-In `tap` mode, after persisting the setting, the handler registers a keybinding entry for the action `voice:pushToTalk`, bound to `Space` within the `Chat` context.
+### Authentication / Account Check (`YsH` → `fg_`)
 
 ```
-function handleVoiceTap(settingsWriter, keybindingManager, telemetry):
-    err = applyVoiceMode("tap", settingsWriter)
-    if err: return err
-    keybindingManager.register(
-        action  = "voice:pushToTalk",
-        context = "Chat",
-        key     = "Space"
-    )
-    telemetry.emit("tengu_voice_toggled", {mode: "tap"})
-    return successResult()
+function checkClaudeAiAccount(appState):
+    sessionInfo = loadSessionInfo(appState)    // fg_ at +11919505
+    hasSession  = Boolean(sessionInfo)         // Boolean at +11919443
+    isOAuth     = checkOAuthToken(sessionInfo) // xA at +11919431
+    return hasSession AND isOAuth
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11930779 (`voice:pushToTalk`), +11930801 (`Chat`), +11930808 (`Space`), +11929514
+The check ensures the user is signed in with a Claude.ai account (OAuth-based), not merely an API key session.
 
-### Keybinding Subsystem Integration
+Analysis basis: CC v2.1.143 bundle.js:+11919505
 
-The keybinding registration call routes through the keybinding loader (`Lj`), which reads and validates `keybindings.json`. If the action name is not recognized by the registry, the event `tengu_keybinding_fallback_used` is emitted. Invalid file structure produces `tengu_custom_keybindings_loaded` with an error flag.
+---
+
+### Voice Availability Check (`R_` → `Lu`)
 
 ```
-function loadAndApplyKeybindings(keybindingsPath, actionRegistry):
-    raw = readFile(keybindingsPath)
-    parsed = JSON.parse(raw)
-    if not isObject(parsed) or not isArray(parsed.bindings):
-        emitTelemetry("tengu_keybinding_config_invalid_format")
-        return error("keybindings.json must have a \"bindings\" array")
-    for block in parsed.bindings:
-        if not hasValidStructure(block):
-            emitTelemetry("tengu_keybinding_config_invalid_structure")
-            continue
-        for key, actionName in block.bindings:
-            if actionName not in actionRegistry:
-                emitTelemetry("tengu_keybinding_fallback_used")
-            else:
-                register(block.context, key, actionName)
-    emitTelemetry("tengu_custom_keybindings_loaded")
+function checkVoiceAvailability(appState):
+    settings = loadSettingsFromDisk()   // Lu at +11929150
+    // Internally: loadSettingsFromDisk_start / loadSettingsFromDisk_end marks
+    // literals at +1204991, +1205047
+    return settings.voiceEnabled        // resolves feature flag
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11930779, +3748456, +3748633, +3753849, +3753931
+Analysis basis: CC v2.1.143 bundle.js:+11929150
 
-### Microphone Permission Path (macOS)
+---
 
-When checking environment support, the implementation references the macOS permission path as a string literal: `"System Settings → Privacy & Security → Microphone"`. This string is surfaced in diagnostic output when microphone access cannot be confirmed.
+### Settings Persistence (`p_`)
 
-Analysis basis: CC v2.1.143 bundle.js:+11930320
+```
+async function persistVoiceSetting(appState, mode):
+    configDir   = getConfigPath()                   // wO at +1206360
+    currentCfg  = readCurrentSettings()             // lm8 at +1206432
+    newCfg      = merge(currentCfg, { voice: mode })
+    writeSettings(newCfg)                           // VR6 at +1207042
+    // Uses: path helpers (hy, __), file helpers (yA6), JSON serializer (hH)
+    clearCaches()                                   // hz at +1207017
+    // Clears kV6 and EZ8 caches
+    emitEvent("WCH")                                // WCH.emit at +1207214
 
-### Return Type Convention
+    on write error:
+        return { type: "text",
+                 content: "Failed to update settings. Check your settings file for syntax errors." }
+        // literal at +11929431
+```
 
-All textual responses from the command are wrapped in a result object typed as `"text"`.
+Analysis basis: CC v2.1.143 bundle.js:+11929333
 
-Analysis basis: CC v2.1.143 bundle.js:+11929000
+---
+
+### Push-to-Talk Keybinding Registration (`Lj`)
+
+```
+function registerPushToTalkKeybinding():
+    // Reads keybinding config from keybindings.json
+    keyConfig = loadKeybindings()         // ma6 at +3753849
+    // Defines:
+    //   action  = "voice:pushToTalk"      (literal +11930782)
+    //   context = "Chat"                  (literal +11930801)
+    //   key     = "Space"                 (literal +11930808)
+    binding = buildBinding(action, context, key)   // pa6 at +3753859
+    if not alreadyRegistered(binding):             // cC9.has at +3753907
+        registerBinding(binding)                   // cC9.add at +3753918
+    emitTelemetry("tengu_keybinding_customization_release", ...)
+```
+
+On macOS, if microphone permission is not granted the user is directed to:
+`System Settings → Privacy & Security → Microphone`
+(literal at +11930320)
+
+Analysis basis: CC v2.1.143 bundle.js:+11930779
+
+---
+
+### Environment Support Check (`d`)
+
+```
+function checkEnvironmentSupport(appState):
+    // Checks platform-level voice capability
+    // Returns false in environments without microphone/audio support
+    // e.g., SSH sessions, CI environments, or locked-down containers
+    return platformSupportsVoice()
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+11929512
+
+---
+
+### MCP Server Lifecycle (`M` → `SvH`, `B95`, `THK`)
+
+The `/voice` command triggers a full MCP server roster sync as part of `appState` refresh. This is part of the standard command execution pipeline, not voice-specific. The call graph depth-2 traversal captures MCP reconnection, OAuth flows, and daemon interactions incidentally.
+
+Analysis basis: CC v2.1.143 bundle.js:+11930088
 
 ---
 
@@ -217,15 +262,16 @@ Analysis basis: CC v2.1.143 bundle.js:+11929000
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_voice_toggled` emitted on every successful mode change (hold, tap, off). loc: +11929514 |
-| Telemetry (keybinding) | `tengu_keybinding_fallback_used` emitted when a registered action is not found in the keybinding registry. loc: +3753931 |
-| Telemetry (keybinding load) | `tengu_custom_keybindings_loaded` emitted after keybindings.json is processed. loc: +3746151 |
-| Telemetry (keybinding format) | `tengu_keybinding_config_invalid_format` / `tengu_keybinding_config_invalid_structure` emitted on invalid keybindings.json. loc: +3748320, +3748931 |
-| Hook registration | In `tap` mode, registers the `voice:pushToTalk` action bound to `Space` in the `Chat` keybinding context. loc: +11930779 |
-| appState changes | Writes the `voiceMode` setting (`hold`, `tap`, or `off`) to persistent user settings via the settings subsystem. loc: +11929333 |
-| Settings file path | Settings are stored under `.claude/settings.json` (user) and `.claude/settings.local.json` (local). loc: +1197620, +1197682 |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Non-interactive | Command is not available in non-interactive mode (`supportsNonInteractive: false`). loc: +11931518 |
+| Telemetry | `tengu_voice_toggled` (emitted on every mode change; +11929514) |
+| Telemetry (incidental) | `tengu_mcp_oauth_flow_start`, `tengu_mcp_oauth_flow_success`, `tengu_mcp_oauth_flow_error`, `tengu_bg_spare_enable`, `tengu_bg_spare_spawn`, `tengu_daemon_config_reload`, `tengu_config_auth_loss_prevented`, `tengu_daemon_yield`, `tengu_keybinding_customization_release`, `tengu_custom_keybindings_loaded`, `tengu_keybinding_fallback_used`, `tengu_config_parse_error`, `tengu_bg_dispatch_sigkill_escalate`, `tengu_bg_low_mem_mb`, `tengu_bg_dispatch_low_mem`, `tengu_daemon_idle_exit`, `tengu_bg_sendclaim_failed`, `tengu_bg_spare_claim`, `tengu_bg_spare_claim_fail` |
+| Settings write | Persists `voice` field to user settings via `VR6` / `O5H.writeFile` |
+| Cache invalidation | Clears `kV6` and `EZ8` caches via `hz` on settings write |
+| Event emission | `WCH.emit` fired after settings update |
+| Keybinding registration | Registers `voice:pushToTalk` → `Space` in `Chat` context when `hold` mode is activated (via `Lj`; `cC9.add` at +11930918) |
+| Keybinding file | Reads/writes `keybindings.json` (literal at +3746245) |
+| appState changes | Voice mode field updated; MCP server roster refresh may occur as side-effect |
+| Sound | None directly; microphone access is implied by `hold`/`tap` modes |
+| Non-interactive | Not supported (`supportsNonInteractive: false`) |
 
 ---
 
@@ -233,17 +279,17 @@ Analysis basis: CC v2.1.143 bundle.js:+11929000
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis — `hold`, `tap`, `off` subcommands; push-to-talk keybinding registration in tap mode; dual prerequisite guard (Claude.ai login + environment availability). |
+| v2.1.143 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Running `/voice` without being logged in to Claude.ai.** The command performs an account check before any other logic; users must complete `/login` first. Analysis basis: CC v2.1.143 bundle.js:+11929013
-2. **Using `/voice tap` in an SSH or headless environment.** Even if the mode is persisted, a subsequent availability check may return the "not available in this environment" message. Analysis basis: CC v2.1.143 bundle.js:+11929813
-3. **Passing an unrecognized argument such as `/voice toggle`.** Only `hold`, `tap`, and `off` are valid tokens; any other non-empty string is classified as `"invalid"` and will not change state. Analysis basis: CC v2.1.143 bundle.js:+11928933
-4. **Corrupted or malformed `settings.json`.** If the settings file cannot be written (e.g., JSON syntax error), the command returns a settings-failure message and no voice mode change is applied. Analysis basis: CC v2.1.143 bundle.js:+11929431
-5. **Expecting `/voice` to work non-interactively.** The `supportsNonInteractive` flag is `false`; the command will not execute in pipeline or headless invocations. Analysis basis: CC v2.1.143 bundle.js:+11931518
+1. **Running without a Claude.ai account**: The command requires OAuth login (not just an API key). Using `/voice` without first running `/login` yields the error `"Voice mode requires a Claude.ai account. Please run /login to sign in."` (bundle.js:+11929013).
+2. **Using in an unsupported environment**: SSH sessions, headless CI, or containers without audio devices will receive `"Voice mode is not available in this environment."` (bundle.js:+11929813). There is no workaround at the CLI level.
+3. **Passing an unrecognized argument**: Only `hold`, `tap`, and `off` are accepted. Any other argument resolves to the `"invalid"` sentinel (bundle.js:+11928933) and produces an error or usage hint rather than a mode change.
+4. **Expecting `hold` mode to work without microphone permission on macOS**: The command will instruct the user to grant access via `System Settings → Privacy & Security → Microphone` (bundle.js:+11930320) but cannot grant permission itself.
+5. **Assuming non-interactive use**: `supportsNonInteractive` is `false`. Running `/voice` in a script or piped session is not supported.
 
 ---
 
@@ -253,178 +299,182 @@ Analysis basis: CC v2.1.143 bundle.js:+11929000
 
 | Identifier | Role |
 |---|---|
-| `bb7` | Top-level voice command handler / entry point |
-| `YsH` | Voice prerequisite check dispatcher |
-| `fg_` | Account availability checker (Claude.ai login guard) |
-| `Uw` | Authentication context resolver |
-| `TK` | Token / credential accessor |
-| `SN` | API key / auth chain validator |
-| `Sw` | First-party auth mode selector |
-| `j3` | Auth key retrieval and error handler |
-| `eAH` | Auth header builder |
-| `jG6` | Voice environment availability checker |
-| `R_` | Settings loader bootstrap |
-| `Lu` | Settings load-from-disk orchestrator |
-| `ah` | Settings read helper (early phase) |
-| `P1` | Performance measurement initializer |
-| `px` | Native module `require` wrapper (`perf_hooks`) |
-| `nm8` | Settings telemetry and merge engine |
-| `T8` | Log file appender |
-| `SV6` | Settings version resolver |
-| `j96` | Flag-settings merger |
-| `oDA` | SDK inline settings extractor |
-| `L` | Active WebSocket / connection tracker (module-level) |
-| `K` | Log-line formatter / buffer |
-| `k5H` | User settings file path builder |
-| `f` | Connection lifecycle manager |
-| `XB` | Settings source aggregator |
-| `nDA` | SDK inline settings normalizer |
-| `WB` | Full settings object assembler |
-| `__` | Global config accessor |
-| `fH6` | Flag settings reader |
+| `bb7` | Main voice command async handler (Arbor-resolved entry point) |
+| `YsH` | Account authentication check orchestrator |
+| `fg_` | Session/OAuth token loader called by `YsH` |
+| `Uw` | Settings initializer / environment setup |
+| `TK` | Low-level config reader |
+| `SN` | Settings node constructor / merge helper |
+| `Sw` | First-party settings loader |
+| `j3` | API key / credential validator |
+| `eAH` | Error/state reporter for auth failures |
+| `jG6` | Secondary auth token resolver |
+| `R_` | Voice feature availability checker |
+| `Lu` | Settings-from-disk loader (with `loadSettingsFromDisk_start`/`_end` marks) |
+| `ah` | Settings loader helper |
+| `P1` | Performance mark initializer |
+| `px` | `perf_hooks` require wrapper |
+| `nm8` | Core settings load routine |
+| `T8` | Settings log appender |
+| `SV6` | Settings validation helper |
+| `j96` | Flag/policy settings merger |
+| `oDA` | Settings object builder |
+| `L` | Shared async queue / file handle utility |
+| `K` | Log/pad formatting utility |
+| `k5H` | Settings path resolver (`.claude/settings.json`) |
+| `f` | File handle / session cleanup utility |
+| `XB` | Settings source combiner |
+| `nDA` | Inline SDK settings loader |
+| `WB` | Settings merge/write coordinator |
+| `__` | Global state accessor |
+| `fH6` | Flag settings accessor |
 | `RV8` | Policy settings reader |
-| `_H6` | Project settings reader |
-| `xjH` | Local settings reader |
-| `MH6` | Operator settings reader |
-| `V5H` | System settings reader |
-| `I5H` | Default settings reader |
-| `Um8` | Settings merge utility |
-| `hDA` | Settings deprecation handler |
-| `vc` | Settings validation helper |
-| `P96` | Settings persistence writer |
-| `yV6` | Post-load settings watcher registrar |
-| `Cb7` | Argument token validator (hold/tap/off/invalid classifier) |
-| `H` | Random-delay / retry utility (module-level) |
-| `p_` | Settings write and environment check orchestrator |
-| `wO` | Settings write helper (path + assembler combo) |
-| `x6` | Path existence checker |
-| `lm8` | Settings reload helper |
-| `AP` | File-access permission checker |
-| `Tc` | File reader with encoding detection |
-| `uM` | File-type/stat inspector |
-| `v` | Environment variable reader |
-| `Bh6` | Path-existence guard |
-| `_` | Generic utility (array/string) |
-| `Fh6` | File slice reader |
-| `$8` | Atomic write helper |
-| `L8` | Error code classifier |
-| `nu8` | Timestamp cache setter |
-| `XXH` | Settings path + assembler combo (post-write) |
-| `JC6` | Settings file path resolver |
-| `yA6` | Atomic file write implementation |
-| `q` | Filesystem module wrapper |
-| `O` | Symbolic-link stat wrapper |
-| `N8` | Background-session stopped sentinel |
-| `hH` | JSON serializer wrapper |
-| `hz` | Cache-clear utility (clears two module-level Maps) |
-| `VR6` | Git-ignore / config-file writer |
-| `S6` | Async-store context reader |
-| `Uh6` | AsyncLocalStorage `.getStore()` accessor |
-| `Ru8` | Config migration helper |
-| `uu8` | Git-check-ignore runner |
-| `$_` | Git subprocess wrapper |
-| `ySK` | Home-directory config path builder |
-| `hy` | `.claude` directory path joiner |
-| `NH` | Structured log emitter |
-| `v_` | Error stringifier |
-| `xH` | String coercion wrapper |
-| `zq` | Log-queue flusher |
-| `A$A` | Log-entry formatter |
-| `kNK` | Rolling log-buffer manager |
-| `d` | Deferred / promise utility |
-| `M` | MCP server manager / registry |
-| `SvH` | MCP server connection orchestrator |
-| `KHH` | MCP config loader |
-| `cqH` | MCP server config parser |
-| `qHH` | MCP SDK server enumerator |
-| `ww6` | MCP SSE/HTTP transport handler |
-| `rI` | MCP tool-list fetcher |
-| `X$` | MCP tool invocation wrapper |
-| `RG_` | MCP reconnect gate |
-| `H_` | MCP server health monitor |
-| `f26` | MCP filter / deduplicate |
-| `_57` | MCP connection attempt scheduler |
-| `bh_` | MCP needs-auth cache reader |
-| `v78` | MCP tool-hash calculator |
-| `Ei` | MCP error formatter |
-| `kj` | MCP tool-hash builder (SHA-256) |
-| `I78` | MCP debug-log dispatcher |
-| `dK` | MCP debug-key resolver |
-| `A8` | MCP debug push helper |
-| `Yh_` | MCP remote-server connector |
-| `w77` | MCP server metadata reader |
-| `PB` | MCP auth token fetcher |
-| `tHH` | MCP OAuth callback-server and token-exchange handler |
-| `mrH` | MCP OAuth in-flight request tracker |
-| `D` | Daemon spare-worker controller |
-| `BY8` | MCP needs-auth cache writer |
-| `UQ` | MCP reconnect orchestrator |
-| `Ku` | Anthropic API token accessor |
-| `Y` | MCP supervisor writer |
+| `_H6` | User settings reader |
+| `xjH` | Project settings reader |
+| `MH6` | Local settings reader |
+| `V5H` | Settings validator |
+| `I5H` | Settings schema checker |
+| `Um8` | Settings updater |
+| `hDA` | Settings delta applier |
+| `vc` | Settings version checker |
+| `P96` | Settings persistence dispatcher |
+| `yV6` | Settings reload trigger |
+| `Cb7` | Voice argument validator (`hold`/`tap`/`off`/`invalid`) |
+| `H` | String utility / random timer namespace |
+| `p_` | Voice settings persistence function (write + cache clear + event emit) |
+| `wO` | Config path resolver |
+| `x6` | Path utility |
+| `lm8` | Current settings reader before merge |
+| `AP` | Settings apply coordinator |
+| `Tc` | File content reader with BOM/encoding detection |
+| `uM` | File stat / real path resolver |
+| `v` | Line ending / encoding detector |
+| `Bh6` | File buffer reader |
+| `_` | Generic collection / string utility |
+| `Fh6` | File content post-processor |
+| `$8` | Error code classifier |
+| `L8` | ENOENT / error handler |
+| `nu8` | Timestamp recorder (`RR6.set` + `Date.now`) |
+| `XXH` | Settings path + write-back helper |
+| `JC6` | Config directory resolver |
+| `yA6` | Atomic file write helper (temp-file + rename + fsync) |
+| `q` | File system namespace (lstat, rename, unlink, etc.) |
+| `O` | Symbolic link / stat result object |
+| `N8` | Background session state token |
+| `hH` | JSON serializer (`JSON.stringify`) |
+| `hz` | Dual-cache clear (`kV6.clear`, `EZ8.clear`) |
+| `VR6` | Settings write-to-disk routine |
+| `S6` | Git ignore check helper |
+| `Uh6` | AsyncLocalStorage store getter |
+| `Ru8` | Settings encoding converter |
+| `uu8` | Git-ignore wrapper |
+| `$_` | Git subprocess invoker |
+| `ySK` | Home directory config path builder |
+| `hy` | `.claude` path joiner |
+| `NH` | Notification / error event emitter |
+| `v_` | Error string formatter |
+| `xH` | String coercer |
+| `zq` | Async notification dispatcher |
+| `A$A` | Notification queue processor |
+| `kNK` | Ring-buffer notification manager |
+| `d` | Environment / platform capability probe |
+| `M` | MCP server manager (top-level) |
+| `SvH` | MCP server set initializer |
+| `KHH` | MCP server config aggregator |
+| `cqH` | MCP server config entry processor |
+| `qHH` | SDK MCP server collector |
+| `ww6` | SSE/HTTP MCP server registry |
+| `rI` | MCP tool registry |
+| `X$` | Tool registration helper |
+| `RG_` | Tool result router |
+| `H_` | MCP capability flag reader |
+| `f26` | MCP filter helper |
+| `_57` | MCP server health probe |
+| `bh_` | MCP server status builder |
+| `v78` | MCP tool hasher |
+| `Ei` | MCP message serializer |
+| `kj` | SHA-256 tool hash builder |
+| `I78` | MCP server ID mapper |
+| `dK` | MCP connection descriptor builder |
+| `A8` | MCP debug logger |
+| `Yh_` | MCP server connection lifecycle manager |
+| `w77` | MCP server transport factory |
+| `PB` | MCP auth coordinator |
+| `tHH` | MCP OAuth local server handler |
+| `mrH` | MCP in-flight request tracker |
+| `D` | Background daemon state machine |
+| `BY8` | MCP server status snapshot builder |
+| `UQ` | MCP server reconnect handler |
+| `Ku` | Auth token accessor |
+| `Y` | MCP supervisor write/control |
 | `_7` | MCP error logger |
-| `XH` | Error-to-string converter |
-| `J77` | MCP auth race-condition handler |
-| `D77` | SSH/remote environment detector for MCP |
-| `Dh_` | MCP tool-result dispatcher |
-| `urH` | MCP pending-request getter |
-| `prH` | MCP pending-cache getter |
-| `x8q` | MCP needs-auth cache fetcher |
-| `d1` | AsyncLocalStorage store getter |
-| `tY8` | MCP needs-auth cache path builder |
-| `Oh_` | MCP tool-call hasher and logger |
-| `NG_` | MCP claudeai-proxy transport handler |
-| `a6` | Global config reader/writer |
-| `A` | Platform-name normalizer |
-| `J` | Background session process manager |
-| `y` | Subprocess stdin writer |
-| `S8q` | MCP server-count reporter |
-| `Yn` | Async iterator / readable-stream helper |
-| `M26` | MCP server index parser (parseInt) |
-| `xh_` | MCP tool index parser (parseInt) |
-| `THK` | MCP apply-update handler |
+| `XH` | String coercer (variant) |
+| `J77` | MCP connection timeout handler |
+| `D77` | SSH environment detector |
+| `Dh_` | MCP server dispose/cleanup |
+| `urH` | MCP request map getter |
+| `prH` | MCP pending request getter |
+| `x8q` | MCP needs-auth cache handler |
+| `d1` | AsyncLocalStorage store reader |
+| `tY8` | MCP cache path builder |
+| `Oh_` | MCP tool fetch handler |
+| `NG_` | MCP tool name/namespace builder |
+| `a6` | Global config save/load |
+| `A` | Lowercase string / collection utility |
+| `J` | Process values iterator |
+| `y` | Subprocess write utility |
+| `S8q` | MCP capability query |
+| `Yn` | Async iterator / stream utility |
+| `M26` | MCP port parser |
+| `xh_` | MCP port selector |
+| `THK` | MCP update applicator |
 | `eY8` | MCP update serializer |
-| `wv` | MCP server cleanup runner |
-| `drH` | MCP debug-log serializer |
-| `$` | JZq-backed persistent store accessor |
-| `JZq` | Daemon status JSON writer |
-| `ha` | Daemon status file helper |
-| `r06` | Daemon status file path builder |
-| `B95` | MCP server diff/sync engine |
-| `k78` | MCP server capability checker |
-| `r8` | Timed-promise / abort helper |
-| `Lj` | Keybinding loader and action registrar |
-| `ma6` | Keybinding file reader |
-| `Jf6` | Keybinding file parser and validator |
-| `dL_` | Keybinding entry normalizer |
-| `Hm` | Global config guard |
+| `wv` | MCP client cleanup coordinator |
+| `drH` | MCP client teardown |
+| `$` | MCP session dispose |
+| `JZq` | Daemon status file writer |
+| `ha` | Status file helper |
+| `r06` | Daemon status path builder |
+| `B95` | MCP full roster sync |
+| `k78` | MCP server inclusion filter |
+| `r8` | Async retry-with-timeout utility |
+| `Lj` | Push-to-talk keybinding registrar |
+| `ma6` | Keybinding config file loader |
+| `Jf6` | Keybinding JSON parser |
+| `dL_` | Keybinding schema validator |
+| `Hm` | Keybinding release tracker |
 | `d9H` | Keybinding file path builder |
 | `R6` | JSON parse wrapper |
-| `mH` | Feature-flag telemetry emitter |
-| `ba6` | Keybinding block structure validator |
-| `Ra6` | Keybinding entry array builder |
-| `BC9` | Keybinding default-value resolver |
-| `gL_` | Keybinding duplicate-key detector |
-| `QL_` | Keybinding action-registry applicator |
-| `SH` | Feature-flag state reader |
-| `pa6` | Keybinding context mapper |
-| `iL_` | Keybinding context validator |
-| `IgL` | Keybinding context key checker |
-| `YGH` | Keybinding display-name mapper |
+| `mH` | Feature-state logger |
+| `ba6` | Keybinding array validator |
+| `Ra6` | Keybinding entry expander |
+| `BC9` | Keybinding config writer |
+| `gL_` | Keybinding duplicate detector |
+| `QL_` | Keybinding merge/dedup pipeline |
+| `SH` | Feature state reporter |
+| `pa6` | Keybinding binding builder |
+| `iL_` | Keybinding action validator |
+| `IgL` | Keybinding action registry lookup |
+| `YGH` | Keybinding map formatter |
 | `HSH` | Language/locale normalizer |
-| `N6` | Config file watcher bootstrapper |
-| `z9_` | Config file path validator |
-| `H$H` | Config file reader with backup/migration |
+| `N6` | Config file watcher initializer |
+| `z9_` | Config file path resolver |
+| `H$H` | Config file reader with backup |
 | `jR` | Config comment stripper |
 | `zZ9` | Config backup directory scanner |
-| `X9_` | Config backup path builder |
-| `w` | Background worker / daemon session manager |
-| `C` | Subprocess lifecycle controller |
-| `IG6` | macOS low-memory reporter |
-| `x` | Subprocess retire-if-settled handler |
-| `G6` | Global config accessor with MCP integration |
-| `Oo_` | Background worker Unix socket connector |
-| `jo_` | Background worker session lifecycle handler |
-| `h` | Subprocess handle holder |
-| `nhL` | Config file watcher registrar |
-| `Tl` | Config-change debounce handler |
-| `h9` | Signal / shutdown hook registrar |
+| `X9_` | Backup path builder |
+| `w` | Background worker session manager |
+| `C` | Subprocess controller |
+| `IG6` | Low-memory event emitter |
+| `x` | Background worker health monitor |
+| `G6` | Shared global config accessor |
+| `Oo_` | Unix socket connection helper |
+| `jo_` | Background session roster entry writer |
+| `h` | Worker health state holder |
+| `nhL` | Config file watcher setup |
+| `Tl` | File watch debounce helper |
+| `h9` | Signal handler registrar |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

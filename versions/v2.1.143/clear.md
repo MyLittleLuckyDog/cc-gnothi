@@ -2,7 +2,7 @@
 type: feature-spec
 feature: "clear"
 cc_version: "2.1.143"
-updated: "2026-05-18"
+updated: "2026-06-01"
 tags: ["clear", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -21,7 +21,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/clear` command starts a fresh conversation session with an empty context window while preserving the previous session on disk for later resumption via `/resume`. It is also registered under the aliases `/reset` and `/new`, and it supports non-interactive (scripted) invocation. Internally the command trims any optional name argument, clears all in-memory conversation and cache state across multiple subsystems, emits a new session UUID, and writes a `SessionEnd` lifecycle event before handing control to the new session initializer.
+`/clear` starts a fresh conversation session with an empty context window, discarding the active in-memory conversation while preserving the previous session on disk so it can be resumed later with `/resume`. It accepts an optional `[name]` argument to label the new session. The command is also reachable via the aliases `/reset` and `/new`.
 
 ---
 
@@ -37,6 +37,14 @@ The `/clear` command starts a fresh conversation session with an empty context w
 | supportsNonInteractive | `true` |
 | thinClientDispatch | `post-text` |
 | module_id | `dqq` |
+| load_inline | `true` |
+| loc_byte | `10100616` |
+| loc_byte_end | `10100907` |
+| arbor_handler.name | `oO7` |
+| arbor_handler.fqn | `claude-2.1.143::oO7` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
 Analysis basis: CC v2.1.143 bundle.js:+10100616
 
@@ -44,222 +52,202 @@ Analysis basis: CC v2.1.143 bundle.js:+10100616
 
 ## Input Branching
 
-The command entry point (`commandHandler`) receives the raw argument string, trims whitespace, then routes through the session-clear pipeline (`sessionClearPipeline`). The optional name argument controls whether the new session is given a custom title.
+Three distinct branches are present depending on the optional `[name]` argument and the session's background state:
 
 ```mermaid
 flowchart TD
-    A(["/clear [name] invoked"]) --> B["Trim argument string\n(H.trim)"]
-    B --> C{Argument present\nafter trim?}
-    C -- "Yes (custom name)" --> D["Pass name to new-session\ninitializer as custom title"]
-    C -- "No (empty)" --> E["Use auto-generated title"]
-    D --> F["Emit cache-eviction hint\n(tengu_cache_eviction_hint)"]
+    A["/clear [name] invoked"] --> B["Trim argument string\n(oO7 → H.trim)"]
+    B --> C{Argument provided?}
+    C -- "Yes (non-empty after trim)" --> D["Use argument as new session name"]
+    C -- "No (empty string)" --> E["Use default / auto-generated name"]
+    D --> F["Call sessionReset\n(m26)"]
     E --> F
-    F --> G{Session currently\nbackgrounded?\n(isBackgrounded flag)}
-    G -- "Yes" --> H["Skip certain foreground\nstate teardowns"]
-    G -- "No" --> I["Full foreground teardown:\nabort running request,\nclear timeout handles"]
-    H --> J["Clear all in-memory\nconversation state\n(nC_ subsystem)"]
+    F --> G{Session backgrounded?\n(isBackgrounded flag)}
+    G -- "Yes" --> H["Emit tengu_cache_eviction_hint\nSkip UI teardown path"]
+    G -- "No" --> I["Run full reset pipeline:\nclear state caches,\nreset conversation stores,\nreinit session UUID,\nreload plugin hooks"]
+    H --> J["Persist prior session to disk\n(conversation_clear event)"]
     I --> J
-    J --> K["Emit conversation_clear\ntelemetry event"]
-    K --> L["Generate new session UUID\n(Fqq.randomUUID)"]
-    L --> M["Write SessionEnd\nlifecycle record"]
-    M --> N["Initialize new session\n(sessionInitializer)"]
-    N --> O(["New empty session active"])
+    J --> K["Emit conversation_reset event\nfor new session"]
+    K --> L["Return success to caller"]
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10100442, +10100478, +10098852, +10098784, +10099880
+Analysis basis: CC v2.1.143 bundle.js:+10100442, +10100457, +10100478, +10098661, +10098784, +10098852
 
 ---
 
 ## Behavioral Spec
 
-### 1. Argument Parsing
+### 1. Entry Point — Handler `oO7`
+
+The Arbor-resolved async handler is `oO7` (resolution path: `module_id → dqq`).
 
 ```
-function parseArgument(rawInput):
-    trimmed = rawInput.trim()          // H.trim — bundle.js:+10100442
-    if length(trimmed) == 0:
-        return null                    // no custom name
+async function clearCommandHandler(rawArgument, context):
+    trimmedArg = rawArgument.trim()          # oO7 → H.trim (+10100442)
+    nameArg    = trimmedArg.length > 0       # literal 0 (+10100457)
+                   ? trimmedArg
+                   : undefined
+    result = await sessionReset(nameArg, context)   # oO7 → m26 (+10100478)
+    return result
+```
+
+Analysis basis: CC v2.1.143 bundle.js:+10100442
+
+---
+
+### 2. Session Reset Pipeline — `m26`
+
+`m26` is the core reset function invoked by the handler. It orchestrates cache eviction, state clearing, hook reloading, and event emission.
+
+```
+async function sessionReset(newName, context):
+    # Step 1 — compute token / context window metrics
+    tokenWindowInfo = computeContextWindow()    # m26 → U26 (+10098645)
+
+    # Step 2 — save / flush the current session to disk
+    # emits "clear" literal (+10098661) and "conversation_clear" event (+10098784)
+    flushCurrentSession()
+
+    # Step 3 — check background state
+    if context.isBackgrounded:                 # literal "isBackgrounded" (+10098852)
+        emitTelemetry("tengu_cache_eviction_hint")   # (+10098749)
+        # lightweight path: skip UI teardown
     else:
-        return trimmed                 // custom session name
+        # Step 4 — full reset: clear in-memory state stores
+        fullStateReset(context)                # m26 → nC_ (+10099047)
+
+    # Step 5 — abort any running operation
+    clearTimeout(existingTimer)                # m26 → clearTimeout (+10099353)
+    abortActiveController()                    # literal "abortController" (+10099389)
+
+    # Step 6 — reinitialise session identity
+    newSessionId = crypto.randomUUID()         # m26 → Fqq.randomUUID (+10099880)
+    emitSessionCreatedEvent(newSessionId)      # m26 → NZ8 (+10099898)
+
+    # Step 7 — reload MCP servers
+    mcpRefresh(context)                        # m26 → M (+10098929)
+
+    # Step 8 — reload plugin hooks
+    loadPluginHooks(context)                   # m26 → um (+10100222)
+
+    # Step 9 — emit conversation_reset telemetry
+    emitConversationReset()                    # literal "conversation_reset" (+10099841)
+
+    # Step 10 — start new agent loop
+    startAgentLoop(newName)                    # m26 → g3 (+10099783)
+
+    return { ok: true }
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10100442, +10100457
+Analysis basis: CC v2.1.143 bundle.js:+10098645, +10098661, +10098784, +10098852, +10099047, +10099353, +10099389, +10099841, +10099880
 
 ---
 
-### 2. Session-Clear Pipeline (top-level orchestrator)
+### 3. Context-Window Metrics — `U26`
+
+Before clearing, the runtime records context-window utilisation, likely for telemetry or UI feedback.
 
 ```
-async function sessionClearPipeline(trimmedName, appState):
-    emit telemetry: tengu_cache_eviction_hint   // bundle.js:+10098749
-
-    // Determine backgrounded state
-    backgrounded = appState["isBackgrounded"]   // bundle.js:+10098852
-
-    // Abort any in-flight request
-    clearTimeout(activeTimeoutHandle)           // bundle.js:+10099353
-    abortController.abort()                     // bundle.js via SZ → K.abort
-
-    // Clear conversation string literal marker
-    mark = "clear"                              // bundle.js:+10098661
-
-    // Invoke multi-subsystem state wipe
-    await fullStateClear(appState)
-
-    // Emit conversation_clear event
-    emit telemetry: "conversation_clear"        // bundle.js:+10098784
-
-    // Assign new session identifier
-    newUUID = crypto.randomUUID()               // Fqq.randomUUID, bundle.js:+10099880
-
-    // Write SessionEnd lifecycle event
-    writeSessionEndRecord(newUUID)              // nvH → literal "SessionEnd", bundle.js:+12226761
-
-    // Initialize fresh session
-    await newSessionInitializer(trimmedName, newUUID, appState)
+function computeContextWindow():
+    raw       = parseInt(windowSize)               # U26 → parseInt (+12234997)
+    if not Number.isFinite(raw): return default    # U26 → Number.isFinite (+12235019)
+    policy    = getPolicySettings()                # U26 → aY (+12235062)
+    # literal "policySettings" (+5388489)
+    base      = getBaseValue()                     # U26 → mU (+12235070)
+    adjusted  = getAdjustedValue()                 # U26 → Qg (+12235097)
+    clamped   = Math.max(0, Math.min(1000, …))     # U26 → Math.max/min (+12235215/+12235228)
+    # literal 1000 (+12235184), literal 10 (+12235008)
+    return clamped
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10098645, +10098657, +10098705, +10099353, +10099880
+Analysis basis: CC v2.1.143 bundle.js:+12234997, +12235019, +12235184
 
 ---
 
-### 3. Full State Clear (multi-subsystem wipe)
+### 4. Full In-Memory State Reset — `nC_`
 
-The subsystem `nC_` (fullStateClear) fans out to clear every in-memory cache and state store without touching the on-disk session record.
+When not backgrounded, `nC_` clears every in-memory store before the new session begins.
 
 ```
-async function fullStateClear(appState):
-    // Clear conversation message cache
-    clearConversationCache()           // zi9 → Xm.clear, bundle.js:+4753248
-
-    // Clear abort-signal / request tracker
-    clearRequestTracker()              // RTH subsystem, bundle.js:+4742950
-
-    // Clear subagent registry
-    subagentRegistry.clear()           // K98 → rC.delete, bundle.js:+5456700
-
-    // Clear compaction state
-    postCompactState.clear()           // $98 → lAq.clear, bundle.js:+9876532
-
-    // Clear route / permission caches
-    routeCache.clear()                 // rq1 → Xz6.clear, bundle.js:+5398693
-    permissionCache.clear()            // rq1 → Pw_.clear, bundle.js:+5398705
-
-    // Clear session-level tool-result caches
-    toolResultCache.clear()            // E11 → gn.clear, bundle.js:+5293115
-    toolStateCache.clear()             // E11 → fzH.clear, bundle.js:+5293126
-
-    // Clear hook caches
-    hookCache.clear()                  // JrH → vz8.clear, bundle.js:+9338371
-
-    // Clear compact-summary caches
-    compactSummaryCache1.clear()       // ZS1 → yVH.clear, bundle.js:+7968683
-    compactSummaryCache2.clear()       // ZS1 → xT_.clear, bundle.js:+7968695
-
-    // Clear inline-query caches
-    inlineQueryCache1.clear()          // yq1 → IQH.clear, bundle.js:+5383967
-    inlineQueryCache2.clear()          // yq1 → zz6.clear, bundle.js:+5383979
-
-    // Clear policy/history cache
-    historyCache.clear()               // Nu8 → HCH.clear, bundle.js:+1050564
-
-    // Clear autonomous-loop state
-    autonomousLoopState.clear()        // $41 → y98.clear, bundle.js:+5560147
-
-    // Clear interrupt/hook callback cache
-    hookCallbackCache.clear()          // Ju8 → tRH.clear, bundle.js:+1043104
-
-    // Reset autonomous-loop delivery counter
-    autonomousLoopDelivered.reset()    // bz4.resetAutonomousLoopDelivered, bundle.js:+5472860
-
-    // Flush pending output tokens metric
-    flushOutputTokens()                // tj → outputTokens, bundle.js:+41769
-
-    await Promise.resolve()            // bundle.js:+10097925
+function fullStateReset(context):
+    clearConversationStore()          # nC_ → gC_ (+10097639)
+    clearRenderedHookData()           # nC_ → rHH (+10097647)
+    clearPromptCache()                # nC_ → zi9 (+10097656)
+    resetSessionHooks()               # nC_ → YH6 (+10097665)
+    resetAllStateSlices()             # nC_ → sn (+10097675)
+      # sn clears: post-compact state (K98), feature flags (F$6),
+      #            compact state (Pn/Pe), cache sets ($98, rq1),
+      #            token counters (CK1/an), autonomousLoopDelivered flag,
+      #            and tool output maps (tj/iw_)
+    clearVectorStoreCache()           # nC_ → JrH (+10097688)
+    clearSessionStore()               # nC_ → ZS1 (+10097861)
+    clearContextQueryCache()          # nC_ → yq1 (+10097870)
+    clearHistoryCache()               # nC_ → Nu8 (+10097879)
+    clearDiagnosticsCache()           # nC_ → md9 (+10097885)
+    clearEditorAnnotations()          # nC_ → $41 (+10097894)
+    clearInternalFlagStore()          # nC_ → $I8 (+10097900)
+    clearJupyterKernelCache()         # nC_ → Ju8 (+10097907)
+    clearHookQueue()                  # nC_ → hHq (+10097913)
+    clearEventEmitterState()          # nC_ → E11 (+10097919)
+    # resolve immediately after all clears
+    Promise.resolve()                 # nC_ → Promise.resolve (+10097925)
+    runPostClearCallbacks(context)    # nC_ → lv_, q, OO8, oX, BgH
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10097639 – +10098209
+Analysis basis: CC v2.1.143 bundle.js:+10097639, +10097656, +10097675, +10097688, +10097870, +10097879, +10097919, +10097925
 
 ---
 
-### 4. New Session Initializer
+### 5. MCP Server Refresh — `M` / `SvH`
 
-After the state wipe, the new session is constructed. This mirrors the initial session-start flow (`um` / `Jz6` / `L2`).
+After clearing state the command triggers an MCP reconnect cycle. This re-enumerates server configurations, kills stale connections, and reconnects.
 
 ```
-async function newSessionInitializer(customName, sessionUUID, appState):
-    // Build effort and model parameters
-    effortValue = getEffortValue(appState)      // A.getEffortValue, bundle.js:+12236247
-
-    // Emit SessionEnd lifecycle write
-    writeRecord("SessionEnd", previousSessionId) // literal "SessionEnd", bundle.js:+12226761
-
-    // Resolve working directory
-    resolvedCwd = resolveCwd(appState)           // fD subsystem, bundle.js:+10099056
-
-    // Emit conversation_reset telemetry
-    emit "conversation_reset"                    // bundle.js:+10099841
-
-    // Generate new session roster entry and UUID
-    newRosterEntry = buildRosterEntry(sessionUUID, customName)  // Ub/NZ8, bundle.js:+10099898
-
-    // Flush any pending log writes
-    await flushLogWrites()                       // rIH → R28, bundle.js:+10100131
-
-    // Register new session with daemon (if running)
-    registerWithDaemon(newRosterEntry)           // g3/KL, bundle.js:+10099783
-
-    // Activate new conversation loop
-    await conversationLoop(appState, newRosterEntry)  // um/Jz6/L2 chain
+async function mcpRefresh(context):
+    for each serverConfig in Object.values(mcpConfig):    # m26 → M (+10098929)
+        serverState = startOrRefreshServer(serverConfig)  # M → SvH (+14234051)
+        if serverState.status == "disabled": continue     # literal "disabled" (+9694745)
+        reconnectIfNeeded(serverState)
+        # transport types handled: stdio, sse, sse-ide, ws-ide (+9694847/881/946/982)
+    applyMcpUpdate(results)                               # M → THK (+14234061)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10099783, +10099841, +10099880, +10100131, +12226761
+Analysis basis: CC v2.1.143 bundle.js:+10098929, +14234051, +9694745
 
 ---
 
-### 5. Session-End Record Writer
+### 6. Plugin Hook Reload — `um`
 
 ```
-function writeSessionEndRecord(previousSessionId):
-    record = {
-        type: "SessionEnd",          // literal, bundle.js:+12226761
-        sessionId: previousSessionId,
-        timestamp: Date.now()
-    }
-    appendToSessionLog(record)       // Ub → H4H → A.appendFileSync, bundle.js:+12140073
-    emitEvent("SessionEnd", record)  // Ub → lG6.emit, bundle.js:+12141105
+async function loadPluginHooks(context):
+    # literal "Skipping plugin hooks - allowManagedHooksOnly is enabled..."
+    if allowManagedHooksOnly and noManagedPlugins:
+        log("Skipping…")                          # literal (+5394416)
+        return
+    emitTelemetry("load_plugin_hooks")             # literal (+5394518)
+    cloneOrUpdatePlugins()                         # um → aY (+5394395)
+    buildHookConfig()                              # um → nFH (+5394401)
+    startNewAgentWithHooks()                       # um → Jz6 (+5395417)
+    # error handling paths for: network, permissions, parse/JSON/schema errors
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+12226761, +12140073, +12141105
+Analysis basis: CC v2.1.143 bundle.js:+5394395, +5394416, +5394518
 
 ---
 
-### 6. Abort / Timeout Cleanup
+### 7. New Agent Loop Start — `Jz6` / `L2`
+
+Once all state is cleared and hooks are loaded, a new agent loop is started for the fresh session.
 
 ```
-function abortAndClearTimers(sessionState):
-    // Cancel pending AbortSignal
-    AbortSignal.timeout(0)                    // m26 → AbortSignal.timeout, bundle.js:+10098705
-    activeAbortController.abort()             // SZ → K.abort, bundle.js:+8061172
-    clearTimeout(activeTimeoutHandle)         // m26 → clearTimeout, bundle.js:+10099353
+async function startNewAgentLoop(sessionName):
+    buildInitialContext()               # Jz6 → L4 (+12226072)
+    loop = createAgentLoop()            # Jz6 → L2 (+12226153)
+    loop.sessionId = randomUUID()       # Jz6 → p28.randomUUID (+12226179)
+    await loop.run()
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10098705, +10099353, +8061172
-
----
-
-### 7. Random Jitter (background session delay)
-
-A small random delay is introduced when dispatching to the background session layer, to avoid thundering-herd on daemon socket claims.
-
-```
-function randomJitterDelay():
-    // Values: Math.random() produces [0, 2), floored, yielding 0 or 1
-    delay = Math.floor(Math.random() * 2) + 1   // literals 2, 1 — bundle.js:+12638154, +12638170
-    setTimeout(callback, delay)                   // bundle.js:+12638193
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+12638154, +12638170, +12638193
+Analysis basis: CC v2.1.143 bundle.js:+12226072, +12226153, +12226179
 
 ---
 
@@ -267,20 +255,22 @@ Analysis basis: CC v2.1.143 bundle.js:+12638154, +12638170, +12638193
 
 | Item | Detail |
 |---|---|
-| Telemetry emitted | `tengu_cache_eviction_hint` (bundle.js:+10098749); `tengu_session_renamed` (bundle.js:+12141118); `tengu_repl_hook_finished` (bundle.js:+12256704); `tengu_run_hook` (bundle.js:+12272534); `tengu_feature_ok` / `tengu_feature_bad` (bundle.js:+955068, +955126) |
-| Conversation state cleared | All in-memory message history, tool-result caches, compaction summaries, permission caches, hook caches, policy caches, subagent registry — see § 3 |
-| On-disk session record | **Preserved** — previous session remains on disk and is resumable via `/resume` |
-| Session lifecycle events | `SessionEnd` written to session log before new session starts (bundle.js:+12226761) |
-| New session UUID | Generated via `crypto.randomUUID()` (bundle.js:+10099880) |
-| Custom title | If a name argument is supplied, stored as `custom-title` metadata on the new session roster entry (literal `custom-title`, bundle.js:+12141026) |
-| Active request abort | Any in-flight API request is aborted via `AbortController.abort()` (bundle.js:+8061172) |
-| Timeout handles | All active `setTimeout` handles are cleared (bundle.js:+10099353) |
-| Autonomous-loop counter | Reset via `bz4.resetAutonomousLoopDelivered` (bundle.js:+5472860) |
-| Output-token flush | Pending `outputTokens` metric flushed before new session (bundle.js:+41769) |
-| Hook registration | `at_.register` invoked during new-session hook setup via `KL → h9` (bundle.js:+56977) |
-| appState changes | `isBackgrounded` flag read but not mutated; new session UUID and roster entry written |
+| Telemetry — `tengu_cache_eviction_hint` | Fired when the session is backgrounded; signals lightweight clear path (bundle.js:+10098749) |
+| Telemetry — `tengu_run_hook` | Fired during hook execution within the new session setup (bundle.js:+12272534) |
+| Telemetry — `tengu_feature_ok` / `tengu_feature_bad` | Fired on successful / failed feature gate checks during reset (bundle.js:+955068, +955126) |
+| Telemetry — `tengu_repl_hook_finished` | Fired after REPL hook completes on new session (bundle.js:+12256704) |
+| Telemetry — `tengu_session_renamed` | Fired when a custom name is applied to the new session (bundle.js:+12141118) |
+| Telemetry — `tengu_shell_set_cwd` | Fired if working directory is re-applied during reset (bundle.js:+8556995) |
+| Telemetry — `tengu_hook_plugin_injected` | Fired when a plugin hook is injected into the new session (bundle.js:+12270880) |
+| Event — `conversation_clear` | Emitted to signal the old session is persisted to disk (bundle.js:+10098784) |
+| Event — `conversation_reset` | Emitted to signal the new session has started (bundle.js:+10099841) |
+| Event — `SessionEnd` | Broadcast via the session event bus at close of the old session (literal `"SessionEnd"` bundle.js:+12226761) |
+| AbortController cleared | Any in-flight agent abort controller is cleared before the new loop starts (bundle.js:+10099353, +10099389) |
+| All in-memory caches cleared | Conversation store, prompt cache, vector store, Jupyter kernel cache, hook queue, editor annotations, etc. (bundle.js:+10097639–+10097925) |
+| MCP servers restarted | All configured MCP servers are re-enumerated and reconnected (bundle.js:+10098929) |
+| Plugin hooks reloaded | Plugin hook configuration is rebuilt and re-injected (bundle.js:+10100222) |
+| Disk persistence | Previous session JSONL transcript remains on disk; no deletion occurs |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| MCP servers | Not disconnected — MCP server state is preserved across `/clear` (no teardown call observed in depth-2 traversal of `nC_`) |
 
 ---
 
@@ -288,21 +278,17 @@ Analysis basis: CC v2.1.143 bundle.js:+12638154, +12638170, +12638193
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis — `local` command type, aliases `reset`/`new`, `thinClientDispatch: post-text`, `supportsNonInteractive: true` |
+| v2.1.143 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Confusing `/clear` with session deletion.** The previous session is not deleted; it remains on disk. Use `/resume` to return to it. The command description explicitly states this: "previous session stays on disk (resumable with /resume)".
-
-2. **Using `/clear` when you mean `/compact`.** `/clear` discards the entire in-memory context. `/compact` summarizes and compresses it while keeping the session alive. Use `/compact` when you want to reduce token usage without losing continuity.
-
-3. **Expecting MCP servers to reconnect.** MCP server connections are not torn down by `/clear`. If a server is in a bad state, `/clear` will not reset it; you need to explicitly restart the relevant MCP server.
-
-4. **Passing a multi-word name without quoting in scripted (`--print`) invocations.** Because `supportsNonInteractive` is true, `/clear` can be driven programmatically, but the optional `[name]` argument is taken as the full trimmed remainder of the command string. Ensure the invoking script passes the name as a single token or properly escaped string.
-
-5. **Assuming `/reset` and `/new` behave differently.** Both are exact aliases for `/clear` with identical behavior — they share the same command registration object (bundle.js:+10100616).
+1. **Expecting the old context to be gone permanently.** `/clear` only removes the conversation from the active in-memory window. The prior session is persisted to disk and remains resumable via `/resume`.
+2. **Using `/clear` to rename the current session.** The optional `[name]` argument names the *new* session that is created, not the session being discarded.
+3. **Assuming backgrounded and foreground clears are equivalent.** When the session is backgrounded (`isBackgrounded` flag), only a lightweight eviction path runs; a full state reset is skipped.
+4. **Invoking `/clear` when a long-running tool is active.** The command aborts the active `AbortController` (bundle.js:+10099389). Any in-flight tool call will be cancelled without waiting for completion.
+5. **Relying on MCP tool availability immediately after `/clear`.** MCP servers are reconnected asynchronously. There may be a brief window where MCP tools are unavailable in the new session.
 
 ---
 
@@ -312,190 +298,184 @@ Analysis basis: CC v2.1.143 bundle.js:+12638154, +12638170, +12638193
 
 | Identifier | Role |
 |---|---|
-| `oO7` | Command handler entry point for `/clear` |
-| `m26` | Session-clear pipeline orchestrator |
-| `U26` | Token/effort parameter resolver |
+| `oO7` | Main async handler for `/clear` (Arbor-resolved entry point) |
+| `m26` | Core session-reset orchestrator |
+| `U26` | Context-window metrics calculator |
 | `aY` | Policy-settings reader |
-| `I8` | Policy settings accessor (reads `policySettings`) |
-| `mU` | Global-state getter (reads from `GV`) |
-| `Qg` | Session-context query helper |
-| `Lw_` | Session context sub-reader (`bq1`) |
-| `nvH` | Session-end record writer / `SessionEnd` emitter |
-| `L4` | Model/effort configuration builder |
-| `V6` | App-state value extractor |
-| `Yy` | App-state secondary extractor |
-| `QX` | Effort-level resolver (handles model strings and `effort` key) |
-| `sE` | High-effort mode checker |
-| `QZ` | Conversation message list builder |
+| `I8` | Internal state accessor |
+| `mU` | Base context-window value provider |
+| `Qg` | Adjusted context-window value provider |
+| `Lw_` | Window-value helper |
+| `nvH` | Session-end event emitter / pre-clear setup |
+| `L4` | Initial context builder for new agent loop |
+| `V6` | State-value getter (shared utility) |
+| `Yy` | Secondary state-value getter |
+| `QX` | Effort / model-selection helper |
+| `sE` | Effort threshold evaluator |
+| `QZ` | Context-query builder |
 | `S6` | Session log appender |
-| `j2` | Core new-session executor (hook runner + message loop launcher) |
+| `j2` | Agent-loop runner |
 | `xH` | String coercion utility |
-| `bm` | Message-batch builder |
-| `v` | REPL message formatter / debug-level handler |
-| `_4H` | Effort/model value mapping helper |
-| `cQ_` | Hook-event filter and dispatcher (handles PreToolUse, PostToolUse, etc.) |
-| `O` | Message/event collection with `N8` lookup |
-| `GSq` | Group-selector helper |
+| `bm` | Message builder |
+| `v` | Debug-mode / verbosity checker |
+| `_4H` | Hook-type evaluator |
+| `cQ_` | Hook configuration resolver |
+| `O` | Generic collection filter/map helper |
+| `GSq` | Hook-group selector |
 | `dQ_` | Third-party hook filter |
-| `TSq` | Tool-stop handler |
-| `d` | Shared state/config accessor |
-| `hH` | JSON serialization wrapper |
-| `NH` | Error logging and push reporter |
-| `mH` | State mutation accessor |
-| `cPH` | Compact-handler invoker (`Zh6`) |
-| `SZ` | Abort-controller manager (abort + clearTimeout + setTimeout) |
-| `j` | Callback invoker (`w`) |
-| `d6H` | Deferred-handler reference |
-| `hh` | Hook-execution helper |
-| `g28` | Hook group executor (`hh`, `om_`, `am_`) |
-| `QQ_` | MCP tool runner |
+| `TSq` | Hook timeout selector |
+| `d` | Low-level logger |
+| `hH` | JSON serialiser wrapper |
+| `NH` | Error-logging helper |
+| `mH` | Message-state helper |
+| `cPH` | Compact-phase helper |
+| `SZ` | Abort-signal/timeout manager |
+| `j` | Hook callback dispatcher |
+| `d6H` | Date/time formatter |
+| `hh` | Hook-output formatter |
+| `g28` | Hook-result aggregator |
+| `QQ_` | MCP tool result handler |
 | `c28` | Hook JSON-output parser |
 | `gQ_` | HTTP hook executor |
-| `WSq` | HTTP-hook response handler |
-| `mLH` | Mutex/lock helper |
-| `l28` | Shell/bash hook spawner |
-| `SH` | State persistence writer |
-| `Wj6` | Session-name writer |
-| `ieH` | Cache-eviction hint emitter |
-| `M` | MCP server manager (applies updates, reconciles server list) |
-| `SvH` | MCP server connection supervisor |
-| `KHH` | MCP client connection factory |
-| `rI` | MCP reconnect-state tracker |
-| `K` | Active-connection map / task padder |
-| `H_` | Underscore/path helper |
-| `f26` | MCP filter helper |
-| `_57` | Timing/date-stamp helper for MCP |
-| `v78` | MCP key enumerator |
-| `I78` | MCP disconnect helper (`dK`) |
-| `A8` | MCP debug-log pusher |
-| `Yh_` | OAuth flow initiator for MCP |
-| `Dh_` | OAuth completion handler for MCP |
-| `x8q` | MCP connection status poller |
-| `Oh_` | MCP error reporter |
-| `NG_` | MCP include-list checker |
-| `J` | Process/session kill-list manager |
-| `y` | Daemon write-stream wrapper |
-| `_7` | MCP error push logger |
-| `XH` | String-coercion error formatter |
-| `S8q` | MCP status reporter (`Yn`) |
-| `M26` | MCP integer parser |
-| `xh_` | MCP secondary integer parser |
-| `THK` | MCP update applier (`applyMcpUpdate`) |
-| `eY8` | MCP update serializer |
-| `wv` | MCP cleanup runner |
-| `L` | Connection-set manager (add/finally/delete) |
-| `q` | File-unlink executor (`n8K.unlinkSync`) |
-| `f` | Connection finalizer (close + cleanup) |
-| `$` | Session-record builder (`JZq`) |
-| `JZq` | Session timestamp + ID record constructor |
-| `B95` | MCP bulk-reconnect coordinator |
-| `_` | Underscore/path or utility reference |
-| `k78` | MCP capability-set checker |
-| `r8` | Retry-with-timeout helper |
-| `drH` | MCP debug serializer (`hH`) |
-| `Rj` | Running-state marker |
-| `w` | Worker/background-session dispatch manager |
-| `C` | Session process controller (kill, write, NH) |
-| `Z_K` | File realpath/stat resolver |
-| `MK5` | Process metadata builder (`p58`) |
-| `z` | Daemon stream writer (SH, mH, xN, Ox) |
+| `WSq` | HTTP hook response parser |
+| `mLH` | Hook metadata logger |
+| `l28` | Shell hook spawner |
+| `SH` | State-history helper |
+| `Wj6` | Session-end broadcaster |
+| `ieH` | Cache eviction hint emitter |
+| `M` | MCP server manager |
+| `SvH` | MCP server initialiser / reconnector |
+| `KHH` | MCP server config mapper |
+| `rI` | MCP credential resolver |
+| `K` | MCP server list helper |
+| `H_` | MCP server state helper |
+| `f26` | MCP server filter helper |
+| `_57` | MCP connection timestamp tracker |
+| `v78` | MCP tool registry builder |
+| `I78` | MCP tool type inspector |
+| `A8` | MCP debug logger |
+| `Yh_` | OAuth MCP flow initiator |
+| `Dh_` | OAuth callback handler |
+| `x8q` | MCP health-check helper |
+| `Oh_` | MCP tool permission checker |
+| `NG_` | MCP server filter (by include list) |
+| `J` | Process manager / MCP process list |
+| `y` | Background process writer |
+| `_7` | MCP error logger |
+| `XH` | String error formatter |
+| `S8q` | MCP status poller |
+| `M26` | MCP retry-count parser |
+| `xh_` | MCP backoff-interval parser |
+| `THK` | MCP update applicator |
+| `eY8` | MCP update event emitter |
+| `wv` | MCP cleanup helper |
+| `L` | Session / file manager |
+| `q` | Temporary file unlinker |
+| `f` | File handle wrapper |
+| `$` | Background session factory |
+| `JZq` | Background session init helper |
+| `B95` | MCP full-reconnect orchestrator |
+| `k78` | MCP connection-state checker |
+| `r8` | Retry scheduler |
+| `drH` | MCP disconnect logger |
+| `Rj` | Running-state guard |
+| `w` | Daemon/background-worker manager |
+| `C` | Worker process controller |
+| `Z_K` | Worker filesystem resolver |
+| `MK5` | Worker socket path builder |
+| `z` | Worker output stream |
 | `IG6` | Low-memory monitor |
-| `G6` | Foreground-session gate checker |
-| `x` | Idle-timeout / retire-if-settled manager |
-| `h` | Timer handle holder |
-| `m` | Timer unref wrapper |
-| `Oo_` | Daemon socket claim sender |
-| `Gd_` | Session directory/file writer |
-| `uq5` | Claim-send timeout enforcer |
-| `xq5` | Claim-frame builder |
-| `L8` | Promise-race / abort-signal integrator |
-| `mp` | Binary-framed message encoder (Buffer.from + writeUInt32BE) |
-| `jo_` | Background-session lifecycle manager (create/retire/roster) |
-| `IK` | Path joiner for session directories |
-| `s1` | Session-file reader/cache manager |
-| `rw` | Active-state marker (`lE`) |
-| `Bf` | Session-file path builder |
-| `SoH` | Session-start hook invoker |
-| `wLH` | Session log-path builder |
-| `Bk` | Session-name splitter (H.split) |
-| `gp` | Session-directory path builder |
-| `zW6` | Session directory creator (`Ex_`) |
-| `D` | Daemon-wide idle/disposal controller |
-| `$o_` | Spare-session spawner (Bun.spawn) |
-| `iD` | In-daemon state accessor |
-| `nC_` | Full in-memory state clear orchestrator |
-| `gC_` | Sub-clear initializer |
-| `rHH` | Hook/state pipeline builder (PqH, Cz8, Ft1, LY8) |
-| `PqH` | Hook pipeline stage 1 |
-| `Cz8` | Hook pipeline stage 2 |
-| `Ft1` | Hook pipeline stage 3 |
-| `LY8` | Hook pipeline stage 4 |
-| `zi9` | Conversation-cache clearer (`Xm.clear`) |
-| `RTH` | Request-tracker clearer (`Ai9`, `qi9`) |
-| `YH6` | Session-year/date helper |
-| `sn` | Multi-subsystem clear fan-out |
-| `T1H` | Teammate initializer (`G1H`) |
-| `K98` | Subagent registry clearer |
-| `F$6` | Session-start event emitter (`XT`) |
-| `Pn` | Prompt-state clearer |
-| `Pe` | Permission-state clearer (`DI8`, `EI8`) |
-| `$98` | Compaction-state clearer (`lAq.clear`) |
-| `rq1` | Route/permission cache clearer (`Xz6.clear`, `Pw_.clear`) |
-| `CK1` | Conversation-context re-initializer |
-| `an` | Autonomous-loop flag resetter |
-| `tj` | Output-token metric flusher |
-| `iw_` | Post-clear hook invoker |
-| `JrH` | Hook-result cache clearer (`vz8.clear`) |
-| `ZS1` | Compact-summary cache clearer (`yVH.clear`, `xT_.clear`) |
-| `yq1` | Inline-query cache clearer (`IQH.clear`, `zz6.clear`) |
-| `Nu8` | Policy/history cache clearer (`HCH.clear`) |
-| `md9` | Misc-diagnostic clearer |
-| `$41` | Autonomous-loop state clearer (`y98.clear`) |
-| `$I8` | Has-check guard for session state |
-| `Ju8` | Hook-callback cache clearer (`tRH.clear`) |
-| `hHq` | Pending-hook queue flusher |
-| `E11` | Tool-result/state cache clearer (`gn.clear`, `fzH.clear`) |
+| `G6` | Memory-event dispatcher |
+| `x` | Worker retirement manager |
+| `Oo_` | Spare-worker claimer |
+| `Gd_` | Spare-worker directory creator |
+| `uq5` | Claim-send timeout handler |
+| `xq5` | Claim frame builder |
+| `L8` | Generic async retry helper |
+| `mp` | Binary message framer |
+| `jo_` | Worker lifecycle manager |
+| `IK` | Worker socket path builder |
+| `s1` | Session roster reader |
+| `rw` | Active-session state setter |
+| `Bf` | Session file writer |
+| `SoH` | Session health-probe runner |
+| `wLH` | Worker log-path resolver |
+| `Bk` | Worker log reader |
+| `gp` | Worker state-file reader |
+| `zW6` | Worker state-file writer |
+| `D` | Daemon lifecycle controller |
+| `$o_` | Spare-worker spawner |
+| `iD` | In-progress guard |
+| `nC_` | Full in-memory state reset orchestrator |
+| `gC_` | Conversation-store clearer |
+| `rHH` | Rendered-hook-data clearer |
+| `zi9` | Prompt-cache clearer |
+| `RTH` | Cache-directory writer |
+| `YH6` | Session-hook resetter |
+| `sn` | Multi-slice state resetter |
+| `T1H` | Main-thread state resetter |
+| `K98` | Post-compact state clearer |
+| `F$6` | Feature-flag resetter |
+| `Pe` | Compact-state pair resetter |
+| `$98` | Cache-set clearer (lAq) |
+| `rq1` | Context-query cache clearer |
+| `CK1` | Token-counter resetter |
+| `an` | Autonomous-loop counter resetter |
+| `tj` | Output-token counter resetter |
+| `JrH` | Vector-store cache clearer |
+| `ZS1` | Session-store clearer |
+| `yq1` | Context-query cache clearer (secondary) |
+| `Nu8` | History cache clearer |
+| `md9` | Diagnostics cache clearer |
+| `$41` | Editor-annotation cache clearer |
+| `$I8` | Internal-flag store clearer |
+| `Ju8` | Jupyter kernel cache clearer |
+| `hHq` | Hook-queue clearer |
+| `E11` | Event-emitter state clearer |
 | `fD` | Working-directory resolver |
 | `x6` | Path existence checker |
-| `$8` | Async-safe path stat wrapper |
-| `Px8` | Normalized-path resolver (NFC normalization) |
-| `y8H` | Path normalizer (H.normalize) |
-| `__` | Global-state helper (`GV`) |
-| `UTH` | Session-metadata updater |
-| `QI` | Conversation-state query |
-| `zz` | Flush-pending-writes helper (`R28`, `S28`) |
-| `R28` | Pending-write tracker (`yyq.add/delete`) |
-| `SdH` | CLI-mode state setter (`OD1`) |
-| `OD1` | CLI state writer |
-| `Qqq` | Queue-state helper (`_7H`) |
-| `_7H` | Queue-drain helper |
-| `g3` | Session-initializer entry (calls `KL`) |
-| `KL` | Conversation-loop constructor |
-| `h9` | Hook registrar (`at_.register`) |
-| `Ip` | App-state inspector |
-| `g5` | Conversation-path builder (`CU`, `l$`, `A$H.join`) |
-| `CU` | Context-path prefix builder |
-| `p26` | Session-loop runner (calls `KL`) |
-| `NZ8` | New-session UUID emitter (`v8H.randomUUID`, `xV6.emit`) |
-| `rQ` | Roster-query helper (calls `KL`) |
-| `Ub` | Session-rename/log writer (`H4H`, `lG6.emit`) |
-| `H4H` | File-based session log appender |
-| `rIH` | Session-log symlink manager |
-| `xQ_` | Log directory creator |
-| `AiH` | Log-path constructor |
-| `S$` | Symlink target builder |
-| `Kf8` | Log-file opener |
+| `$8` | Async error wrapper |
+| `Px8` | CWD store accessor |
+| `y8H` | Path normaliser |
+| `__` | Global-variable accessor |
+| `UTH` | UI teardown helper |
+| `QI` | Quit-signal inspector |
+| `zz` | Stream-flush manager |
+| `R28` | Async-set tracker |
+| `SdH` | Shell-daemon helper |
+| `OD1` | CLI-mode checker |
+| `Qqq` | Queue-drain helper |
+| `g3` | New-agent-loop launcher |
+| `KL` | Agent-loop factory |
+| `h9` | Finaliser registration helper |
+| `Ip` | Interrupt-policy reader |
+| `g5` | Context-path builder |
+| `CU` | Config-directory resolver |
+| `p26` | Pre-loop setup runner |
+| `NZ8` | Session-created event emitter |
+| `rQ` | Request-quota checker |
+| `Ub` | Session-rename handler |
+| `H4H` | Synchronous log appender |
+| `rIH` | Symlink/task-dir creator |
+| `xQ_` | Tasks-directory initialiser |
+| `AiH` | Task-path builder |
+| `S$` | Task-symlink creator |
+| `Kf8` | Task-log file opener |
 | `_T` | Subagent path builder |
-| `Wf` | Session-watch initializer |
-| `rf` | Session-resume checker |
-| `pb` | Worktree-state log writer |
-| `$6H` | Isolation-latch log writer |
-| `Oyq` | Async append-file helper |
-| `um` | Full new-session assembler (collects all subsystem outputs) |
-| `TK` | Token-count coercion helper |
-| `nFH` | Tool-include set builder |
-| `sRH` | Session-start logger |
-| `T8` | Sync file log writer |
-| `Jz6` | Session-loop factory (calls `L4`, `L2`) |
-| `L2` | Core conversation-loop executor |
-| `L9` | Session UUID generator (`yt1.randomUUID`) |
+| `Wf` | Worktree-state initialiser |
+| `rf` | Isolation-latch checker |
+| `pb` | Worktree-state writer |
+| `$6H` | Isolation-latch writer |
+| `Oyq` | Async log appender |
+| `um` | Plugin-hook loader |
+| `TK` | String formatter (hooks) |
+| `nFH` | Hook-config builder |
+| `sRH` | Plugin-clone runner |
+| `T8` | Synchronous file log writer |
+| `Jz6` | Agent-loop launcher with hooks |
+| `L2` | Full agent-loop implementation |
+| `L9` | Session-UUID generator |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

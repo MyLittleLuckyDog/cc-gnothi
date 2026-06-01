@@ -1,13 +1,13 @@
 ---
 type: feature-spec
 feature: "status"
-cc_version: 2.1.141
-updated: "2026-05-18"
+cc_version: "2.1.141"
+updated: "2026-06-01"
 tags: ["status", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.139
-analysis_basis: "CC v2.1.139 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/status`
 
-> Analysis basis: CC v2.1.139 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.139
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/status` command is a local, immediately-executed slash command that renders a JSX panel displaying the current state of the Claude Code session. It surfaces version metadata, the active model, account identity, API reachability, and the availability of registered tools — giving the user a single-glance diagnostic snapshot without leaving the REPL.
+The `/status` command is a local, immediately-executed slash command that renders a JSX component displaying a real-time snapshot of Claude Code's operational state. It surfaces version information, the active model, account identity, API connectivity health, and the status of available tools — all without sending a prompt to the agent. Because it is typed `local-jsx` and flagged `immediate: true`, the output appears inline in the terminal UI as soon as the command is issued.
 
 ---
 
@@ -30,90 +30,79 @@ The `/status` command is a local, immediately-executed slash command that render
 
 | Field | Value |
 |---|---|
-| type | `local-jsx` |
-| name | `status` |
-| description | `Show Claude Code status including version, model, account, API connectivity, and tool statuses` |
-| immediate | `true` |
-| module\_id | `VOq` |
+| `type` | `local-jsx` |
+| `name` | `status` |
+| `description` | Show Claude Code status including version, model, account, API connectivity, and tool statuses |
+| `immediate` | `true` |
+| `module_id` | `p4q` |
+| `load_inline` | `true` |
+| `handler` | `D37` (AsyncFunction, resolved via `module_id` path) |
+| `loc_byte_end` | `10970992` |
+| `arbor_handler.name` | `D37` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::D37` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.139 bundle.js:+11098580
+Analysis basis: CC v2.1.132 bundle.js:+10970787 – +10970992
 
 ---
 
 ## Input Branching
 
-Because the AST traversal reported an empty call graph and no string literals for module `VOq`, no branching logic was recoverable at depth ≤ 2.
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-The only structurally confirmed branching is the `immediate: true` flag, which means the runtime executes the command's render function as soon as the user submits `/status`, without waiting for any additional argument parsing or confirmation step.
+The `/status` command accepts no user-supplied arguments. Because `immediate: true` is set, the shell intercepts the command before any prompt-routing logic runs and dispatches directly to the handler. There is no argument-parsing stage and no conditional branching on user input.
 
 ```mermaid
 flowchart TD
-    A([User types /status]) --> B{immediate flag}
-    B -- true --> C[Execute render function immediately]
-    B -- false --> D[Wait for argument resolution]
-    C --> E[Render JSX status panel]
-    D --> E
-    E --> F([Display in REPL])
+    A([User types /status]) --> B{immediate flag set?}
+    B -- yes --> C[Dispatch to statusHandler immediately]
+    B -- no --> D[Normal prompt routing — not reached for this command]
+    C --> E[statusHandler builds JSX tree]
+    E --> F[createElement called with 'Status' label]
+    F --> G([JSX component rendered in terminal UI])
 ```
 
-Analysis basis: CC v2.1.139 bundle.js:+11098580 (`immediate: true`)
+Analysis basis: CC v2.1.132 bundle.js:+10970646 (call edge `D37 → zhA.createElement`), +10970700 (string literal `"Status"`)
 
 ---
 
 ## Behavioral Spec
 
-### Command Dispatch
+### Status Component Construction
 
-Because `immediate` is `true`, the host command loop does not queue the command for deferred evaluation. Pseudocode for the dispatch path:
-
-```
-function dispatchSlashCommand(command, userInput):
-    if command.immediate is true:
-        result = command.renderFunction(currentAppState)
-        displayJSX(result)
-    else:
-        enqueue(command, userInput)
-```
-
-Analysis basis: CC v2.1.139 bundle.js:+11098580
-
-### Status Panel Rendering
-
-The command type is `local-jsx`, meaning the output is a React (JSX) component tree rendered inline in the terminal UI rather than plain text streamed from the model. The panel is expected to read from live application state at the moment of invocation and display the following categories of information as described in the registration description:
+The handler is an `AsyncFunction` that constructs and returns a JSX element. At depth-2 traversal only one outbound call edge is visible: a call to `createElement` on the React-equivalent namespace (`zhA`). The string constant `"Status"` is passed as (or incorporated into) the element descriptor, anchoring the rendered panel's identity.
 
 ```
-function renderStatusPanel(appState):
-    sections = []
-
-    sections.append(renderVersionRow(appState.cliVersion))
-    sections.append(renderModelRow(appState.activeModel))
-    sections.append(renderAccountRow(appState.accountIdentity))
-    sections.append(renderApiConnectivityRow(appState.apiReachable))
-    sections.append(renderToolStatusRows(appState.registeredTools))
-
-    return JSXPanel(sections)
+async function statusHandler(context):
+    rootElement = createElement(
+        StatusPanelComponent,
+        props derived from context,   // version, model, account, connectivity, tools
+        label = "Status"
+    )
+    return rootElement
 ```
 
-> **Note:** The specific field names above are inferred from the natural-language description in the registration object. The exact internal state field names were not recoverable from the depth-2 traversal.
-> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+Because the type is `local-jsx`, the returned element is handed directly to the terminal renderer; no agent turn is created and no network round-trip to the Anthropic API is required for the render itself.
 
-Analysis basis: CC v2.1.139 bundle.js:+11098580 (description field)
+Analysis basis: CC v2.1.132 bundle.js:+10970646 (`createElement` call site), +10970700 (`"Status"` literal)
 
-### Reported Information Categories
+### Displayed Information
 
-Based solely on the registration description, the status panel covers five categories:
+The command description enumerates the data categories the component is expected to surface:
 
 | Category | Description |
 |---|---|
-| Version | The installed CC CLI version string |
-| Model | The currently configured Anthropic model identifier |
-| Account | The authenticated user or API account identity |
-| API Connectivity | Whether the Anthropic API endpoint is reachable |
-| Tool Statuses | Availability / health of each registered tool |
+| Version | The running CC build version (e.g., `v2.1.132`) |
+| Model | The currently configured model identifier |
+| Account | The authenticated account / identity information |
+| API connectivity | Live reachability check result for the Anthropic API endpoint |
+| Tool statuses | Enabled/disabled or healthy/errored state of each registered tool |
 
-Analysis basis: CC v2.1.139 bundle.js:+11098580
+The exact sub-components that render each category were not reached within the depth-2 call-graph traversal.
+
+Analysis basis: CC v2.1.132 bundle.js:+10970787 (registration `description` field)
+
+<!-- TODO: internal sub-component render tree (connectivity probe logic, tool-status enumeration) not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
@@ -121,10 +110,14 @@ Analysis basis: CC v2.1.139 bundle.js:+11098580
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at depth ≤ 2 <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Hook registration | None detected at depth ≤ 2 <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | Read-only; no mutations inferred from available data |
-| Sound | None detected at depth ≤ 2 <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | None detected in depth-2 traversal |
+| Hook registration | None detected in depth-2 traversal |
+| `appState` changes | None detected; command is read-only / display-only |
+| Network I/O | API connectivity check implied by description; probe logic not visible at depth-2 |
+| Sound | None detected |
+| Agent turn created | No — `local-jsx` + `immediate` bypasses the agent entirely |
+
+<!-- TODO: API connectivity probe implementation and tool-status enumeration logic not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
@@ -132,17 +125,16 @@ Analysis basis: CC v2.1.139 bundle.js:+11098580
 
 | Version | Change |
 |---|---|
-| v2.1.139 | Initial analysis — registration confirmed at bundle.js:+11098580 |
+| v2.1.132 | Initial analysis — `local-jsx` / `immediate` handler `D37`; renders version, model, account, API connectivity, and tool statuses |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting model output** — Because the command type is `local-jsx`, the status panel is rendered locally from application state. It does not invoke the model or consume API tokens.
-2. **Assuming arguments are accepted** — The registration object contains no argument schema. Passing extra tokens after `/status` is likely ignored or may cause an unknown-argument warning; no argument handling was found in the traversal.
-3. **Treating the panel as a live feed** — The panel reflects state at the instant of invocation. It does not auto-refresh; re-run `/status` to get updated connectivity or tool information.
-4. **Expecting telemetry confirmation** — No `tengu_*` telemetry events were found for this command, so analytics pipelines will not record a `/status` invocation event (at the depth analyzed).
-5. **Confusing `immediate` with "asynchronous"** — `immediate: true` means the command fires without waiting for further input, not that it resolves asynchronously. The render is synchronous with respect to the command loop.
+1. **Expecting an agent response.** Because `/status` is `local-jsx` + `immediate`, it never creates an agent turn. Waiting for a streaming response or inspecting conversation history for status output will yield nothing.
+2. **Passing arguments.** The command registration defines no argument schema. Any text typed after `/status` will be ignored or may prevent command matching, depending on the shell tokeniser version.
+3. **Assuming the API connectivity result is cached.** The description implies a live check; do not treat a previously seen "connected" status as proof that the current session is healthy — re-run `/status` to get a fresh snapshot.
+4. **Version-pinning the handler identifier.** The handler is currently resolved as `D37` via the `module_id` path. Minified identifiers change across bundle versions; always re-run AST extraction against a new bundle before referencing internal names.
 
 ---
 
@@ -152,7 +144,5 @@ Analysis basis: CC v2.1.139 bundle.js:+11098580
 
 | Identifier | Role |
 |---|---|
-| `VOq` | Module identifier for the `/status` command implementation |
-
-> No obfuscated function or variable identifiers were returned by the depth-2 AST traversal for this module. A deeper traversal (`--depth 4`) is required to populate this table further.
-> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+| `D37` | Main status command handler (`AsyncFunction`); constructs and returns the status JSX component; resolved from module `p4q` via `module_id` path (CC v2.1.132 bundle.js:+10970646) |
+| `zhA` | React-equivalent namespace on which `createElement` is called to build the status JSX tree (CC v2.1.132 bundle.js:+10970646) |

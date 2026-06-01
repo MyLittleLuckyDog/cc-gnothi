@@ -2,11 +2,12 @@
 type: feature-spec
 feature: "scroll-speed"
 cc_version: "2.1.143"
-updated: "2026-05-18"
+updated: "2026-06-01"
 tags: ["scroll-speed", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: "2.1.141"
+analysis_basis: "CC v2.1.141 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -14,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/scroll-speed`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.141 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.141
 
 ---
 
 ## Overview
 
-The `/scroll-speed` command adjusts the mouse wheel scroll speed within Claude Code's terminal UI. Its core mechanism reads the active editor's `settings.json` file (VS Code, Cursor, or Windsurf) to detect and apply scroll preferences, rendering a JSX component that presents the current setting and any available controls. The command operates locally without emitting telemetry events.
+`/scroll-speed` is a local JSX command that adjusts the mouse wheel scroll speed within the Claude Code interface. It does so by reading the host editor's `settings.json` file (detecting VSCode, Cursor, or Windsurf environments) and applying the configured scroll multiplier. The command renders a JSX UI component and uses a timeout-guarded settings-read path to avoid hanging on slow file system access.
 
 ---
 
@@ -31,199 +32,222 @@ The `/scroll-speed` command adjusts the mouse wheel scroll speed within Claude C
 |---|---|
 | type | `local-jsx` |
 | name | `scroll-speed` |
-| description | `Adjust mouse wheel scroll speed` |
-| module\_id | `xjq` |
+| description | Adjust mouse wheel scroll speed |
+| loc_byte | `11147116` |
+| loc_byte_end | `11147364` |
+| loc_line | `6751` |
+| module_id | `Fwq` |
+| load_inline | `true` |
+| arbor_handler.name | `EE7` |
+| arbor_handler.fqn | `claude-2.1.141::EE7` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.143 bundle.js:+11272832
+Analysis basis: CC v2.1.141 bundle.js:+11147116
 
 ---
 
 ## Input Branching
 
-The command's entry point (`commandHandler`) dispatches into two parallel sub-operations: a timeout-guarded settings read and a JSX render. The settings read resolves or times out before the UI is shown.
+The command follows 4+ distinct branches depending on: (a) whether the settings read times out, (b) which editor environment is detected (VSCode / Cursor / Windsurf / none), (c) whether the platform is `win32`, `darwin`, or Linux, and (d) whether file errors (ENOENT, EACCES, EPERM, ENOTDIR, ELOOP) are encountered. A Mermaid flowchart is required.
 
 ```mermaid
 flowchart TD
-    A["/scroll-speed invoked"] --> B[readEditorSettings called]
-    B --> C{Promise.race}
-    C --> D[settingsFileRead resolves]
-    C --> E[timeout 250ms elapses]
-    E --> F[Return timeout error string\n'VS Code settings read timed out']
-    D --> G{Detect editor environment}
-    G --> H{Server path includes\n'.vscode-server'?}
-    H -->|yes| I[Classify as VSCode]
-    H -->|no| J{Server path includes\n'.cursor-server'?}
-    J -->|yes| K[Classify as Cursor]
-    J -->|no| L{Server path includes\n'.windsurf-server'?}
-    L -->|yes| M[Classify as Windsurf]
-    L -->|no| N[Classify as unknown / native]
-    I & K & M & N --> O[Resolve platform-specific settings.json path]
-    O --> P[Read file as utf-8]
-    P --> Q{Array.isArray result?}
-    Q -->|yes| R[processSettingsArray]
-    Q -->|no| S[handleSettingsObject / error path]
-    R & S --> T[createElement — render JSX component]
-    F --> T
+    A(["/scroll-speed invoked"]) --> B[Race: read VS Code settings.json\nvs. 250 ms timeout]
+    B --> C{Timeout?}
+    C -- Yes --> D["Return error: 'VS Code settings read timed out'"]
+    C -- No --> E{Detect editor environment}
+    E --> F{Home-dir path contains\n.vscode-server?}
+    F -- Yes --> G[Environment: VSCode remote]
+    F -- No --> H{Contains .cursor-server?}
+    H -- Yes --> I[Environment: Cursor remote]
+    H -- No --> J{Contains .windsurf-server?}
+    J -- Yes --> K[Environment: Windsurf remote]
+    J -- No --> L[Resolve local config path]
+    G & I & K & L --> M{Resolve platform settings path}
+    M -- win32 --> N["AppData/Roaming/…/User/settings.json"]
+    M -- darwin --> O["Library/Application Support/…/settings.json"]
+    M -- other --> P[".config/…/settings.json"]
+    N & O & P --> Q[Read settings.json as utf-8]
+    Q --> R{File error?}
+    R -- ENOENT/EACCES/EPERM\nENOTDIR/ELOOP --> S[Handle gracefully / skip]
+    R -- No error --> T[Parse scroll-speed value]
+    T --> U[Render JSX component with speed value]
+    S --> U
+    D --> V([Done])
+    U --> V
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11272595, +11272604, +11272608, +3905622, +3901722, +3901763, +3901793, +3905669, +3905769, +11272666
+Analysis basis: CC v2.1.141 bundle.js:+11146879, +11146882, +11146888, +3809009, +3813274, +3813451
 
 ---
 
 ## Behavioral Spec
 
-### 1. Timeout-Guarded Async Wrapper
+### 1. Handler Entry — Async Command Executor
 
-The command wraps its settings-read operation in a race between the actual async work and a fixed timeout.
+The primary handler (`EE7`, an `AsyncFunction`) is the entry point resolved via `module_id → Fwq`.
 
 ```
-function timeoutRace(asyncOperation, limitMs):
-    timeoutHandle = null
-    timeoutPromise = new Promise(resolve =>
-        timeoutHandle = setTimeout(() => resolve(TIMEOUT_SENTINEL), limitMs)
+async function scrollSpeedHandler(context):
+    result = await Promise.race([
+        readEditorSettings(),          // may hang on slow FS
+        timeoutPromise(250)            // 250 ms guard
+    ])
+
+    if result is TIMEOUT:
+        return errorState("VS Code settings read timed out")
+
+    scrollValue = parseScrollSpeed(result)
+    return renderScrollSpeedUI(scrollValue)
+```
+
+Analysis basis: CC v2.1.141 bundle.js:+11146879 (call to `Uf`), +11146888 (literal `250`), +11146892 (literal `"VS Code settings read timed out"`)
+
+---
+
+### 2. Timeout-Guarded Promise (`Uf`)
+
+The timeout utility races an inner promise against a `setTimeout`-based rejection. On resolution the timeout is cleared via `clearTimeout`.
+
+```
+function withTimeout(promise, milliseconds):
+    return Promise.race([
+        promise,
+        new Promise((_, reject) =>
+            timerId = setTimeout(() => reject(TIMEOUT_SENTINEL), milliseconds)
+        )
+    ]).finally(() =>
+        clearTimeout(timerId)
     )
-    result = await Promise.race([asyncOperation, timeoutPromise])
-    clearTimeout(timeoutHandle)
-    return result
 ```
 
-- Timeout value: **250 ms** (Analysis basis: CC v2.1.143 bundle.js:+11272604)
-- Sentinel value on timeout: `"VS Code settings read timed out"` (Analysis basis: CC v2.1.143 bundle.js:+11272608)
-- `clearTimeout` is always called after resolution to prevent timer leaks. (Analysis basis: CC v2.1.143 bundle.js:+2204882)
+- Timeout value: **250 ms** (bundle.js:+11146888)
+- Timeout message: `"VS Code settings read timed out"` (bundle.js:+11146892)
 
-### 2. Editor Environment Detection
+Analysis basis: CC v2.1.141 bundle.js:+2189804 (`setTimeout`), +2189867 (`Promise.race`), +2189914 (`clearTimeout`)
 
-The environment classifier inspects path strings to identify which IDE is hosting the remote server.
+---
 
-```
-function detectEditorEnvironment(serverPaths):
-    if serverPaths.includes(".vscode-server"):
-        return { label: "VSCode", configKey: "vscode" }
-    if serverPaths.includes(".cursor-server"):
-        return { label: "Cursor", configKey: "cursor" }
-    if serverPaths.includes(".windsurf-server"):
-        return { label: "Windsurf", configKey: "windsurf" }
-    return { label: null, configKey: null }
-```
+### 3. Editor Environment Detection (`X4_`)
 
-- Detection is performed via `Array/String.includes` on collected server path tokens. (Analysis basis: CC v2.1.143 bundle.js:+3901722, +3901814)
-- Recognised display labels: `"VSCode"`, `"Cursor"`, `"Windsurf"`. (Analysis basis: CC v2.1.143 bundle.js:+3906002, +3906030, +3906060)
-- Recognised internal keys: `"vscode"`, `"cursor"`, `"windsurf"`. (Analysis basis: CC v2.1.143 bundle.js:+3905987, +3906015, +3906043)
-
-### 3. Platform-Specific Settings Path Resolution
-
-Given the detected editor and the host OS, the resolver constructs the expected path to `settings.json`.
+The settings reader (`X4_`) determines which editor is active and resolves the correct `settings.json` path.
 
 ```
-function resolveSettingsPath(editorKey, platform, homeDir):
+async function readEditorSettings():
+    editorKind = detectEditorEnvironment()   // checks home/config paths
+    configPath = resolveSettingsPath(editorKind)
+    raw = await readFile(configPath, "utf-8")
+    return parseJSON(raw)
+```
+
+**Editor detection (`D4_`)** inspects path-like strings for known server suffixes:
+
+| Suffix checked | Editor |
+|---|---|
+| `.vscode-server` | VSCode (remote) |
+| `.cursor-server` | Cursor (remote) |
+| `.windsurf-server` | Windsurf (remote) |
+
+Analysis basis: CC v2.1.141 bundle.js:+3809020, +3809050, +3809080
+
+**Display names used in UI:**
+
+| Internal key | Display name |
+|---|---|
+| `vscode` | `VSCode` |
+| `cursor` | `Cursor` |
+| `windsurf` | `Windsurf` |
+
+Analysis basis: CC v2.1.141 bundle.js:+3813274, +3813289, +3813302, +3813317, +3813330, +3813347
+
+---
+
+### 4. Platform-Aware Settings Path Resolution (`W4_`)
+
+```
+function resolveSettingsPath(editorKind):
+    home = os.homedir()
+    platform = os.platform()
+
     if platform == "win32":
-        return path.join(homeDir, "AppData", "Roaming", editorKey, "User", "settings.json")
-    if platform == "darwin":
-        return path.join(homeDir, "Library", "Application Support", editorKey, "User", "settings.json")
-    // linux / other
-    return path.join(homeDir, ".config", editorKey, "User", "settings.json")
+        base = join(home, "AppData", "Roaming")
+    elif platform == "darwin":
+        base = join(home, "Library", "Application Support")
+    else:                          // Linux and others
+        base = join(home, ".config")
+
+    appFolder = editorFolderName(editorKind)   // e.g. "Code", "Cursor"
+    return join(base, appFolder, "User", "settings.json")
 ```
 
-- Filename always resolved to: `"settings.json"` (Analysis basis: CC v2.1.143 bundle.js:+3905696)
-- Encoding for file read: `"utf-8"` (Analysis basis: CC v2.1.143 bundle.js:+3905723)
-- Platform values checked: `"win32"`, `"darwin"` (Analysis basis: CC v2.1.143 bundle.js:+3906180, +3906242)
-- `qt.homedir()` supplies the home directory; `qt.platform()` supplies the OS string. (Analysis basis: CC v2.1.143 bundle.js:+3906151, +3906164)
-- Windows path segments: `"AppData"`, `"Roaming"`, `"User"` (Analysis basis: CC v2.1.143 bundle.js:+3906196, +3906206, +3906218)
-- macOS path segments: `"Library"`, `"Application Support"`, `"User"` (Analysis basis: CC v2.1.143 bundle.js:+3906259, +3906269)
-- Linux fallback segment: `".config"` (Analysis basis: CC v2.1.143 bundle.js:+3906309)
-- VS Code's base folder name on all platforms is `"Code"`. (Analysis basis: CC v2.1.143 bundle.js:+3906127)
+- Windows sub-path: `AppData/Roaming` (bundle.js:+3813483, +3813493)
+- macOS sub-path: `Library/Application Support` (bundle.js:+3813546, +3813556)
+- Linux sub-path: `.config` (bundle.js:+3813596)
+- Filename: `settings.json` (bundle.js:+3812983)
+- Encoding: `utf-8` (bundle.js:+3813010)
+- Base editor folder for VSCode: `Code` (bundle.js:+3813414)
 
-### 4. Settings File Read and Error Handling
+Analysis basis: CC v2.1.141 bundle.js:+3813430 (`Yh.join`), +3813438 (`qt.homedir`), +3813451 (`qt.platform`), +3813467 (`"win32"`), +3813529 (`"darwin"`)
 
-After path resolution, the command reads and parses the file, handling common filesystem errors gracefully.
+---
 
-```
-function readAndParseSettings(resolvedPath):
-    try:
-        raw = await filesystem.readFile(resolvedPath, "utf-8")
-        parsed = parseJSON(raw)
-        if Array.isArray(parsed):
-            return processSettingsArray(parsed)
-        return processSettingsObject(parsed)
-    catch error:
-        code = error.code
-        if code in ["ENOENT", "EACCES", "EPERM", "ENOTDIR", "ELOOP"]:
-            return gracefulEmpty()   // file absent or inaccessible — non-fatal
-        logError(error)
-        return errorResult(error)
-```
+### 5. Settings JSON Parsing and Execution (`ER6`, `v`)
 
-- Filesystem error codes handled non-fatally: `"ENOENT"`, `"EACCES"`, `"EPERM"`, `"ENOTDIR"`, `"ELOOP"`. (Analysis basis: CC v2.1.143 bundle.js:+172343, +172357, +172371, +172384, +172399)
-- Errors that do not match the above are forwarded to the shared error logger (`Wc.logError`). (Analysis basis: CC v2.1.143 bundle.js:+960555)
+After the file is read, the raw content is passed through a command-execution layer (`ER6 → v`) that:
 
-### 5. Network / API Call Layer (SR6 path)
-
-The call graph reveals a subordinate API-call path reachable from the settings pipeline. This layer handles request serialisation and response processing.
+1. Strips a leading prefix when present (via `startsWith` / `slice`) — Analysis basis: CC v2.1.141 bundle.js:+1069178, +1069201
+2. Invokes a sub-executor (`v`) which formats the value, trims whitespace, uppercases a label, and JSON-stringifies a debug payload — Analysis basis: CC v2.1.141 bundle.js:+198860, +198924, +198986, +199009
+3. Errors at this stage are tagged `"error"` and surfaced to the caller — Analysis basis: CC v2.1.141 bundle.js:+1069457
 
 ```
-function makeApiCall(requestData):
-    sanitised = redactSensitiveFields(requestData)   // replaces secrets with "[REDACTED]"
-    if requestData.startsWith("debug"):
-        applyDebugMode()
-    response = await dispatchRequest(sanitised)
-    return normaliseResponse(response)
+function parseAndExecuteSettings(raw):
+    cleaned = stripLeadingPrefix(raw)
+    result  = executeSettingsCommand(cleaned)
+
+    if result.type == "error":
+        propagateError(result)
+        return
+
+    label = result.label.toUpperCase()
+    trimmed = result.value.trim()
+    debugPayload = JSON.stringify({label, trimmed})
+    return {label, value: trimmed, debug: debugPayload}
 ```
 
-- Sensitive field placeholder literal: `"[REDACTED]"` (Analysis basis: CC v2.1.143 bundle.js:+193318)
-- Debug mode string: `"debug"` (Analysis basis: CC v2.1.143 bundle.js:+201193)
-- Response normalisation trims whitespace and upper-cases certain fields. (Analysis basis: CC v2.1.143 bundle.js:+201342, +201319)
+Analysis basis: CC v2.1.141 bundle.js:+1069354, +1069358, +1069381
 
-### 6. Telemetry Mode Gate
+---
 
-The network layer checks the user's telemetry preference before dispatching any data. Three recognised modes exist.
+### 6. File-System Error Handling (`x9 / M8`, `kH`)
 
-```
-function resolveTelemetryMode(modeString):
-    if modeString == "essential-traffic":
-        return MODE_ESSENTIAL
-    if modeString == "no-telemetry":
-        return MODE_SILENT
-    return MODE_DEFAULT   // literal "default"
-```
+File errors from `readFile` are intercepted and classified:
 
-- Mode literals: `"essential-traffic"`, `"no-telemetry"`, `"default"`. (Analysis basis: CC v2.1.143 bundle.js:+959080, +959139, +959213)
+| Error code | Handling |
+|---|---|
+| `ENOENT` | Gracefully skipped (file not found) |
+| `EACCES` | Gracefully skipped (permission denied) |
+| `EPERM` | Gracefully skipped (operation not permitted) |
+| `ENOTDIR` | Gracefully skipped (path component not a directory) |
+| `ELOOP` | Gracefully skipped (symlink loop) |
 
-### 7. Truthy String Normalisation
+Non-classified errors are logged via the error-logger (`Oc.logError`) and pushed to an error queue (`aRH.push`).
 
-Several boolean-like configuration values are normalised from strings.
+Analysis basis: CC v2.1.141 bundle.js:+170010, +170024, +170038, +170051, +170066, +951053, +951013
 
-```
-function isTruthyString(value):
-    return value == "yes" or value == "on"
-```
+---
 
-- Recognised truthy strings: `"yes"`, `"on"`. (Analysis basis: CC v2.1.143 bundle.js:+26422, +26428)
+### 7. JSX Rendering
 
-### 8. Random-Jitter Delay
-
-A sub-utility referenced in the call graph introduces a small random delay, likely for request de-correlation.
+The handler calls `Op_.createElement` to produce the final UI component displaying the resolved scroll speed value.
 
 ```
-function randomJitterDelay():
-    jitter = Math.random() * 2   // multiplier: 2
-    await sleep(1 + jitter)      // base offset: 1
+function renderScrollSpeedUI(speedValue):
+    return createElement(ScrollSpeedDisplay, {value: speedValue})
 ```
 
-- Multiplier constant: `2` (Analysis basis: CC v2.1.143 bundle.js:+12638154)
-- Base constant: `1` (Analysis basis: CC v2.1.143 bundle.js:+12638170)
-
-### 9. JSX Component Render
-
-After all async resolution, the command renders a React/JSX component tree directly into the CLI viewport.
-
-```
-function renderScrollSpeedComponent(settingsResult):
-    element = createElement(ScrollSpeedView, { settings: settingsResult })
-    return element
-```
-
-- Uses `_U_.createElement` — the local alias for the JSX factory. (Analysis basis: CC v2.1.143 bundle.js:+11272666)
-- No telemetry events are emitted during or after render (telemetry array is empty).
+Analysis basis: CC v2.1.141 bundle.js:+11146950
 
 ---
 
@@ -231,14 +255,14 @@ function renderScrollSpeedComponent(settingsResult):
 
 | Item | Detail |
 |---|---|
-| Telemetry | None — telemetry array is empty for this command |
-| Hook registration | `local-jsx` type; registered under module `xjq` |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Filesystem reads | Reads `settings.json` from the detected IDE config directory (utf-8) |
-| Timers | One `setTimeout` (250 ms) created per invocation; always cleared via `clearTimeout` |
-| Error logging | Unexpected filesystem errors are forwarded to the shared error logger |
-| Queue mutation | Internal request queue uses shift/push operations (bounded ring-buffer pattern) |
+| Telemetry | None detected in depth-2 traversal |
+| Hook registration | None detected |
+| appState changes | None detected directly; scroll speed is applied via settings read |
+| File system reads | Reads `settings.json` from the host editor's user-config directory (platform-dependent path) |
+| Timeout side effect | A 250 ms `setTimeout` is set and cleared on every invocation |
+| Error logging | File-system and parse errors are logged via `Oc.logError` (bundle.js:+951053) |
+| Error queue | Errors appended to internal error queue via `aRH.push` (bundle.js:+951013) |
+| Sound | None detected |
 
 ---
 
@@ -246,23 +270,17 @@ function renderScrollSpeedComponent(settingsResult):
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis |
+| v2.1.141 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Assuming the command only affects VS Code.** The environment detector also recognises Cursor (`.cursor-server`) and Windsurf (`.windsurf-server`); each resolves a distinct config path. Passing a path for the wrong editor will silently read the wrong `settings.json`.
-
-2. **Ignoring the 250 ms timeout.** If the IDE config directory is on a slow or network-mounted filesystem, the settings read will be abandoned after 250 ms and the sentinel string `"VS Code settings read timed out"` will be returned. The command does not retry.
-
-3. **Expecting telemetry events.** This command emits **no** `tengu_*` telemetry events. Any instrumentation relying on telemetry hooks will receive nothing from `/scroll-speed`.
-
-4. **Treating non-fatal filesystem errors as bugs.** `ENOENT`, `EACCES`, `EPERM`, `ENOTDIR`, and `ELOOP` are all handled gracefully and result in an empty-settings return, not an exception. Only unexpected error codes propagate to the error logger.
-
-5. **Assuming a JSON array in `settings.json` is invalid.** The file parser explicitly branches on `Array.isArray`; an array-shaped settings file is a handled case, not a parse error.
-
-6. **Overlooking the `"Code"` folder name for VS Code on all platforms.** VS Code uses `"Code"` as its config folder base name (not `"vscode"`), while the internal detection key `"vscode"` is used only for path matching.
+1. **Assuming the command modifies system settings**: `/scroll-speed` _reads_ the editor's `settings.json` to pick up the user's configured value — it does not write back to it.
+2. **Ignoring the 250 ms timeout**: On slow or remote file systems the settings read will be silently aborted after 250 ms and the command will surface a timeout error rather than a speed value.
+3. **Expecting telemetry events**: This command emits no `tengu_*` telemetry events (as of v2.1.141); do not rely on telemetry for debugging its execution.
+4. **Misidentifying the editor**: Detection is based on home/config path suffixes (`.vscode-server`, `.cursor-server`, `.windsurf-server`). Non-standard installation paths may cause the wrong editor branch to be selected.
+5. **Platform path confusion**: The settings path is fully platform-specific (`AppData\Roaming` on Windows, `Library/Application Support` on macOS, `.config` on Linux). Cross-platform testing is necessary.
 
 ---
 
@@ -272,27 +290,30 @@ function renderScrollSpeedComponent(settingsResult):
 
 | Identifier | Role |
 |---|---|
-| `oV7` | Command handler / entry point for `/scroll-speed` |
-| `jf` | Timeout-race async wrapper (Promise.race + setTimeout + clearTimeout) |
-| `p4_` | Editor settings read orchestrator |
-| `wnL` | Settings pre-processor / validator called by orchestrator |
-| `C4_` | Editor environment classifier (checks server path strings) |
-| `H` | String or array operand subject (context-dependent); also random-jitter delay utility |
-| `_` | Secondary operand / utility reference (includes, toUpperCase) |
-| `U4_` | Platform-specific settings path resolver |
-| `SR6` | API call layer entry point |
-| `jR` | String prefix inspector (startsWith / slice) |
-| `v` | Request dispatch and normalisation coordinator |
-| `G5K` | Response processing sub-routine |
-| `hH` | JSON serialiser wrapper (JSON.stringify) |
-| `P7` | Field redaction and replacement utility |
-| `cSH` | Secondary content sanitiser |
-| `Z5K` | File content pipeline (read → parse → encode → deliver) |
-| `C9` | Filesystem error code classifier |
-| `L8` | Error code lookup table / mapping |
-| `NH` | Network request queue manager |
-| `v_` | Error normaliser (Error / String coercion) |
-| `xH` | String coercion utility (String constructor wrapper) |
-| `zq` | Queue dispatch helper |
-| `A$A` | Queue entry formatter |
-| `kNK` | Ring-buffer queue mutation (shift/push) |
+| `EE7` | Main async command handler for `/scroll-speed` (arbor_handler) |
+| `Uf` | Timeout-guarded promise utility (wraps `Promise.race` + `setTimeout`/`clearTimeout`) |
+| `X4_` | Editor settings reader — resolves path and reads `settings.json` |
+| `ZcL` | Dependency called during settings read (role unclear at depth-2) |
+| `D4_` | Editor environment detector — checks path strings for known server suffixes |
+| `H` | Utility object used in environment checks and random/timer operations |
+| `W4_` | Platform-aware settings path resolver (homedir + platform → full path) |
+| `ER6` | Settings parse/execute entry — strips prefix, dispatches to executor |
+| `DR` | Prefix-stripping utility (`startsWith` / `slice` on raw content) |
+| `v` | Settings command executor — trims, uppercases, JSON-stringifies debug info |
+| `J7K` | Sub-routine called within executor (role unclear at depth-2) |
+| `SH` | JSON stringification helper (`JSON.stringify`) |
+| `t7` | String transformation utility (replace, slice, lastIndexOf operations) |
+| `MSH` | Metadata/settings helper calling `M6A` |
+| `X7K` | File-content processor — computes byte length, binds callbacks, resolves promises |
+| `x9` | File-error classifier entry point |
+| `M8` | Error-code matching utility (ENOENT, EACCES, etc.) |
+| `kH` | File-system error handler — logs and queues errors |
+| `k_` | Error construction utility (`Error` / `String` wrapping) |
+| `RH` | String coercion helper |
+| `Vq` | Error propagation helper calling `cMA` |
+| `cMA` | Inner error formatter |
+| `GvK` | Error queue manager (`kS6.shift` / `kS6.push` — circular queue) |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

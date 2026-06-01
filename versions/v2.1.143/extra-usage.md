@@ -2,11 +2,12 @@
 type: feature-spec
 feature: "extra-usage"
 cc_version: "2.1.143"
-updated: "2026-05-18"
+updated: "2026-06-01"
 tags: ["extra-usage", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: "2.1.142"
+analysis_basis: "CC v2.1.142 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -14,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/extra-usage`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.142 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.142
 
 ---
 
 ## Overview
 
-The `/extra-usage` command allows users to configure extra usage capacity so that Claude Code can continue operating after standard rate limits are reached. It inspects the current subscription tier and organizational role, then either opens a browser-based settings page or submits an admin request on the user's behalf. If no valid OAuth session exists, the command initiates a fresh login flow before proceeding.
+`/extra-usage` is a slash command that helps users configure or request extra usage capacity when they have hit (or are approaching) API usage limits. Depending on the user's subscription plan, organization role, and the current state of any pending admin requests, the command either opens a browser to a usage management page, sends a limit-increase request to an organization admin, or informs the user that no action is required. If the user is not authenticated (no Claude Pro/Max plan detected), the command initiates a fresh OAuth login flow before proceeding.
 
 ---
 
@@ -32,354 +33,290 @@ The `/extra-usage` command allows users to configure extra usage capacity so tha
 | type | `local-jsx` |
 | name | `extra-usage` |
 | description | Configure extra usage to keep working when limits are hit |
-| module_id | `Hb1` |
-| loc_line | 3116 |
+| loc_byte | `8204387` |
+| loc_byte_end | `8204592` |
+| loc_line | `3112` |
+| module_id | `ZC1` |
+| load_inline | `true` |
+| arbor_handler.name | `mJ6` |
+| arbor_handler.fqn | `claude-2.1.142::mJ6` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.143 bundle.js:+8219991
+Analysis basis: CC v2.1.142 bundle.js:+8204387
 
 ---
 
 ## Input Branching
 
-The command entry point (`oJ6`) determines which path to follow based on subscription tier, organizational role, and current request state.
+The command has five or more distinct outcome branches depending on authentication state, plan type, organization role, and existing admin-request status. A Mermaid flowchart is used below.
 
 ```mermaid
 flowchart TD
-    A["/extra-usage invoked"] --> B{Valid OAuth session?}
-    B -- No --> C[Initiate login flow\nbundle.js:+8219218]
-    C --> D{Login result}
-    D -- Interrupted --> E[Print 'Login interrupted'\nbundle.js:+8219360\nExit]
-    D -- Success --> F[Print 'Login successful'\nbundle.js:+8219341]
-    F --> G[Continue to tier check]
-    B -- Yes --> G
-    G --> H{Subscription tier?}
-    H -- 'pro' / 'max'\nbundle.js:+8218962,+8218973 --> I[Fetch usage info\nGET /api/oauth/usage\nbundle.js:+8172799]
-    H -- 'team' / 'enterprise'\nbundle.js:+8173576,+8173588 --> J[Check user role]
-    H -- Other / unknown --> K[Show generic message\nand exit]
-    I --> L{Org already has unlimited?}
-    L -- Yes --> M[Print: 'Your organization already has\nunlimited extra usage. No request needed.'\nbundle.js:+8173824\nExit]
-    L -- No --> N[Open browser → https://claude.ai/settings/usage\nbundle.js:+8174870]
-    J --> O{User role}
-    O -- 'admin' / 'billing' /\n'owner' / 'primary_owner'\nbundle.js:+2023434,+2023442,\n+2023452,+2023460 --> P[Check eligibility\napi_admin_request_eligibility\nbundle.js:+8172256]
-    O -- Other role --> Q[Print: 'Please contact your admin\nto manage extra usage settings.'\nbundle.js:+8173981\nExit]
-    P --> R{Already has pending\nor dismissed request?\nbundle.js:+8174153,+8174163}
-    R -- Yes --> S[Print: 'You have already submitted\na request for extra usage.'\nbundle.js:+8174222\nExit]
-    R -- No --> T{Request type}
-    T -- limit_increase\nbundle.js:+8173917 --> U[POST admin request\nPrint: 'Request sent to your admin\nto increase extra usage.'\nbundle.js:+8174471]
-    T -- enable --> V[POST admin request\nPrint: 'Request sent to your admin\nto enable extra usage.'\nbundle.js:+8174525]
-    U --> W[Open browser → https://claude.ai/admin-settings/usage\nbundle.js:+8174829]
-    V --> W
-    N --> X[Emit 'browser-opened'\nbundle.js:+8174937\nExit]
-    W --> X
+    A["/extra-usage invoked"] --> B{User authenticated?\nPro or Max plan?}
+    B -- No --> C[Start new OAuth login flow\n'Starting new login following /extra-usage'\nWait for completion]
+    C -- Login succeeded --> D[Proceed with authenticated user]
+    C -- Login interrupted --> E[Abort — show 'Login interrupted']
+    B -- Yes --> D
+
+    D --> F{Check plan type}
+    F -- team or enterprise plan --> G{Check org role}
+    F -- other plan --> H[Open browser → claude.ai/settings/usage]
+
+    G -- admin / billing / owner / primary_owner --> I[Fetch eligibility\nGET /api/oauth/organizations/:orgUUID/admin_requests\nfilter: api_admin_request_eligibility]
+    G -- non-admin member --> J["Show: 'Please contact your admin\nto manage extra usage settings.'"]
+
+    I --> K{Already unlimited?}
+    K -- Yes --> L["Show: 'Your organization already has\nunlimited extra usage. No request needed.'"]
+    K -- No --> M[Fetch existing requests\nGET /api/oauth/organizations/:orgUUID/admin_requests\nfilter: api_admin_request_list\nstatuses: pending / dismissed]
+
+    M --> N{Existing pending\nor dismissed request?}
+    N -- Yes --> O["Show: 'You have already submitted\na request for extra usage to your admin.'"]
+    N -- No --> P[POST /api/oauth/organizations/:orgUUID/admin_requests\ntype: limit_increase]
+
+    P --> Q{limit_increase\nor enable?}
+    Q -- increase --> R["Show: 'Request sent to your admin\nto increase extra usage.'"]
+    Q -- enable --> S["Show: 'Request sent to your admin\nto enable extra usage.'"]
+
+    H --> T[Open browser → claude.ai/settings/usage\nor admin-settings/usage]
+    T --> U[signal: 'browser-opened']
 ```
+
+Analysis basis: CC v2.1.142 bundle.js:+8203347 (handler entry `mJ6`), +8157963, +8158195, +8158304, +8158540, +8158858, +8158912
 
 ---
 
 ## Behavioral Spec
 
-### Authentication Gate
+### 1. Authentication Gate
 
-Before any usage-related action, the command verifies that a valid OAuth credential is available. If no credential exists, it starts a new login sequence, printing a notice that the existing account will be bypassed.
+When invoked, the handler (`mJ6`) first checks whether the current session holds a valid Pro or Max plan credential.
 
 ```
-function authenticationGate(currentState):
-    credential = resolveOAuthCredential(currentState)
-    if credential is null or expired:
-        print("Starting new login following /extra-usage. Exit with Ctrl-C to use existing account.")
-        // bundle.js:+8219218
-        loginResult = runLoginFlow()
-        if loginResult == INTERRUPTED:
-            print("Login interrupted")   // bundle.js:+8219360
-            return ABORT
-        onChangeAPIKey(loginResult.apiKey)  // bundle.js:+8219318
-        print("Login successful")           // bundle.js:+8219341
-    return CONTINUE
+async function extraUsageHandler(context):
+    planType = getCurrentPlanType()          // literals: "pro", "max"
+
+    if planType is not "pro" and not "max":
+        display("Starting new login following /extra-usage. Exit with Ctrl-C to use existing account.")
+        loginResult = await startOAuthLoginFlow()
+        if loginResult == "interrupted":
+            display("Login interrupted")
+            return
+        // else: "Login successful" — continue with fresh credentials
+        display("Login successful")
+        onChangeAPIKey(newKey)
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+8219218, +8219341, +8219360, +8219318
+Analysis basis: CC v2.1.142 bundle.js:+8203358 (`"pro"`), +8203369 (`"max"`), +8203614 (login message), +8203737 (success), +8203756 (interrupted), +8203714 (`onChangeAPIKey`)
 
 ---
 
-### Subscription Tier Detection
+### 2. Plan Classification and Route Selection
 
-The command reads the current subscription tier and routes to the appropriate sub-flow.
+After confirming authentication, the handler reads the subscription type to decide the execution path.
 
 ```
-function detectSubscriptionTier(authState):
-    tier = authState.subscriptionTier
-    // Recognized pro/consumer tiers: "pro", "max"
-    // bundle.js:+8218962, +8218973
-    if tier in ["pro", "max"]:
-        return CONSUMER_FLOW
-    // Recognized team/enterprise tiers: "team", "enterprise"
-    // bundle.js:+8173576, +8173588
-    if tier in ["team", "enterprise"]:
-        return ORGANIZATION_FLOW
-    return UNKNOWN_FLOW
+function classifyPlan(subscriptionInfo):
+    // Known subscription literals
+    if subscriptionInfo.type in ["stripe_subscription",
+                                  "stripe_subscription_contracted",
+                                  "apple_subscription",
+                                  "google_play_subscription"]:
+        if subscriptionInfo.planTier in ["team", "enterprise"]:
+            return "org-managed"
+        else:
+            return "individual"
+    return "individual"
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+8218962, +8218973, +8173576, +8173588
+Analysis basis: CC v2.1.142 bundle.js:+2923672, +2923699, +2923737, +2923763, +8157963, +8157975
+
+For **individual** plans (non-org), the command opens the user-facing usage settings URL directly in the system browser and signals `"browser-opened"`.
+
+```
+function openIndividualUsagePage():
+    url = "https://claude.ai/settings/usage"
+    openInBrowser(url)
+    signal("browser-opened")
+```
+
+Analysis basis: CC v2.1.142 bundle.js:+8159257, +8159324
 
 ---
 
-### Usage Data Fetch (`/api/oauth/usage`)
+### 3. Organization Role Check
 
-For consumer-tier users, current usage data is retrieved from the Anthropic API.
+For `team` or `enterprise` plans, the handler reads the current user's role within the organization.
 
 ```
-function fetchUsageData(oauthToken):
-    endpoint = "/api/oauth/usage"    // bundle.js:+8172799
-    response = httpGet(
-        url       = endpoint,
-        headers   = { "Content-Type": "application/json" },  // bundle.js:+8172841, +8172856
-        timeout   = 5000,            // bundle.js:+8172827  (milliseconds)
-        auth      = oauthToken
+function isAdminRole(role):
+    adminRoles = ["admin", "billing", "owner", "primary_owner"]
+    return role in adminRoles
+```
+
+If the user is **not** an admin-class role, the command displays a message directing the user to contact their admin, then exits.
+
+```
+    if not isAdminRole(currentUserRole):
+        display("Please contact your admin to manage extra usage settings.")
+        return
+```
+
+Analysis basis: CC v2.1.142 bundle.js:+2020349, +2020357, +2020367, +2020375, +8158368
+
+---
+
+### 4. Eligibility Fetch (`tR1`)
+
+For admin-role org members, the handler queries eligibility via the Anthropic API.
+
+```
+async function fetchEligibility(orgUUID, authToken):
+    response = await GET(
+        url    = "/api/oauth/usage",           // base path
+        filter = "api_admin_request_eligibility",
+        timeout = 5000,
+        headers = { "Content-Type": "application/json" }
     )
-    if httpStatus == 401:
-        refreshToken()
-        retryRequest()               // appends " (401→refresh→retry succeeded)" to log
-        // bundle.js:+8173026
-    if response.unlimited == true:
-        return UNLIMITED
+    // 401 → refresh token → retry once (suffix " (401→refresh→retry succeeded)")
+    // 500-class errors → isAxiosError check → surface detail field
     return response
 ```
 
-- Request timeout: 5000 ms (bundle.js:+8172827)
-- Content-Type header value: `application/json` (bundle.js:+8172856)
-- Auth mode falls back to `no-auth` string when token absent (bundle.js:+8172925)
-- 401 triggers a token refresh and a single retry (bundle.js:+8173026)
+If the response indicates the organization already has **unlimited** extra usage, the command terminates early:
 
-Analysis basis: CC v2.1.143 bundle.js:+8172799, +8172827, +8172841, +8172856, +8172925, +8173026
+```
+    if response.unlimited == true:
+        display("Your organization already has unlimited extra usage. No request needed.")
+        return
+```
+
+Analysis basis: CC v2.1.142 bundle.js:+8156643, +8157186, +8157214, +8157228, +8157243, +8157312, +8157413, +8158211, +8157538, +8157621, +8157827
 
 ---
 
-### Unlimited Org Short-Circuit
+### 5. Existing Request Check (`sR1`)
+
+If the organization is eligible for extra usage but does not already have unlimited access, the handler fetches the list of existing admin requests, filtering by status.
 
 ```
-function checkUnlimitedOrg(usageData):
-    if usageData == UNLIMITED:
-        printMessage("Your organization already has unlimited extra usage. No request needed.")
-        // bundle.js:+8173824
-        return DONE
-    return PROCEED
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+8173824
-
----
-
-### Organization Role Check
-
-For team/enterprise users, the command inspects the authenticated user's role before allowing admin-request submission.
-
-```
-function checkOrganizationRole(userProfile):
-    privilegedRoles = ["admin", "billing", "owner", "primary_owner"]
-    // bundle.js:+2023434, +2023442, +2023452, +2023460
-    if userProfile.role in privilegedRoles:
-        return PRIVILEGED
-    else:
-        printMessage("Please contact your admin to manage extra usage settings.")
-        // bundle.js:+8173981
-        return NON_PRIVILEGED
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+2023434, +2023442, +2023452, +2023460, +8173981
-
----
-
-### Admin Request Eligibility Check
-
-```
-function checkAdminRequestEligibility(orgUUID, oauthToken):
-    // Calls internal endpoint "api_admin_request_eligibility"
-    // bundle.js:+8172256
-    eligibility = apiGet("api_admin_request_eligibility", orgUUID, oauthToken)
-    // teleport-org header may be injected for org routing
-    // bundle.js:+8172404
-    return eligibility
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+8172256, +8172404
-
----
-
-### Existing Request Guard
-
-```
-function existingRequestGuard(requestList):
-    // Fetches via "api_admin_request_list" // bundle.js:+8171905
-    // Filter statuses: "pending", "dismissed" // bundle.js:+8174153, +8174163
-    existing = requestList.filterByStatuses(["pending", "dismissed"])
-    if existing is not empty:
-        printMessage("You have already submitted a request for extra usage to your admin.")
-        // bundle.js:+8174222
-        return ALREADY_SUBMITTED
-    return PROCEED
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+8171905, +8174153, +8174163, +8174222
-
----
-
-### Admin Request Submission
-
-```
-function submitAdminRequest(orgUUID, requestType, oauthToken):
-    // POST to /api/oauth/organizations/:orgUUID/admin_requests
-    // bundle.js:+8171697
-    // Internal label: "api_admin_request_create" // bundle.js:+8171640
-    payload = { type: requestType }
-    response = httpPost(
-        url     = "/api/oauth/organizations/" + orgUUID + "/admin_requests",
-        body    = payload,
-        token   = oauthToken
+async function fetchExistingRequests(orgUUID, authToken):
+    response = await GET(
+        filter   = "api_admin_request_list",
+        statuses = ["pending", "dismissed"]
     )
-    if requestType == "limit_increase":   // bundle.js:+8173917
-        printMessage("Request sent to your admin to increase extra usage.")
-        // bundle.js:+8174471
+    return response.data
+```
+
+If a request in `pending` or `dismissed` status already exists:
+
+```
+    existingRequests = await fetchExistingRequests(orgUUID, authToken)
+    if existingRequests.length > 0:
+        display("You have already submitted a request for extra usage to your admin.")
+        return
+```
+
+Analysis basis: CC v2.1.142 bundle.js:+8156292, +8156395, +8158540, +8158550, +8158609
+
+---
+
+### 6. Request Creation (`aR1`)
+
+When no prior request exists, the handler POSTs a new admin request.
+
+```
+async function createAdminRequest(orgUUID, authToken, requestType):
+    response = await POST(
+        url  = "/api/oauth/organizations/:orgUUID/admin_requests",
+        body = { type: "limit_increase" }
+    )
+    return response
+```
+
+The confirmation message depends on whether the request is a **limit increase** (quota already exists but is too low) or an **enable** action (usage feature not yet active):
+
+```
+    result = await createAdminRequest(orgUUID, authToken, "limit_increase")
+    if result.action == "increase":
+        display("Request sent to your admin to increase extra usage.")
     else:
-        printMessage("Request sent to your admin to enable extra usage.")
-        // bundle.js:+8174525
+        display("Request sent to your admin to enable extra usage.")
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+8171640, +8171697, +8173917, +8174471, +8174525
+Analysis basis: CC v2.1.142 bundle.js:+8156027, +8156084, +8158304, +8158858, +8158912
 
 ---
 
-### Browser Launch
+### 7. HTTP Client Internals (`qnH` / `bE`)
 
-After completing the relevant action, the command opens a URL in the system browser.
+The internal HTTP helper used for all API calls includes:
+
+- **Cache layer**: responses cached via a map keyed by request identity; TTL constant: 300,000 ms (5 minutes). Analysis basis: CC v2.1.142 bundle.js:+2027164
+- **Retry budget**: up to 1 retry on HTTP 401 (token refresh) with exponential back-off using `Math.random` and `setTimeout`. Analysis basis: CC v2.1.142 bundle.js:+2933676, +2933704
+- **Revocation detection**: HTTP 403 with body matching `"OAuth token has been revoked"` triggers a hard auth failure. Analysis basis: CC v2.1.142 bundle.js:+2933770
+- **No-auth mode**: requests tagged `"no-auth"` bypass credential injection. Analysis basis: CC v2.1.142 bundle.js:+8157312
+
+---
+
+### 8. Browser Opening (`sq` / `D8`)
+
+Platform-specific browser launch:
 
 ```
-function launchBrowser(isAdmin):
-    if isAdmin:
-        url = "https://claude.ai/admin-settings/usage"   // bundle.js:+8174829
+function openBrowser(url):
+    if not url.startsWith("http:") and not url.startsWith("https:"):
+        throw Error("invalid URL scheme")
+    platform = process.platform
+    if platform == "darwin":
+        spawn("open", [url])
+    elif platform == "win32":
+        spawn("rundll32", ["url,OpenURL", url])
     else:
-        url = "https://claude.ai/settings/usage"          // bundle.js:+8174870
-
-    platform = detectPlatform()
-    if platform == "darwin":        // bundle.js:+7543375
-        exec("open", url)           // bundle.js:+7543549
-    else if platform == "win32":    // bundle.js:+7543391
-        exec("rundll32", "url,OpenURL", url)  // bundle.js:+7543475, +7543487
-    else:
-        exec("xdg-open", url)       // bundle.js:+7543556
-
-    emit("browser-opened")          // bundle.js:+8174937
+        spawn("xdg-open", [url])
+    signal("browser-opened")
 ```
 
-- macOS launcher: `open` (bundle.js:+7543549)
-- Windows launcher: `rundll32 url,OpenURL` (bundle.js:+7543475, +7543487)
-- Linux/other launcher: `xdg-open` (bundle.js:+7543556)
-- Only `http:` and `https:` scheme URLs are accepted (bundle.js:+7543066, +7543088)
+Admin-role org members are directed to the admin settings URL; individual users to the standard settings URL:
 
-Analysis basis: CC v2.1.143 bundle.js:+8174829, +8174870, +8174937, +7543375, +7543391, +7543549, +7543475, +7543487, +7543556
+- Admin URL: `https://claude.ai/admin-settings/usage` (bundle.js:+8159216)
+- User URL: `https://claude.ai/settings/usage` (bundle.js:+8159257)
+
+Analysis basis: CC v2.1.142 bundle.js:+7527992, +7528014, +7528301, +7528317, +7528401, +7528413, +7528475, +7528482, +8159324
 
 ---
 
-### Error Handling
+### 9. Auth Configuration (`z3` / `bw`)
 
-```
-function handleApiError(error):
-    if isAxiosError(error):
-        statusCode = error.response.status
-        if statusCode == 401:
-            // Refresh and retry (see fetchUsageData)
-        if statusCode == 403:
-            // Treat as permission denied; fall through to non-privileged path
-        if statusCode >= 500:          // bundle.js:+8173234
-            // Extract error detail field // bundle.js:+8173440
-            detail = error.response.data.detail
-            logError(detail)
-        if statusCode == 429:          // bundle.js:+172585
-            // Rate-limited; surface to user
-    else:
-        logError(error.message)        // bundle.js:+8173808
-```
+The auth subsystem consulted by the handler supports multiple credential sources and API provider back-ends:
 
-- HTTP 401 triggers token refresh + retry (bundle.js:+2943415)
-- HTTP 403 treated as permission denied (bundle.js:+2943443)
-- HTTP 5xx logs `detail` field from response body (bundle.js:+8173234, +8173440)
-- HTTP 429 recognized as rate-limit error (bundle.js:+172585)
-- Revoked OAuth token message: `"OAuth token has been revoked"` (bundle.js:+2943509)
-
-Analysis basis: CC v2.1.143 bundle.js:+2943415, +2943443, +8173234, +8173440, +172585, +2943509
+- Environment variable `ANTHROPIC_API_KEY` (bundle.js:+2907371)
+- Environment variable `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR` (bundle.js:+2035695)
+- Environment variable `CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR` (bundle.js:+2035838)
+- Supported API providers: `bedrock`, `foundry`, `anthropicAws`, `mantle`, `vertex`, `firstParty` (bundle.js:+2017459 – +2017676)
+- If neither `ANTHROPIC_API_KEY` nor an OAuth token is present: error `"ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN env var is required"` (bundle.js:+2907792)
 
 ---
 
-### Usage Cache / Refresh Interval
+### 10. GrowthBook Experiment Integration (`G6` / `Ji6` / `IA_`)
+
+The handler participates in a GrowthBook feature-flag / A/B experiment layer:
 
 ```
-function getCachedUsage(cacheStore, fetchFn):
-    CACHE_TTL = 300000   // 5 minutes in milliseconds // bundle.js:+2030299
-    entry = cacheStore.get(key)
-    if entry is null or (Date.now() - entry.timestamp) > CACHE_TTL:
-        fresh = fetchFn()
-        cacheStore.set(key, { data: fresh, timestamp: Date.now() })
-        return fresh
-    return entry.data
+function resolveFeatureFlag(flagKey, context):
+    if flagKey in processedSet:
+        return cachedFlagMap.get(flagKey)
+    processedSet.add(flagKey)
+    experimentResult = evaluateExperiment(flagKey, context)
+    // emits event "GrowthbookExperimentEvent" on internal event bus
+    // only fires in "production" environment
+    // telemetry event: "growthbook_experiment" via Dl.emit
+    cachedFlagMap.set(flagKey, experimentResult)
+    return experimentResult
 ```
 
-- Cache TTL: 300,000 ms (5 minutes) (bundle.js:+2030299)
-
-Analysis basis: CC v2.1.143 bundle.js:+2030299
-
----
-
-### Authentication Provider Detection
-
-```
-function detectAuthProvider(config):
-    providerMap = {
-        "bedrock":      ...,   // bundle.js:+2020544
-        "foundry":      ...,   // bundle.js:+2020594
-        "anthropicAws": ...,   // bundle.js:+2020650
-        "mantle":       ...,   // bundle.js:+2020704
-        "vertex":       ...,   // bundle.js:+2020752
-        "firstParty":   ...    // bundle.js:+2020761
-    }
-    return providerMap[config.provider] ?? "firstParty"
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+2020544, +2020594, +2020650, +2020704, +2020752, +2020761
-
----
-
-### Subscription Type Recognition
-
-The system recognizes the following subscription type strings when inspecting billing status:
-
-| String | loc_byte |
-|---|---|
-| `stripe_subscription` | +2928259 |
-| `stripe_subscription_contracted` | +2928286 |
-| `apple_subscription` | +2928324 |
-| `google_play_subscription` | +2928350 |
-
-Analysis basis: CC v2.1.143 bundle.js:+2928259, +2928286, +2928324, +2928350
-
----
-
-### Feature Flag / Growthbook Integration
-
-```
-function resolveFeatureFlag(flagName, config):
-    // Reads from flagSettings // bundle.js:+2912903
-    // Only active in "production" environment // bundle.js:+3135592
-    // Emits event "GrowthbookExperimentEvent" // bundle.js:+3135738
-    // Fires "growthbook_experiment" telemetry event // bundle.js:+3136165
-    // Uses randomBytes(32).toString("hex") for assignment ID
-    // bundle.js:+3167785, +3167798
-    if environment != "production":
-        return DEFAULT_FLAG_VALUE
-    experimentId = randomBytes(32).toString("hex")
-    result = growthbook.evaluate(flagName, experimentId)
-    emit("GrowthbookExperimentEvent", { flag: flagName, result })
-    return result
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+2912903, +3135592, +3135738, +3136165, +3167785, +3167798
+Analysis basis: CC v2.1.142 bundle.js:+3125999, +3125853, +3126426, +3132445, +3132456
 
 ---
 
@@ -387,19 +324,17 @@ Analysis basis: CC v2.1.143 bundle.js:+2912903, +3135592, +3135738, +3136165, +3
 
 | Item | Detail |
 |---|---|
-| Telemetry — `tengu_ember_latch` | Fired at command entry from `oJ6` → `G6` edge (bundle.js:+8218998) |
-| Telemetry — `tengu_feature_ok` | Fired on successful feature-flag resolution (bundle.js:+955068) |
-| Telemetry — `tengu_feature_bad` | Fired on failed feature-flag resolution (bundle.js:+955126) |
-| API call — `GET /api/oauth/usage` | Fetches current usage with 5 000 ms timeout; result cached for 300 000 ms (bundle.js:+8172799, +8172827, +2030299) |
-| API call — `GET api_admin_request_eligibility` | Checks whether the user may submit an admin request (bundle.js:+8172256) |
-| API call — `GET api_admin_request_list` | Retrieves existing admin requests, filtered by `pending`/`dismissed` status (bundle.js:+8171905) |
-| API call — `POST /api/oauth/organizations/:orgUUID/admin_requests` | Creates a new limit-increase or enable-extra-usage request (bundle.js:+8171697) |
-| OAuth token change | Calls `onChangeAPIKey` when login completes successfully (bundle.js:+8219318) |
-| Browser launch | Opens platform-appropriate browser to `claude.ai/settings/usage` or `claude.ai/admin-settings/usage`; emits `browser-opened` (bundle.js:+8174937) |
-| Growthbook experiment | Emits `growthbook_experiment` event in production environments (bundle.js:+3136165) |
-| Token refresh | On HTTP 401, refreshes OAuth token and retries the failed request once (bundle.js:+8173026) |
-| appState changes | `onChangeAPIKey` propagates new credentials into app state (bundle.js:+8219318) |
+| Telemetry | `tengu_ember_latch` (bundle.js:+8203394); `tengu_feature_ok` (bundle.js:+954550); `tengu_feature_bad` (bundle.js:+954608) |
+| Browser launch | Opens `https://claude.ai/admin-settings/usage` (admin) or `https://claude.ai/settings/usage` (individual) via platform-specific OS command |
+| Signal emitted | `"browser-opened"` string signal after successful browser launch (bundle.js:+8159324) |
+| API calls | GET `/api/oauth/usage` (eligibility), GET `/api/oauth/organizations/:orgUUID/admin_requests` (list), POST `/api/oauth/organizations/:orgUUID/admin_requests` (create) |
+| API timeout | 5,000 ms per request (bundle.js:+8157214) |
+| Response cache TTL | 300,000 ms (5 minutes) (bundle.js:+2027164) |
+| OAuth login flow | Triggered when plan is not `"pro"` or `"max"`; displays prompt, then calls `onChangeAPIKey` on success |
+| GrowthBook events | `"GrowthbookExperimentEvent"` emitted on internal bus; `"growthbook_experiment"` sent via telemetry emitter in production |
+| appState changes | API key updated via `onChangeAPIKey` when login flow completes (bundle.js:+8203714) |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 
 ---
 
@@ -407,25 +342,17 @@ Analysis basis: CC v2.1.143 bundle.js:+2912903, +3135592, +3135738, +3136165, +3
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis |
+| v2.1.142 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Running `/extra-usage` without an internet connection.** The command must reach `api.anthropic.com` (bundle.js:+3140996) to fetch usage data and submit requests. Offline invocations will fail at the `GET /api/oauth/usage` step with a network error.
-
-2. **Expecting non-admin team/enterprise users to submit requests.** Only users whose role is one of `admin`, `billing`, `owner`, or `primary_owner` can submit admin requests. All other roles receive the "Please contact your admin" message and the command exits without opening a browser (bundle.js:+8173981).
-
-3. **Invoking the command repeatedly to re-submit requests.** If a `pending` or `dismissed` request already exists for the organization, the command prints "You have already submitted a request" and exits without creating a duplicate (bundle.js:+8174222).
-
-4. **Expecting the command to work on unsupported subscription tiers.** Only `pro`, `max`, `team`, and `enterprise` tiers are handled explicitly. Other tier strings fall through to an unhandled path with no meaningful output.
-
-5. **Interrupting the login flow with Ctrl-C and expecting the command to continue.** An interrupted login prints "Login interrupted" and aborts the entire `/extra-usage` flow (bundle.js:+8219360).
-
-6. **Assuming the usage data is always real-time.** Usage data is cached for up to 5 minutes (300 000 ms). A freshly submitted admin request may not be reflected until the cache expires (bundle.js:+2030299).
-
-7. **Using the command in non-first-party API configurations (Bedrock, Vertex, etc.).** The command's OAuth-based admin-request flow is designed for first-party Anthropic authentication. Provider variants such as `bedrock`, `vertex`, `foundry`, `anthropicAws`, or `mantle` may not reach the required endpoints (bundle.js:+2020544 – +2020761).
+1. **Running `/extra-usage` without an active Pro or Max plan** — the command will immediately enter an OAuth login flow rather than showing usage settings. Users who already have credentials but on a free tier will be prompted to re-authenticate.
+2. **Non-admin org members expecting to submit requests** — only roles `admin`, `billing`, `owner`, and `primary_owner` can submit limit-increase requests; other members see a redirect-to-admin message.
+3. **Expecting immediate limit increase** — the command only *submits* a request to the organization admin; no limit is changed until the admin approves. The confirmation message says "Request sent", not "Limit increased".
+4. **Re-submitting when a request is already pending** — the command checks for existing `pending` or `dismissed` requests and will not create a duplicate; it instead shows a "you have already submitted" message.
+5. **Using `/extra-usage` on Bedrock, Vertex, or other non-first-party providers** — the OAuth-based extra-usage flow is designed for first-party Anthropic accounts. Behavior on alternative API providers is not guaranteed to proceed past the auth check.
 
 ---
 
@@ -435,82 +362,86 @@ Analysis basis: CC v2.1.143 bundle.js:+2912903, +3135592, +3135738, +3136165, +3
 
 | Identifier | Role |
 |---|---|
-| `oJ6` | Command entry-point / top-level handler for `/extra-usage` |
-| `fq` | Auth-state resolver / credential reader |
-| `Cl8` | Credential field accessor #1 |
-| `Rl8` | Credential field accessor #2 |
-| `Uw` | Auth provider dispatcher |
-| `TK` | Token serializer / formatter |
-| `xH` | Low-level string conversion utility |
-| `SN` | OAuth token validation helper |
-| `nU6` | Token field extractor |
-| `eAH` | Token integrity checker |
-| `gc` | OAuth credential reader (file-descriptor path) |
-| `fI` | Flag-settings reader |
-| `Sw` | Provider-type detector |
-| `DA` | Provider string mapper |
-| `j3` | API-key / OAuth-token resolver (environment + helper) |
-| `Q46` | Environment variable reader for `ANTHROPIC_API_KEY` |
-| `$E` | API-key helper runner |
-| `$SH` | VSCode client detector |
-| `Oq6` | File-descriptor token reader (`CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR`) |
-| `N6` | Credentials store / session record constructor |
-| `Qy` | History slice utility (last-20 entries) |
-| `lV` | Subscription-tier reader |
-| `G6` | Growthbook experiment dispatcher / feature-flag gate |
-| `m76` | Growthbook config loader #1 |
-| `p76` | Growthbook config loader #2 |
-| `Ts` | Growthbook client initializer |
-| `jF` | Growthbook feature evaluator |
-| `Uu` | Growthbook SDK wrapper |
-| `Ci6` | Experiment assignment manager |
-| `lA_` | Experiment event emitter |
-| `$0H` | Experiment result serializer |
-| `pu` | Random experiment-ID generator |
-| `hH` | JSON stringify wrapper |
-| `EhL` | Experiment log formatter |
-| `eA_` | Feature-flag eligibility gate |
-| `wD9` | Flag environment checker |
-| `R_` | Flag value resolver |
-| `aE9` | Flag assignment persister |
-| `VRH` | Flag-set membership checker |
-| `QMH` | Subscription-type classifier |
-| `L5` | Subscription tier + credential combiner |
-| `HA` | Subscription-type string validator |
-| `SR` | Array membership tester (subscription types) |
-| `H` | General-purpose utility / math-random / setTimeout host |
-| `zq` | URL string builder / validator |
-| `A$A` | URL string normalizer |
-| `lf8` | Extra-usage main orchestrator |
-| `Pu` | Role-permission checker |
-| `LnH` | Usage data fetcher (`/api/oauth/usage`) |
-| `F1` | HTTP auth-header builder |
-| `_` | HTTP client base instance |
-| `SH` | HTTP request helper #1 |
-| `mH` | HTTP request helper #2 |
-| `yE` | HTTP subscription-array validator |
+| `mJ6` | Main async handler for `/extra-usage` command (arbor_handler) |
+| `qq` | Subscription/plan info resolver |
+| `jdA` | Plan info sub-reader A |
+| `JdA` | Plan info sub-reader B |
+| `bw` | Authentication state builder |
+| `OL` | String coercion / option normalizer |
+| `bH` | Low-level string/value formatter |
+| `QR` | API credentials assembler |
+| `RU6` | Auth context initializer |
+| `C46` | Credential field formatter |
+| `Ja` | OAuth token file descriptor reader |
+| `yu` | Flag-settings reader |
+| `MP` | Provider type mapper |
+| `VA` | Backend provider classifier (bedrock/vertex/etc.) |
+| `z3` | Auth configuration resolver |
+| `f8_` | API key helper resolver |
+| `GV` | Auth validation utility |
+| `HH6` | VSCode environment detector |
+| `Il8` | API key file descriptor reader |
+| `y6` | Session / experiment state recorder |
+| `NR` | Credential string slicer (last 20 chars) |
+| `dV` | Deferred value / promise holder |
+| `G6` | GrowthBook feature-flag evaluator entry |
+| `Z76` | Feature-flag key normalizer |
+| `V76` | Feature-flag value extractor |
+| `ws` | Anthropic API endpoint checker |
+| `Ds` | GrowthBook SDK wrapper |
+| `Su` | GrowthBook client initializer |
+| `Ji6` | Feature-flag cache lookup and populate |
+| `IA_` | Experiment evaluation and event emitter |
+| `f0H` | GrowthBook attributes builder |
+| `hu` | Session ID generator (32-byte hex, random) |
+| `RH` | JSON serializer wrapper |
+| `nyL` | Experiment payload normalizer |
+| `CA_` | Feature-flag result processor |
+| `mY9` | Deduplication helper for flag results |
+| `m_` | Flag result cache accessor |
+| `GE9` | Feature-flag metadata extractor |
+| `WRH` | Seen-flag set checker |
+| `CMH` | Subscription type classifier (stripe/apple/google) |
+| `M5` | Subscription plan tier resolver |
+| `AA` | Subscription active-state checker |
+| `kB` | Boolean coercion for subscription state |
+| `$q` | Telemetry event category selector |
+| `NMA` | Telemetry string formatter |
+| `kf8` | Extra-usage core flow controller |
+| `Mu` | Organization role helper |
+| `qnH` | HTTP fetch wrapper with cache and retry |
+| `B1` | HTTP base-request builder |
+| `_` | URL path builder |
+| `SH` | Request header assembler (ok path) |
+| `uH` | Request header assembler (error path) |
+| `hE` | Response extractor |
 | `AAH` | Request timestamp stamper |
-| `CE` | HTTP error classifier (Axios) |
-| `Eu` | Token-refresh-and-retry handler |
-| `v` | HTTP transport layer / request executor |
-| `G5K` | HTTP client configurator |
-| `P7` | URL path builder with redaction |
-| `cSH` | Path component sanitizer |
-| `Z5K` | File-upload / multipart request builder |
-| `hC1` | Admin-request eligibility fetcher |
-| `SC1` | Admin-request list fetcher |
-| `A` | Multipart form-data builder |
-| `f` | Underlying HTTP/socket connection |
-| `yC1` | Admin-request creation POSTer |
-| `CC1` | Axios error handler for admin requests |
-| `NY` | Request-type classifier (`limit_increase` vs enable) |
-| `XH` | String coercion helper |
-| `NH` | Notification / message output handler |
-| `v_` | Error-to-string converter |
-| `kNK` | Message queue manager (shift/push) |
-| `qK` | Browser-launch orchestrator |
-| `ex4` | URL scheme validator (`http:`/`https:`) |
-| `hJ` | Platform-specific browser command selector |
-| `Y8` | Child-process spawner for browser open |
-| `$_` | Process execution wrapper with timeout |
-| `S6` | Process exit / signal handler |
+| `bE` | HTTP error / retry handler |
+| `H` | Exponential back-off with jitter |
+| `Du` | Response cache manager (get/delete/set) |
+| `v` | HTTP request dispatcher (debug, redact, file logging) |
+| `f7K` | Request serializer and file-logging writer |
+| `H5` | Log file path builder with redaction |
+| `BhH` | HTTP header redactor |
+| `O7K` | File-based request logger |
+| `tR1` | Admin request eligibility fetcher |
+| `sR1` | Admin request list fetcher |
+| `A` | HTTP form-data / multipart builder |
+| `f` | HTTP connection closer |
+| `aR1` | Admin request creator (POST) |
+| `HC1` | Axios error classifier for API responses |
+| `ZY` | Admin URL selector (admin vs. user settings) |
+| `GH` | String coercion for URL |
+| `NH` | Notification / message display handler |
+| `k_` | Error-to-string converter |
+| `JvK` | Notification queue manager (shift/push) |
+| `sq` | Cross-platform browser opener |
+| `Jb4` | URL scheme validator |
+| `IJ` | Browser-open argument builder |
+| `D8` | OS-specific process spawner |
+| `O_` | Child-process launcher with limits |
+| `h6` | Platform-specific open-command resolver |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

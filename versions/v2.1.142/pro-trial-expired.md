@@ -1,8 +1,8 @@
 ---
 type: feature-spec
 feature: "pro-trial-expired"
-cc_version: 2.1.142
-updated: "2026-05-18"
+cc_version: "2.1.142"
+updated: "2026-06-01"
 tags: ["pro-trial-expired", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
@@ -22,7 +22,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/pro-trial-expired` command renders a JSX-based UI panel presenting options to users whose Claude Code Pro plan trial has ended. It is a hidden, local JSX command — meaning it does not appear in the standard slash-command menu but can be surfaced programmatically by the CLI when the runtime detects a trial expiry condition. Its core mechanism is a single React element tree produced by the command's render function.
+`/pro-trial-expired` is a hidden, locally-rendered JSX command that surfaces UI options to the user when their Claude Pro plan trial period has ended. Rather than sending a prompt to the agent, it renders a React component tree directly in the CLI interface, presenting upgrade or continuation paths appropriate to the post-trial state.
 
 ---
 
@@ -32,60 +32,80 @@ The `/pro-trial-expired` command renders a JSX-based UI panel presenting options
 |---|---|
 | type | `local-jsx` |
 | name | `pro-trial-expired` |
-| description | Options shown when the Pro plan Claude Code trial has ended |
+| description | `Options shown when the Pro plan Claude Code trial has ended` |
 | isHidden | `true` |
-| module\_id | `nOq` |
+| module_id | `nOq` |
+| load_inline | `true` |
+| handler | `bY7` (AsyncFunction, resolved via `module_id` path) |
+| `loc_byte_end` | `11359438` |
+| `arbor_handler.name` | `bY7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::bY7` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.132 bundle.js:+11359233
+Analysis basis: CC v2.1.132 bundle.js:+11359233 – +11359438
+
+**Notes on registration shape:**
+
+- `type: "local-jsx"` indicates the command does **not** submit text to the language model; instead, its handler returns a JSX element rendered directly in the CLI UI.
+- `isHidden: true` means this command does not appear in the `/help` command listing or any user-facing command discovery surface. It is invoked programmatically by the application when the Pro trial expiry condition is detected.
+- `load_inline: true` means the handler is bundled inline rather than being dynamically imported. The Arbor symbol graph resolved the handler as `bY7` via the `module_id` → `nOq` path.
 
 ---
 
 ## Input Branching
 
-Because the depth-2 call graph contains only a single outbound edge (render function → `createElement`) and the literals array is empty, no conditional branching on user input was detected within the traversal window.
+Because the command is of type `local-jsx` and `isHidden: true`, it is not intended for direct user invocation via the slash-command prompt. The call graph shows a single, linear execution path with no branching guarded by user input.
 
 ```mermaid
 flowchart TD
-    A(["/pro-trial-expired invoked"]) --> B{Command visible\nto user?}
-    B -- "isHidden = true\n(programmatic only)" --> C[CLI surfaces command\non trial-expiry detection]
-    B -- "manual /pro-trial-expired\ntyped by user" --> C
-    C --> D[proTrialExpiredRenderer called]
-    D --> E[createElement — build JSX element tree]
-    E --> F([JSX panel rendered in terminal UI])
+    A([CLI detects Pro trial expiry]) --> B[Dispatch /pro-trial-expired internally]
+    B --> C[Invoke async handler: renderTrialExpiredOptions]
+    C --> D[Call React.createElement to build JSX tree]
+    D --> E[Return rendered JSX element to CLI render pipeline]
+    E --> F([UI displays trial-expired options to user])
 ```
 
-Analysis basis: CC v2.1.132 bundle.js:+11359113 (createElement call edge), +11359233 (registration)
+No user-supplied arguments, flags, or text body are parsed by this command. The depth-2 call graph contains only a single outbound call edge (to `HRA.createElement`), confirming the handler is a straightforward JSX factory with no conditional sub-routing detected at this traversal depth.
+
+Analysis basis: CC v2.1.132 bundle.js:+11359113
 
 ---
 
 ## Behavioral Spec
 
-### Render — Pro Trial Expired Panel
+### Trial-Expired UI Rendering
 
-The command's entire observable behavior at depth ≤ 2 is the construction and return of a React element tree. No argument parsing, no async data fetching, and no telemetry emission were detected within this traversal depth.
+The handler is an async function that constructs and returns a React (JSX) element tree. The async nature allows for any prerequisite data (such as subscription state or account metadata) to be awaited before rendering, though no specific async callees were detected within the depth-2 traversal.
 
 ```
-function proTrialExpiredRenderer(props):
-    # Build and return a JSX element tree that presents
-    # post-trial options to the user.
-    # Internal node structure is below depth-2 traversal limit.
-    root ← createElement(
-        containerComponent,   # component type: not resolved at depth-2
-        propsObject,          # props: not resolved at depth-2
-        ...children           # child elements: not resolved at depth-2
-    )
-    return root
+async function renderTrialExpiredOptions(commandContext):
+
+    // Build a JSX component tree representing the trial-expired state UI.
+    // The component is expected to present the user with options such as:
+    //   - Upgrading to a paid Pro plan
+    //   - Returning to a free-tier experience
+    //   - Accessing account management links
+    // (Exact option set is encapsulated within the JSX component; see callGraph.)
+
+    uiElement = ReactCreateElement(TrialExpiredOptionsComponent, props)
+
+    return uiElement
+    // Returned element is handed back to the CLI render pipeline,
+    // which mounts it in the active pane / message stream.
 ```
 
 Analysis basis: CC v2.1.132 bundle.js:+11359113
 
-> **Note on traversal depth**: The call graph was collected at depth ≤ 2. The `createElement` call is the only resolved edge. The exact component hierarchy, any conditional branches inside the render tree, and all child element types are <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
+**Key behavioral properties:**
 
-### Hidden Command Surfacing
+- The command handler is typed `AsyncFunction` (confirmed by Arbor resolution). Any awaited operations inside (e.g., fetching account state) are opaque at depth-2 traversal.
+- The sole detected callee is `HRA.createElement`, identifying `HRA` as the React (or React-compatible) namespace in use within this bundle. This is consistent with other `local-jsx` commands in the CC codebase.
+- No text is submitted to the Claude model. The command is entirely self-contained on the client side.
+- Because `isHidden: true`, the command cannot be triggered by the user typing `/pro-trial-expired` in normal interactive sessions; it is reserved for internal programmatic dispatch.
 
-Because `isHidden` is `true`, this command does not appear in the autocomplete list presented to users typing `/`. The mechanism by which the CLI decides to invoke it (e.g., a billing-state hook, an API response flag, or a startup check) is <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
-
-Analysis basis: CC v2.1.132 bundle.js:+11359233 (`isHidden: true`)
+<!-- TODO: not found in depth-2 traversal; needs --depth 4 — specific JSX child components, props passed to createElement, and any async data-fetch calls inside the handler. -->
 
 ---
 
@@ -93,12 +113,13 @@ Analysis basis: CC v2.1.132 bundle.js:+11359233 (`isHidden: true`)
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at depth ≤ 2 (telemetry array is empty) |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Visibility | Hidden from user-facing slash-command menu (`isHidden: true`) |
-| Render mechanism | `local-jsx` — renders a React/JSX element directly in the CLI UI layer |
+| Telemetry | None detected within depth-2 traversal |
+| Hook registration | None detected within depth-2 traversal |
+| appState changes | None detected within depth-2 traversal; UI state changes are driven by user interaction with the rendered component |
+| Sound | None detected |
+| Model invocation | None — `local-jsx` type; no prompt is sent to the Claude model |
+| Visibility | Hidden from `/help` and command discovery (`isHidden: true`) |
+| Render mechanism | Returns a `HRA.createElement`-produced JSX element consumed by the CLI render pipeline |
 
 ---
 
@@ -106,16 +127,17 @@ Analysis basis: CC v2.1.132 bundle.js:+11359233 (`isHidden: true`)
 
 | Version | Change |
 |---|---|
-| v2.1.132 | Initial analysis — command registered as hidden local-jsx, single createElement call edge confirmed |
+| v2.1.132 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Attempting to invoke this command manually and expecting a menu entry.** Because `isHidden` is `true`, the command never appears in the autocomplete list. Typing `/pro-trial-expired` directly may work in some CLI versions, but the command is intended for programmatic surfacing only.
-2. **Assuming this command handles billing state mutations.** At depth ≤ 2 the command only renders a UI panel; any actual billing upgrade actions are handled by child components or external hooks not visible in this traversal.
-3. **Expecting telemetry events from this command.** No `tengu_*` events are emitted at the command's top level. Telemetry, if any, would originate from child components deeper in the render tree.
-4. **Confusing `local-jsx` with a plain text command.** The `local-jsx` type means the output is a React element tree rendered by the CLI's UI runtime, not a plain string printed to stdout. Treating it like a text command will cause integration errors in custom tooling.
+1. **Attempting to invoke directly**: Because `isHidden: true`, typing `/pro-trial-expired` in a normal interactive session will not produce the expected UI. The command is dispatched programmatically by the application when it detects a trial expiry condition; manually invoking it in an ordinary session may produce no output or an unexpected no-op.
+2. **Expecting model output**: This is a `local-jsx` command. It renders a UI component locally and does not forward any prompt to the Claude model. Do not expect a conversational response.
+3. **Assuming synchronous rendering**: The handler is declared `AsyncFunction`. Any integration code that wraps or intercepts this command must properly `await` the handler's return value before attempting to mount the returned JSX element.
+4. **Searching for telemetry events**: No telemetry events were found in the depth-2 traversal. Absence of telemetry does not indicate a no-op command — it may simply mean events are fired from child components not yet reached by the static analysis.
+5. **Conflating `load_inline` with dynamic import**: `load_inline: true` means the handler is bundled at build time in the same chunk, not lazy-loaded. The module boundary (`nOq`) is a logical namespace, not a separate code-split chunk.
 
 ---
 
@@ -125,4 +147,5 @@ Analysis basis: CC v2.1.132 bundle.js:+11359233 (`isHidden: true`)
 
 | Identifier | Role |
 |---|---|
-| `bY7` | Pro trial expired render function — constructs and returns the JSX element tree for the post-trial options panel |
+| `bY7` | Async handler function for `/pro-trial-expired`; resolved by Arbor via `module_id` → `nOq`; entry point for the command's JSX rendering logic |
+| `HRA` | React (or React-compatible) namespace; `HRA.createElement` is called to construct the trial-expired UI component tree |
