@@ -1,13 +1,13 @@
 ---
 type: feature-spec
 feature: "focus"
-cc_version: 2.1.148
-updated: "2026-05-18"
+cc_version: "2.1.148"
+updated: "2026-06-01"
 tags: ["focus", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.143
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/focus`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/focus` command toggles a reduced "focus view" in the Claude Code CLI, which collapses the conversation display to show only the user's most recent prompt, a condensed summary of any tool invocations, and the final model response. This mode is designed to reduce visual noise during long or tool-heavy sessions by suppressing intermediate output. Because the command is registered with `immediate: true`, it takes effect the moment it is invoked without requiring additional confirmation.
+`/focus` is an immediate local-jsx slash command that toggles a **focus view** in the Claude Code terminal UI. When activated, it collapses the visible conversation history to show only the user's prompt, a condensed tool-use summary, and the final model response — reducing visual noise during long sessions.
 
 ---
 
@@ -32,36 +32,42 @@ The `/focus` command toggles a reduced "focus view" in the Claude Code CLI, whic
 |---|---|
 | type | `local-jsx` |
 | name | `focus` |
-| description | `Toggle focus view (show only your prompt, a tool summary, and the final response)` |
+| description | `"Toggle focus view (show only your prompt, a tool summary, and the final response)"` |
 | immediate | `true` |
+| load\_inline | `true` |
+| handler resolution | `arbor_handler.name = call` (resolution path: `direct`) |
+| handler FQN | `claude-2.1.132::call` |
+| handler kind | `Method` |
+| `loc_byte_end` | `11376187` |
+| `arbor_handler.name` | `call` |
+| `arbor_handler.kind` | `Method` |
+| `arbor_handler.resolution_path` | `direct` |
+| `arbor_handler.fqn` | `claude-2.1.132::call` |
+| `arbor_handler.n_hits` | `1` |
 
-Analysis basis: CC v2.1.143 bundle.js:+11691947
+Analysis basis: CC v2.1.132 bundle.js:+11374725 – +11376187
 
 ---
 
 ## Input Branching
 
-The AST traversal for this command returned an empty call graph and no literal constants, indicating that the implementation module was not resolved beyond its registration entry point at the depth-2 limit.
+Because `immediate: true` is set on the registration, the command fires without waiting for additional user input or a confirmation prompt. The `local-jsx` type means the handler renders a JSX component directly into the terminal UI rather than submitting a textual prompt to the model.
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-Based solely on the registration fields, the command exhibits one confirmed branching characteristic: the `immediate` flag bypasses any interactive confirmation step and directly dispatches the toggle action. The high-level control flow is:
+The call graph returned zero edges at depth ≤ 2, so branching structure inside the handler cannot be independently verified from the extracted data. Based on the registration shape and the `immediate` flag, the execution path is:
 
 ```mermaid
 flowchart TD
-    A([User types /focus]) --> B{Command recognized?}
-    B -- No --> C[CLI shows command-not-found error]
-    B -- Yes --> D{immediate flag set?}
-    D -- true --> E[Dispatch toggle action immediately]
-    D -- false --> F[Await user confirmation]
-    E --> G{Focus view currently active?}
-    G -- Yes --> H[Deactivate focus view\nRestore full conversation display]
-    G -- No --> I[Activate focus view\nShow prompt + tool summary + final response only]
-    H --> J([Display updated])
-    I --> J
+    A[User types /focus] --> B{immediate = true}
+    B --> C[Handler invoked immediately\nno extra input collected]
+    C --> D{Focus view currently active?}
+    D -- No --> E[Enable focus view:\nshow prompt + tool summary + final response only]
+    D -- Yes --> F[Disable focus view:\nrestore full conversation display]
+    E --> G[UI re-renders with focus mode on]
+    F --> H[UI re-renders with focus mode off]
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11691947 (`immediate: true` field confirms the bypass path; toggle semantics derived from the description string "Toggle focus view")
+> ⚠️ The toggle branch logic (D → E / F) is inferred from the word "Toggle" in the registered description. The call graph depth-2 traversal returned no edges, so the internal condition cannot be cited to a specific byte offset.
+> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
@@ -69,72 +75,40 @@ Analysis basis: CC v2.1.143 bundle.js:+11691947 (`immediate: true` field confirm
 
 ### Focus View Toggle
 
-Because the call graph returned no edges, the following pseudocode is reconstructed from the registration metadata only. Internal implementation details beyond what the registration exposes are marked with TODO.
+The handler is registered inline (`load_inline: true`) and resolved by Arbor as a `Method` named `call` within the registration object's byte range. Because the depth-2 call graph is empty, the following pseudocode is reconstructed from the registration metadata and the command description alone.
 
 ```
-function handleFocusCommand(appState):
-    # immediate = true; no confirmation prompt is shown
-    currentFocusState = appState.getFocusViewActive()
+function call(commandContext):
+    uiState = commandContext.getAppState()
 
-    if currentFocusState is TRUE:
-        appState.setFocusViewActive(FALSE)
-        renderFullConversationView(appState)
+    if uiState.focusViewEnabled:
+        uiState.focusViewEnabled = false
+        # Restore full message thread rendering
+        renderFullConversation(uiState)
     else:
-        appState.setFocusViewActive(TRUE)
-        renderFocusView(appState)
+        uiState.focusViewEnabled = true
+        # Render reduced view:
+        #   1. The user's most-recent prompt
+        #   2. A summarised tool-use block (tool name + outcome only)
+        #   3. The final assistant response
+        renderFocusView(uiState)
 
-function renderFocusView(appState):
-    # Show only three elements:
-    #   1. The user's most recent prompt
-    #   2. A condensed tool-call summary (details hidden)
-    #   3. The final model response
-    # All intermediate assistant turns and raw tool output are hidden
-    elements = [
-        getLastUserPrompt(appState),
-        buildToolSummary(appState),       # <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-        getFinalModelResponse(appState)   # <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-    ]
-    display(elements)
-
-function renderFullConversationView(appState):
-    # Restore the default view (all turns, all tool output)
-    display(appState.getFullConversationHistory())
+    return    # no model API call is made; UI-only side effect
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11691947 (description string drives the three-element model; toggle semantics confirmed by the word "Toggle" in description)
+Analysis basis: CC v2.1.132 bundle.js:+11374725
 
-### Immediate Dispatch
+### Immediate Execution
 
-The `immediate: true` registration field signals to the CLI's command dispatcher that no secondary input collection phase is required. Concretely:
+The `immediate: true` flag on the registration means the runtime does **not** open an input field or prompt the user for arguments before calling the handler. The command is self-contained — no parameters are accepted and none are documented in the registration.
 
-```
-function dispatchSlashCommand(command, inputBuffer, appState):
-    if command.immediate is TRUE:
-        # Skip the "press Enter to confirm" phase
-        invokeHandler(command, inputBuffer, appState)
-    else:
-        promptForConfirmation(command, inputBuffer, appState)
-```
+Analysis basis: CC v2.1.132 bundle.js:+11374725
 
-Analysis basis: CC v2.1.143 bundle.js:+11691947
+### Rendering Type (`local-jsx`)
 
-### Renderer Type (`local-jsx`)
+The `local-jsx` type distinguishes this command from `prompt`-type commands (which inject text into the model conversation) and from `local`-type commands (which execute plain JS side-effects without JSX). A `local-jsx` handler may return a React element that is mounted into the terminal pane; this is consistent with a toggle that modifies the visible rendering of conversation turns without touching the model API.
 
-The `type: "local-jsx"` registration value indicates that the command's output is rendered by a local React-compatible JSX component rather than being streamed as plain text or delegated to the model. This means the focus toggle affects the component tree directly.
-
-```
-function resolveCommandRenderer(command):
-    if command.type is "local-jsx":
-        return localJSXComponentRegistry.get(command.name)
-    else if command.type is "model":
-        return modelStreamRenderer
-    else:
-        return plainTextRenderer
-```
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-Analysis basis: CC v2.1.143 bundle.js:+11691947 (`type: "local-jsx"` field)
+Analysis basis: CC v2.1.132 bundle.js:+11374725
 
 ---
 
@@ -142,12 +116,13 @@ Analysis basis: CC v2.1.143 bundle.js:+11691947 (`type: "local-jsx"` field)
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected — the `telemetry` array returned empty for this command. No `tengu_*` events are fired on `/focus` invocation. <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | Toggles a boolean focus-view flag within application state (active ↔ inactive). Exact state key name not resolved. <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Persistence | Whether the focus state survives session restart is not determinable from the registration data alone. <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Rendering side effect | Triggers a JSX component re-render that either collapses or expands the conversation pane immediately, with no intermediate loading state implied by `immediate: true`. |
+| Telemetry | None detected in depth-2 traversal <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Model API call | None — command is UI-only (`local-jsx`, `immediate`) |
+| appState changes | `focusViewEnabled` boolean toggled (inferred from description; byte-level field name unverified) |
+| Conversation history | Unmodified — focus view is a display filter, not a deletion |
+| Sound | None detected |
+| Hook registration | None detected in depth-2 traversal <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Input arguments | None accepted (`immediate: true`, no argument schema in registration) |
 
 ---
 
@@ -155,21 +130,17 @@ Analysis basis: CC v2.1.143 bundle.js:+11691947 (`type: "local-jsx"` field)
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis. Command registered as `local-jsx`, `immediate: true`, with toggle semantics over a three-element focus view. |
+| v2.1.132 | Initial analysis — command registered as `local-jsx`, `immediate`, with inline handler resolved via Arbor direct path |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting a confirmation prompt.** Because `immediate: true` is set, invoking `/focus` applies the toggle the moment the command is recognized. There is no "press Enter to confirm" step; users who type `/focus` accidentally will see the view change instantly.
-
-2. **Assuming focus view persists across sessions.** The command description says "toggle", which implies an in-memory state flip. Whether this state is written to disk and restored on the next session launch is not confirmed by the registration data. Do not rely on focus mode surviving a CLI restart without verification.
-
-3. **Expecting model output to change.** Focus view is a display-layer filter only. The underlying model still receives the full conversation context; `/focus` does not truncate the prompt sent to the API, only what is rendered in the terminal.
-
-4. **Confusing "tool summary" with full tool output.** The description specifies "a tool summary", not the raw tool call and response. Verbose tool output (e.g., long file reads) will be collapsed in focus view; if you need to inspect tool details, toggle focus view off first.
-
-5. **Using `/focus` in non-interactive or piped sessions.** As a `local-jsx` command that manipulates the terminal render tree, its behavior in non-TTY or piped execution contexts is undefined by the available registration data. <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+1. **Expecting a model response**: `/focus` is a `local-jsx` command with `immediate: true`. It produces no model API call and returns no assistant message. If you type `/focus` and wait for a reply, none will arrive.
+2. **Passing arguments**: The registration records no parameter schema and `immediate: true` suppresses the input field. Any text typed after `/focus` will be ignored or may cause an error depending on the runtime's argument-handling fallback.
+3. **Confusing focus view with context pruning**: The command filters the *display* of the conversation; it does not remove messages from the context window sent to the model. The full history remains available to Claude.
+4. **Assuming persistence across sessions**: There is no evidence in the registration or call graph of the focus-view state being written to disk. Restarting Claude Code likely resets the toggle to its default (off) state.
+5. **Version mismatch**: This spec is verified against v2.1.132 only. The `call` handler is resolved via Arbor `direct` path; if the bundle is minified differently in a later version, the handler offset will shift.
 
 ---
 
@@ -179,4 +150,10 @@ Analysis basis: CC v2.1.143 bundle.js:+11691947 (`type: "local-jsx"` field)
 
 | Identifier | Role |
 |---|---|
-| *(none)* | The `identifiers` array returned by the depth-2 AST traversal is empty for this command. No obfuscated identifiers were resolved. |
+| `call` | Inline handler method on the registration object; entry point for `/focus` execution (Arbor FQN: `claude-2.1.132::call`, resolution: direct, byte range +11374725–+11376187) |
+
+> No additional obfuscated identifiers were returned by the depth-2 AST traversal. The `identifiers` array in the source data is empty.
+
+---
+
+*Note: the depth-2 call graph for `/focus` returned zero edges and zero telemetry/literal signals. All behavioral claims beyond the registration field values are inferred from the command description and the `immediate`/`local-jsx` type semantics. A `--depth 4` re-extraction is recommended to verify the toggle condition, the exact appState field name, and any telemetry that may fire inside the handler.*

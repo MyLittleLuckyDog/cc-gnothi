@@ -1,13 +1,13 @@
 ---
 type: feature-spec
 feature: "permissions"
-cc_version: 2.1.146
-updated: "2026-05-19"
+cc_version: "2.1.146"
+updated: "2026-06-01"
 tags: ["permissions", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.144
-analysis_basis: "CC v2.1.144 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/permissions`
 
-> Analysis basis: CC v2.1.144 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.144
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/permissions` command (also accessible as `/allowed-tools`) provides an interactive interface for managing the allow and deny rules that govern which tools Claude Code is permitted to invoke during a session. It renders as a local JSX component, meaning its output is displayed as an interactive UI panel rather than plain text. Users can inspect, add, and remove tool permission rules without manually editing configuration files.
+The `/permissions` command (also accessible as `/allowed-tools`) provides an interactive JSX-rendered interface for managing the allow and deny lists that govern which tools Claude Code may invoke during a session. It is implemented as a `local-jsx` type command, meaning it returns a rendered React element rather than plain text, and it injects a synthetic system message carrying permission-retry context into the conversation message stream.
 
 ---
 
@@ -32,118 +32,145 @@ The `/permissions` command (also accessible as `/allowed-tools`) provides an int
 |---|---|
 | type | `local-jsx` |
 | name | `permissions` |
+| aliases | `allowed-tools` |
 | description | `Manage allow & deny tool permission rules` |
-| aliases | `["allowed-tools"]` |
-| module_id | `XWq` |
+| module_id | `x5q` |
+| load_inline | `true` |
+| handler | `y$7` (AsyncFunction, resolved via `module_id` path) |
+| loc_byte span | `11101871` – `11102041` |
+| `loc_byte_end` | `11102041` |
+| `arbor_handler.name` | `y$7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::y$7` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.144 bundle.js:+11440137
+Analysis basis: CC v2.1.132 bundle.js:+11101871
 
 ---
 
 ## Input Branching
 
-Because the depth-2 AST traversal returned an empty call graph and no literal constants for module `XWq`, the precise internal branching logic of the command's entry function could not be recovered deterministically.
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-The following flowchart represents the **externally observable** branching derived from the registration metadata alone (type `local-jsx`, presence of alias, no argument literals found):
+The command takes no structured sub-command arguments at the registration level; all branching is determined inside the handler at runtime based on conversation state and the message-op type.
 
 ```mermaid
 flowchart TD
-    A([User types /permissions or /allowed-tools]) --> B{Command name resolves?}
-    B -- "matches 'permissions'" --> C[Load module XWq]
-    B -- "matches alias 'allowed-tools'" --> C
-    B -- "no match" --> Z([Command not found error])
-    C --> D{Module renders JSX?}
-    D -- "yes (type = local-jsx)" --> E[Render interactive permissions panel in TUI]
-    D -- "no / error" --> F([Render fallback or error state])
-    E --> G{User action in panel}
-    G -- "View rules" --> H[Display current allow/deny list]
-    G -- "Add rule" --> I[Append new permission rule to config]
-    G -- "Remove rule" --> J[Delete selected permission rule from config]
-    G -- "Exit / dismiss" --> K([Return to prompt])
+    A([User invokes /permissions or /allowed-tools]) --> B[Handler y$7 is called]
+    B --> C[Build permission-retry system message via buildSystemMessage]
+    C --> D{Message stream op type}
+    D -->|"append"| E[Append new system message to conversation]
+    D -->|other| F[<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->]
+    E --> G[Render JSX permissions panel via createElement]
+    G --> H[Return rendered element to CLI shell]
 ```
 
-> **Note:** Nodes H, I, J, and K are inferred from the command description (`"Manage allow & deny tool permission rules"`) and the `local-jsx` render type. They are not directly confirmed by call-graph data.
-> Analysis basis: CC v2.1.144 bundle.js:+11440137
+Analysis basis: CC v2.1.132 bundle.js:+11101689, +11101742, +11101765
 
 ---
 
 ## Behavioral Spec
 
-### Command Dispatch and Alias Resolution
+### Handler Entry Point
 
-When the user enters `/permissions` or `/allowed-tools`, the CLI resolves the input against the registered command name and its alias array before loading the implementation module.
+The async handler `y$7` is the sole entry point for this command, resolved through the `module_id` path (`x5q`). It is an `AsyncFunction`.
 
 ```
-function resolvePermissionsCommand(userInput):
-    registeredName   = "permissions"
-    registeredAlias  = ["allowed-tools"]
+async function permissionsCommandHandler(context):
+    // 1. Build a system message describing permission-retry state
+    systemMsg = buildPermissionRetryMessage(context)
 
-    normalized = userInput.trim().toLowerCase().removeLeadingSlash()
+    // 2. Inject the message into the conversation stream
+    applyMessageOperation(stream, op="append", message=systemMsg)
 
-    if normalized == registeredName OR normalized in registeredAlias:
-        return loadModule("XWq")
-    else:
-        return NOT_FOUND
+    // 3. Construct and return the JSX permissions management panel
+    element = createElement(PermissionsPanel, props)
+    return element
 ```
 
-Analysis basis: CC v2.1.144 bundle.js:+11440137
+Analysis basis: CC v2.1.132 bundle.js:+11101689, +11101742, +11101765, +11101784
 
 ---
 
-### JSX Panel Rendering
+### System Message Construction (`buildPermissionRetryMessage`)
 
-The command type `local-jsx` indicates that the implementation module exports a React (JSX) component rather than a plain-text handler. The CLI host renders this component inline within the terminal UI, giving it access to interactive controls (keypresses, selection, scrolling).
+This helper (minified identifier `mi9`) constructs a synthetic conversation message of role `"system"` with subtype `"permission_retry"`. It generates a fresh UUID as the message ID and joins any listed tool names or permission entries into a comma-separated string.
 
 ```
-function renderPermissionsPanel(appState):
-    component = loadJSXModule("XWq")
+function buildPermissionRetryMessage(permissionEntries):
+    id = crypto.randomUUID()          // unique message identity
+    joined = permissionEntries.join(", ")   // comma-space separated list
 
-    if component is valid:
-        mountInlinePanel(component, appState)
-        waitForUserDismissal()
-    else:
-        displayError("Failed to load permissions panel")
-        return
+    message = {
+        role:    "system",
+        subtype: "permission_retry",
+        id:      id,
+        content: joined,
+        level:   "info"
+    }
+    return message
 ```
 
-<!-- TODO: internal panel sub-components, prop signatures, and state shape not found in depth-2 traversal; needs --depth 4 -->
+Key string constants used:
 
-Analysis basis: CC v2.1.144 bundle.js:+11440137
+| Constant | Purpose | loc_byte |
+|---|---|---|
+| `"system"` | Message role | +9734720 |
+| `"permission_retry"` | Message subtype | +9734737 |
+| `", "` | Join separator for permission entries | +9734782 |
+| `"info"` | Message severity level | +9734807 |
+| `"append"` | Message stream operation | +11101765 |
+
+Analysis basis: CC v2.1.132 bundle.js:+9734720, +9734737, +9734775, +9734782, +9734807, +9734864
 
 ---
 
-### Allow / Deny Rule Management
+### Message Stream Operation
 
-Based on the command description (`"Manage allow & deny tool permission rules"`), the panel is expected to expose at minimum two categories of rules: **allow rules** (tools Claude Code may call unconditionally) and **deny rules** (tools that are blocked regardless of context). The exact rule schema and storage location are not recoverable from the depth-2 traversal.
+After building the system message, the handler calls `applyMessageOp` (via the `A` module) with operation type `"append"`, inserting the constructed system message at the tail of the current conversation message list rather than replacing any existing message.
 
 ```
-function applyPermissionRule(action, ruleType, toolPattern):
-    # action    : "add" | "remove"
-    # ruleType  : "allow" | "deny"
-    # toolPattern : string identifying the tool or glob pattern
-
-    rules = readCurrentRulesFromConfig()
-
-    if action == "add":
-        if ruleType == "allow":
-            rules.allowList.append(toolPattern)
-        else:
-            rules.denyList.append(toolPattern)
-
-    else if action == "remove":
-        if ruleType == "allow":
-            rules.allowList.remove(toolPattern)
-        else:
-            rules.denyList.remove(toolPattern)
-
-    writeRulesBackToConfig(rules)
+function applyMessageOperation(messageStream, op, message):
+    if op == "append":
+        messageStream.push(message)
+    // other ops: <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 ```
 
-<!-- TODO: config file path, rule serialization format, and validation logic not found in depth-2 traversal; needs --depth 4 -->
+Analysis basis: CC v2.1.132 bundle.js:+11101742, +11101765
 
-Analysis basis: CC v2.1.144 bundle.js:+11440137
+---
+
+### JSX Rendering
+
+The handler calls `createElement` (via `BhA.createElement`) to instantiate the permissions management UI panel. Because the command type is `local-jsx`, the returned element is handed directly to the CLI shell's rendering layer rather than being serialized as text.
+
+```
+function renderPermissionsPanel(props):
+    return createElement(PermissionsPanel, props)
+    // PermissionsPanel: interactive allow/deny rule manager
+```
+
+Analysis basis: CC v2.1.132 bundle.js:+11101689
+
+---
+
+### UUID Generation Helper (`H`)
+
+The `H` identifier is a utility reachable from `buildPermissionRetryMessage` that provides randomness support. It calls `Math.random` with a numeric constant `2` and schedules deferred work via `setTimeout` with a constant of `1`. This pattern is consistent with a lightweight UUID/nonce generation or entropy-seeding helper used as a fallback alongside `crypto.randomUUID`.
+
+```
+function entropyHelper():
+    value = Math.random() * 2     // random float in [0, 2)
+    setTimeout(callback, 1)       // deferred micro-task, 1 ms delay
+```
+
+Numeric constants:
+
+| Value | loc_byte | Likely role |
+|---|---|---|
+| `2` | +12264283 | `Math.random` multiplier or bit-width factor |
+| `1` | +12264299 | `setTimeout` delay in milliseconds |
+
+Analysis basis: CC v2.1.132 bundle.js:+12264283, +12264285, +12264299, +12264322
 
 ---
 
@@ -151,14 +178,13 @@ Analysis basis: CC v2.1.144 bundle.js:+11440137
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected in depth-2 traversal (`telemetry: []`) |
+| Telemetry | None detected in depth-2 traversal (telemetry array is empty) |
+| Message stream mutation | Appends a new `system` / `permission_retry` message to the active conversation via `"append"` op (bundle.js:+11101742, +11101765) |
+| UUID generation | Calls `crypto.randomUUID()` per invocation to assign a unique ID to the injected system message (bundle.js:+9734864) |
+| JSX element returned | A `local-jsx` element (permissions management panel) is returned to the shell renderer (bundle.js:+11101689) |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | Expected: allow/deny rule lists mutated when user adds or removes a rule; exact state keys unknown |
+| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Config persistence | Implied by rule management purpose; target file path not confirmed |
-| Render mode | `local-jsx` — renders an inline interactive TUI panel, not plain stdout text |
-
-Analysis basis: CC v2.1.144 bundle.js:+11440137
 
 ---
 
@@ -166,17 +192,17 @@ Analysis basis: CC v2.1.144 bundle.js:+11440137
 
 | Version | Change |
 |---|---|
-| v2.1.144 | Initial analysis. Command registered under module `XWq` with alias `allowed-tools`. Type confirmed as `local-jsx`. Internal call graph empty at depth ≤ 2. |
+| v2.1.132 | Initial analysis — `local-jsx` handler `y$7`, alias `allowed-tools`, `permission_retry` system message injection, JSX permissions panel rendering |
 
 ---
 
 ## Common Mistakes
 
-1. **Using `/allowed-tools` and expecting different behavior from `/permissions`** — Both names resolve to the same module (`XWq`) and produce identical behavior. The alias exists purely for discoverability.
-2. **Expecting plain-text output** — Because the command type is `local-jsx`, it mounts an interactive TUI panel. Piping or scripting against its stdout will not yield structured text output.
-3. **Assuming rules are session-only** — The command description implies persistent rule management ("allow & deny rules"), not transient session flags. Rules are expected to survive across sessions via config storage, though the exact path is unconfirmed.
-4. **Conflating allow rules with capability grants** — Allow rules govern whether Claude Code will *invoke* a tool without asking; they do not grant the tool new operating-system privileges.
-5. **Attempting to call `/permissions` with positional arguments** — No argument literals or parameter schema were found in the traversal (`literals: []`). Passing arguments may be silently ignored or cause an error.
+1. **Invoking via alias confusion** — The command is registered under both `/permissions` and `/allowed-tools`. Both aliases trigger the same handler (`y$7`); there is no behavioral difference between them.
+2. **Expecting plain-text output** — Because the type is `local-jsx`, the command renders a React element. Piping or scripting against its output as if it were text will not work as expected.
+3. **Assuming telemetry is emitted** — No `tengu_*` telemetry events were found in the depth-2 traversal. Do not rely on telemetry hooks to observe permission changes triggered by this command.
+4. **Treating the injected message as user-visible** — The `permission_retry` system message appended to the stream has role `"system"` and level `"info"`; it is not rendered as a normal chat turn and is not directly visible to the user in the conversation history.
+5. **Confusing the entropy helper `H` with UUID generation** — `crypto.randomUUID()` (via `SG.randomUUID`) is the primary message-ID generator. The `H` helper using `Math.random` + `setTimeout` is an auxiliary entropy/scheduling utility, not the canonical UUID source.
 
 ---
 
@@ -186,7 +212,7 @@ Analysis basis: CC v2.1.144 bundle.js:+11440137
 
 | Identifier | Role |
 |---|---|
-| `XWq` | Module ID for the `/permissions` command implementation (not a function identifier, but included for bundle navigation; the identifier list returned empty for this module at depth ≤ 2) |
-
-> **Note:** The AST extraction returned `identifiers: []` for module `XWq` at depth ≤ 2. No obfuscated function-level identifiers were recovered. A deeper traversal (`--depth 4` or greater) is required to populate this table with function-level mappings.
-> Analysis basis: CC v2.1.144 bundle.js:+11440137
+| `y$7` | Main async handler for `/permissions` command (AsyncFunction, resolved via `module_id` `x5q`) |
+| `mi9` | System message builder — constructs the `permission_retry` message object with UUID and joined content |
+| `A` | Message-stream module — exposes `applyMessageOp` used to append the system message |
+| `H` | Entropy / scheduling helper — calls `Math.random` and `setTimeout`; reachable from `mi9` |

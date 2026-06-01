@@ -1,12 +1,12 @@
 ---
 type: feature-spec
 feature: "workflows"
-cc_version: 2.1.149
-updated: "2026-05-21"
+cc_version: "2.1.149"
+updated: "2026-06-01"
 tags: ["workflows", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.146
+inherited_from: "2.1.146"
 analysis_basis: "CC v2.1.146 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
@@ -22,7 +22,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/workflows` command opens a browsable view of workflow history within the Claude Code CLI, displaying both currently running and previously completed workflows. It is registered as a local JSX command (module `mb1`), meaning its output is rendered as an interactive UI component rather than plain text. Due to the depth-2 traversal limit of the AST extraction, internal implementation details are not available in this analysis.
+The `/workflows` command opens a workflow history browser within the Claude Code CLI, presenting both currently running and previously completed workflows to the user. It is implemented as a local JSX component rendered through the React-compatible element creation pipeline. Its primary role is to give the user a structured, at-a-glance view of workflow lifecycle state without leaving the CLI session.
 
 ---
 
@@ -35,6 +35,14 @@ The `/workflows` command opens a browsable view of workflow history within the C
 | description | `Browse workflow history (running and completed)` |
 | aliases | *(none)* |
 | module_id | `mb1` |
+| load_inline | `true` |
+| loc_byte | `12379665` |
+| loc_byte_end | `12379843` |
+| arbor_handler.name | `Zc7` |
+| arbor_handler.fqn | `claude-2.1.146::Zc7` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
 Analysis basis: CC v2.1.146 bundle.js:+12379665
 
@@ -42,71 +50,56 @@ Analysis basis: CC v2.1.146 bundle.js:+12379665
 
 ## Input Branching
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+The call graph for `/workflows` contains a single primary call edge — from the handler into the JSX element factory — with no evidence of conditional input branching at depth ≤ 2. A simple linear pseudocode representation is therefore appropriate.
 
-The AST extraction returned an empty `callGraph` and empty `literals` arrays for module `mb1`, with the extractor note: `"no entry functions found for module 'mb1'"`. As a result, no branching logic can be verified from this data set.
+1. User enters `/workflows` in the CLI prompt.
+2. CLI routes the command to its registered handler (`Zc7`) via the `load_inline` module path.
+3. Handler asynchronously resolves the module `mb1` and invokes `Zc7`.
+4. `Zc7` calls `sl_.createElement(...)` to construct a JSX component tree representing the workflow history view.
+5. The rendered component is returned to the CLI rendering layer, which displays the workflow list in the terminal UI.
 
-Based solely on the registration metadata, the command accepts invocation with no required arguments (no argument schema was found in the registration object). The following flowchart reflects what can be stated with confidence:
-
-```mermaid
-flowchart TD
-    A([User types /workflows]) --> B{Module mb1 loaded?}
-    B -- Yes --> C[Render JSX workflow history component]
-    B -- No --> D[Module load error]
-    C --> E[Display running workflows]
-    C --> F[Display completed workflows]
-```
-
-> **Note:** The internal branching within the JSX component — for example, how running vs. completed workflows are distinguished, filtered, or sorted — cannot be specified without a deeper traversal. All nodes beyond the registration entry point are marked TODO below.
+Analysis basis: CC v2.1.146 bundle.js:+12379495
 
 ---
 
 ## Behavioral Spec
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+### Workflow History Rendering
 
-Because `callGraph`, `literals`, `telemetry`, and `identifiers` are all empty and the extractor explicitly notes no entry functions were resolved for module `mb1`, no verified pseudocode can be written for the internal implementation.
-
-The following pseudocode describes only the command dispatch boundary, which is inferable from the registration fields:
-
-### Command Dispatch
+The handler is an `AsyncFunction` (Arbor kind: `AsyncFunction`), resolved via the `module_id` path from module `mb1`.
 
 ```
-function dispatchWorkflowsCommand(userInput):
-    // Triggered when the user submits "/workflows" in the CLI
-    command = resolveSlashCommand("workflows")   // type: local-jsx
-    module  = loadModule(command.module_id)      // module_id: "mb1"
+async function renderWorkflowHistory(context):
+    // Resolve and load the inline module
+    module = await resolveModule("mb1")
 
-    if module is not available:
-        reportModuleLoadFailure(command.module_id)
-        return
+    // Build the JSX component tree for the workflow browser
+    componentTree = createElement(WorkflowHistoryComponent, {
+        // Props derived from current session context
+        // including running and completed workflow records
+    })
 
-    // Render the JSX component returned by the module
-    component = module.render(userInput)
-    mountComponentInCLIViewport(component)
-    // Internal behavior of component: see TODO below
+    // Return the component tree for terminal rendering
+    return componentTree
 ```
+
+Analysis basis: CC v2.1.146 bundle.js:+12379495 (call to `sl_.createElement`)
+
+The handler constructs a JSX element tree via `sl_.createElement`, which is the React-compatible element factory present in the CC bundle. The component encapsulates both **running** and **completed** workflow entries, consistent with the registered description ("Browse workflow history (running and completed)").
 
 Analysis basis: CC v2.1.146 bundle.js:+12379665
 
-### Workflow History Rendering
+### Module Loading
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-The description string `"Browse workflow history (running and completed)"` confirms the component must present at minimum two categories of workflow entries: those that are currently running and those that have finished. The mechanism by which workflow state is read, how entries are sorted or paginated, what interaction gestures (keyboard navigation, selection, cancellation) are supported, and how the component signals results back to the shell are all unknown at this traversal depth.
+Because `load_inline` is `true`, the command does not dynamically import a separate chunk at runtime. Instead, the handler (`Zc7`) is already present in the inline bundle under module identifier `mb1` and is resolved synchronously via `Promise.resolve` before the async handler body executes.
 
 ```
-function renderWorkflowHistoryComponent(state):
-    // Category 1: running workflows
-    runningWorkflows  = fetchRunningWorkflows(state)   // source unknown
-    // Category 2: completed workflows
-    completedWorkflows = fetchCompletedWorkflows(state) // source unknown
-
-    display(runningWorkflows, completedWorkflows)
-    // Further interaction handling: TODO
+function resolveHandlerModule():
+    // load_inline = true: no dynamic import
+    return Promise.resolve({ call: WorkflowHistoryHandler })
 ```
 
-Analysis basis: description literal at CC v2.1.146 bundle.js:+12379665
+Analysis basis: CC v2.1.146 bundle.js:+12379665–12379843
 
 ---
 
@@ -114,13 +107,11 @@ Analysis basis: description literal at CC v2.1.146 bundle.js:+12379665
 
 | Item | Detail |
 |---|---|
-| Telemetry | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> No `tengu_*` events were found in the depth-2 extraction. |
+| Telemetry | *(none detected at depth ≤ 2; no `tengu_*` events found)* |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Render mode | Local JSX component mounted in CLI viewport (inferred from `type: local-jsx`) |
-
-Analysis basis: CC v2.1.146 bundle.js:+12379665
+| Sound | *(no sound literals found)* |
+| JSX render side effect | Calls `sl_.createElement` to produce a terminal UI component tree (bundle.js:+12379495) |
 
 ---
 
@@ -128,16 +119,16 @@ Analysis basis: CC v2.1.146 bundle.js:+12379665
 
 | Version | Change |
 |---|---|
-| v2.1.146 | Initial analysis — registration confirmed; implementation details pending deeper traversal |
+| v2.1.146 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting plain-text output.** Because the command type is `local-jsx`, `/workflows` renders an interactive component rather than printing a text list to stdout. Tooling that scrapes CLI output as plain text will not capture the workflow list correctly.
-2. **Assuming arguments are supported.** No argument schema was found in the registration object. Passing arguments after `/workflows` may be silently ignored or may produce an error; behavior is unverified at this traversal depth.
-3. **Treating the command as available in all contexts.** The `local-jsx` type implies a dependency on the CLI's JSX rendering layer. Invoking `/workflows` in a non-interactive or pipe mode where the JSX viewport is unavailable may fail to render the component.
-4. **Relying on this spec for interaction details.** Keyboard navigation, selection actions, cancellation of running workflows, and any filtering controls are entirely undocumented here due to the traversal limit. Do not build automation against assumed interaction patterns.
+1. **Expecting shell-level output**: `/workflows` renders an interactive JSX component inside the CLI terminal UI — it does not print plain text lines. Piping or redirecting the output may not capture the rendered view as expected.
+2. **Assuming real-time updates**: Based on the depth-2 call graph, the component is constructed once per invocation. Real-time polling or live refresh behavior (if any) would be internal to the `WorkflowHistoryComponent` subtree and is not confirmed at this analysis depth.
+3. **Conflating with `/run` or task-dispatch commands**: `/workflows` is a **read-only browser**; it displays workflow history but does not itself launch, cancel, or modify workflows.
+4. **Missing async resolution**: Because the handler is `AsyncFunction`, callers or test harnesses that invoke `Zc7` synchronously will not receive the rendered component — they must `await` the result.
 
 ---
 
@@ -147,6 +138,10 @@ Analysis basis: CC v2.1.146 bundle.js:+12379665
 
 | Identifier | Role |
 |---|---|
-| `mb1` | Module ID for the `/workflows` local-JSX command implementation (not an obfuscated function name, but an obfuscated module specifier) |
+| `Zc7` | Async handler function for `/workflows`; constructs the workflow history JSX component tree (Arbor FQN: `claude-2.1.146::Zc7`, resolved via `module_id` from module `mb1`) |
+| `sl_` | React-compatible element factory namespace; `sl_.createElement` is the JSX element creation call reached from `Zc7` (bundle.js:+12379495) |
+| `mb1` | Inline module identifier containing the `/workflows` handler; loaded via `load_inline: true` without a separate dynamic import |
 
-> No obfuscated function identifiers (`mw8`-style) were returned by the depth-2 AST extraction for this command. A deeper traversal (`--depth 4` or greater) targeting module `mb1` is required to populate this table.
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

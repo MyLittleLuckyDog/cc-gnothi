@@ -1,13 +1,13 @@
 ---
 type: feature-spec
 feature: "install-github-app"
-cc_version: 2.1.150
-updated: "2026-05-18"
+cc_version: "2.1.150"
+updated: "2026-06-01"
 tags: ["install-github-app", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.143
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/install-github-app`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/install-github-app` command initiates the setup flow for Claude GitHub Actions on a target repository. It is registered as a `local-jsx` command, meaning its output is rendered as a JSX component within the Claude Code terminal UI rather than as plain text. The command guides the user through connecting a GitHub repository to Claude's automated Actions integration.
+The `/install-github-app` command initiates the setup flow for Claude's GitHub Actions integration on a target repository. It is registered as a `local-jsx` command, meaning its handler renders a JSX-based UI component rather than emitting plain text. The core handler (`k97`) is an async function resolved via the module `l6q`.
 
 ---
 
@@ -33,94 +33,80 @@ The `/install-github-app` command initiates the setup flow for Claude GitHub Act
 | type | `local-jsx` |
 | name | `install-github-app` |
 | description | `Set up Claude GitHub Actions for a repository` |
-| module_id | `hMq` |
-| loc_line | 6465 |
-| `loc_byte_end` | `11302138` |
-| `arbor_handler.name` | `_dL` |
+| module\_id | `l6q` |
+| load\_inline | `true` |
+| handler | `k97` (AsyncFunction, resolved via `module_id` path) |
+| loc\_byte range | `10434042` – `10434300` |
+| loc\_line | `6380` |
+| `loc_byte_end` | `10434300` |
+| `arbor_handler.name` | `k97` |
 | `arbor_handler.kind` | `AsyncFunction` |
 | `arbor_handler.resolution_path` | `module_id` |
-| `arbor_handler.fqn` | `claude-2.1.150::_dL` |
+| `arbor_handler.fqn` | `claude-2.1.132::k97` |
 | `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.143 bundle.js:+10721587
+Analysis basis: CC v2.1.132 bundle.js:+10434042
+
+> **Handler resolution note:** The handler `k97` was resolved by Arbor following the `module_id → l6q → moduleExports → k97` path. The `load_inline: true` flag indicates the module is bundled inline rather than lazily imported from a separate chunk.
 
 ---
 
 ## Input Branching
 
-Because the extracted call graph (`callGraph: []`) and literals (`literals: []`) contain no depth-≤2 traversal data beyond the registration node, the detailed branching logic inside the JSX component cannot be reconstructed from the current extraction.
+The depth-2 call graph traversal returned no call edges for this command, and no string/numeric literals were captured. Based on the registration shape (`local-jsx`, async handler `k97`), the command's branching logic is encapsulated entirely within the JSX component tree returned by `k97`.
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-The following flowchart represents the minimum guaranteed behavior derivable from the registration record:
+The following flowchart reflects the minimal verified structure extractable from the AST data:
 
 ```mermaid
 flowchart TD
-    A([User types /install-github-app]) --> B{Command dispatcher resolves type}
-    B -- type == local-jsx --> C[Load JSX component from module hMq]
-    B -- type mismatch / unresolved --> Z([Error: command not found])
-    C --> D[Render GitHub App installation UI in terminal]
-    D --> E{User interaction with rendered component}
-    E -- Completes flow --> F([GitHub Actions integration configured])
-    E -- Cancels / exits --> G([Flow aborted, no changes applied])
+    A[User invokes /install-github-app] --> B[CLI dispatches to local-jsx handler]
+    B --> C[Async handler k97 is called]
+    C --> D{Handler resolves module l6q}
+    D -->|Resolution succeeds| E[Render JSX setup UI component]
+    D -->|Resolution fails| F[Error / fallback state]
+    E --> G[User interacts with GitHub App install flow]
+    G --> H[Flow completes or is cancelled]
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10721587
+<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+> Internal branching within `k97` (e.g., authentication checks, repository selection, OAuth redirect logic) was not reachable at depth ≤ 2. A deeper traversal is required to document sub-branches.
 
 ---
 
 ## Behavioral Spec
 
-### Command Dispatch and JSX Component Rendering
-
-Because the command type is `local-jsx`, the Claude Code shell does not invoke a plain text handler. Instead it loads the registered module and mounts its default JSX export into the active terminal panel.
+### GitHub App Installation Handler
 
 ```
-function dispatchInstallGitHubApp(userInput):
-    registration = resolveCommand("install-github-app")
-    assert registration.type == "local-jsx"
+async function installGitHubAppHandler(context):
+    // Handler: k97 (module: l6q)
+    // Resolved via module_id path by Arbor
 
-    component = loadModule(registration.module_id)   // module hMq
-    mountJSXComponent(component, context = {
-        cwd: getCurrentWorkingDirectory(),
-        userInput: userInput
-    })
-    // Rendering and further interaction are handled
-    // entirely inside the mounted component.
+    module = await resolveInlineModule("l6q")
+    handler = module.exports["k97"]
+
+    result = await handler(context)
+    // result is a JSX element rendered by the CLI's local-jsx renderer
+
+    return result
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10721587
+Analysis basis: CC v2.1.132 bundle.js:+10434042
 
-### GitHub App Setup Flow (Component-Internal)
+### local-jsx Rendering Contract
 
-The internal steps executed by the JSX component after mounting are not recoverable at depth ≤ 2. Based on the command description ("Set up Claude GitHub Actions for a repository"), the expected high-level algorithm is:
+Because the command type is `local-jsx`, the return value of `k97` is treated as a React (or compatible JSX) element by the CLI rendering layer. The terminal UI framework mounts this element into the interactive display rather than printing a string to stdout.
 
 ```
-function gitHubAppSetupComponent(props):
-    // Step 1 – identify target repository
-    repo = props.cwd or promptUserForRepository()
-
-    // Step 2 – check existing installation state
-    installationStatus = queryGitHubAppInstallation(repo)
-
-    // Step 3 – branch on status
-    if installationStatus == ALREADY_INSTALLED:
-        displayAlreadyInstalledMessage(repo)
-        return
-
-    // Step 4 – open or display installation URL
-    installURL = buildGitHubAppInstallURL(repo)
-    presentInstallationLink(installURL)
-
-    // Step 5 – await confirmation or poll status
-    waitForUserConfirmation()
-    // Further post-install configuration steps unknown
-    // at current traversal depth
+function dispatchLocalJsx(commandResult):
+    if commandResult is JSXElement:
+        mountIntoTerminalUI(commandResult)
+    else:
+        // Unexpected: handler did not return JSX
+        emitError("install-github-app: handler returned non-JSX value")
 ```
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-Analysis basis: CC v2.1.143 bundle.js:+10721587 (registration only; internal component logic not extracted)
+Analysis basis: CC v2.1.132 bundle.js:+10434042 (type field: `local-jsx`)
 
 ---
 
@@ -128,12 +114,14 @@ Analysis basis: CC v2.1.143 bundle.js:+10721587 (registration only; internal com
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at depth ≤ 2 traversal (`telemetry: []`) <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Hook registration | Not detected at depth ≤ 2 traversal <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | Not detected at depth ≤ 2 traversal <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | Not detected at depth ≤ 2 traversal <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| JSX mount | Mounts a terminal UI component from module `hMq` upon invocation |
-| External network | Expected to interact with GitHub App installation endpoints (inferred from description; not confirmed in extracted data) |
+| Telemetry | None detected at depth ≤ 2 (`telemetry: []`) |
+| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Network / OAuth | Likely initiates GitHub OAuth or App installation redirect (inferred from description); not confirmed in AST data |
+| File system | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+
+> No telemetry events (`tengu_*`) were found within the depth-2 traversal. It is possible that telemetry is emitted deeper in the call tree or within the JSX component sub-tree of `k97`.
 
 ---
 
@@ -141,16 +129,16 @@ Analysis basis: CC v2.1.143 bundle.js:+10721587 (registration only; internal com
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis; registered as `local-jsx` in module `hMq` at bundle.js:+10721587 |
+| v2.1.132 | Initial analysis. Handler `k97` in module `l6q` confirmed via Arbor `module_id` resolution path. |
 
 ---
 
 ## Common Mistakes
 
-1. **Running outside a Git repository context** — The command is designed to wire up a GitHub repository to Claude Actions. Invoking it in a directory that is not a Git repository or has no GitHub remote may cause the setup flow to fail or present an unexpected prompt.
-2. **Expecting plain-text output** — Because the command type is `local-jsx`, its output is an interactive terminal UI component, not streamed text. Piping or scripting around its output will not produce usable plain text.
-3. **Assuming idempotent re-runs are safe without verification** — If the GitHub App is already installed on the target repository, the component may short-circuit or display a warning rather than re-running the full setup. Always verify the current installation state before invoking a second time.
-4. **Confusing `/install-github-app` with a global CLI flag** — This is a slash command issued inside an active Claude Code session, not a standalone CLI sub-command. It cannot be invoked as `claude install-github-app` from a shell prompt outside an interactive session.
+1. **Expecting plain-text output.** Because this is a `local-jsx` command, it renders an interactive UI component. Automation or scripts that parse stdout will receive no meaningful output — the interaction happens in the terminal UI layer.
+2. **Assuming synchronous execution.** The handler `k97` is declared as an `AsyncFunction`. Callers in the CLI internals must `await` it; any surrounding logic that treats the result as synchronously available will observe a Promise, not a JSX element.
+3. **Confusing module scope.** The handler is loaded via `load_inline: true` from module `l6q`. It is not a globally exported symbol. Attempting to locate it by scanning top-level module exports without following the `module_id` indirection will fail.
+4. **Missing deeper call graph data.** With only depth-2 traversal available, the full set of side effects (network calls, state mutations, telemetry) is unknown. Do not treat the empty `telemetry` and `literals` arrays as proof of absence — they reflect traversal depth limits, not a confirmed absence of behavior.
 
 ---
 
@@ -160,4 +148,5 @@ Analysis basis: CC v2.1.143 bundle.js:+10721587 (registration only; internal com
 
 | Identifier | Role |
 |---|---|
-| `dP7` | Primary implementation symbol for the `install-github-app` command; likely the JSX component or its top-level export within module `hMq` |
+| `k97` | Primary async handler for `/install-github-app`; entry point resolved from module `l6q` via Arbor `module_id` path |
+| `l6q` | Inline module containing the `k97` handler; loaded via `load_inline: true` |

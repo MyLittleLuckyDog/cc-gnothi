@@ -1,13 +1,13 @@
 ---
 type: feature-spec
 feature: "powerup"
-cc_version: 2.1.150
-updated: "2026-05-19"
+cc_version: "2.1.150"
+updated: "2026-06-01"
 tags: ["powerup", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.144
-analysis_basis: "CC v2.1.144 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/powerup`
 
-> Analysis basis: CC v2.1.144 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.144
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-`/powerup` is an interactive slash command that surfaces Claude Code features through short, guided lessons. Users invoke it to discover capabilities they may not yet be aware of, receiving structured, in-session educational content. The command is registered as a `local-jsx` type, meaning its output is rendered as a JSX component directly inside the Claude Code terminal UI.
+`/powerup` is a local-jsx slash command that delivers quick interactive lessons to help users discover Claude Code features. When invoked, it renders a JSX component in the terminal UI and triggers a timed animation or display sequence driven by a randomized delay, surfacing feature highlights in a lightweight, self-contained presentation.
 
 ---
 
@@ -33,100 +33,107 @@ license: "AGPL-3.0-only"
 | type | `local-jsx` |
 | name | `powerup` |
 | description | `Discover Claude Code features through quick interactive lessons` |
-| module\_id | `VDq` |
-| loc\_line | 6618 |
-| `loc_byte_end` | `11638870` |
-| `arbor_handler.name` | `ciL` |
+| module_id | `f9q` |
+| load_inline | `true` |
+| handler | `e47` (AsyncFunction; resolved via `module_id` path) |
+| loc_byte span | `10750140` – `10750320` |
+| `loc_byte_end` | `10750320` |
+| `arbor_handler.name` | `e47` |
 | `arbor_handler.kind` | `AsyncFunction` |
 | `arbor_handler.resolution_path` | `module_id` |
-| `arbor_handler.fqn` | `claude-2.1.150::ciL` |
+| `arbor_handler.fqn` | `claude-2.1.132::e47` |
 | `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.144 bundle.js:+11074597
+Analysis basis: CC v2.1.132 bundle.js:+10750140
 
 ---
 
 ## Input Branching
 
-> **Notice:** The depth-2 AST traversal of module `VDq` returned an empty call graph, empty literals list, and empty telemetry list (see `"note": "no entry functions found for module 'VDq'"`). The branching logic below is therefore derived solely from the registration metadata and the `local-jsx` type contract. All branches marked with `<!-- TODO -->` require a deeper traversal to verify.
+The command accepts no user-supplied arguments in the depth-2 traversal data. Its execution path is linear: invoke the handler, render the JSX component, then schedule a timed side-effect.
 
 ```mermaid
 flowchart TD
-    A([User types /powerup]) --> B{Command dispatcher\nresolves name}
-    B -- match: 'powerup' --> C[Load module VDq]
-    B -- no match --> Z([Unknown command error])
-    C --> D{Entry function\nfound in VDq?}
-    D -- yes --> E[Render JSX lesson component]
-    D -- no / module error --> F([Silent failure or\nerror boundary])
-    E --> G{User interaction\ninside lesson UI}
-    G -- advance lesson --> H[Show next lesson step]
-    G -- dismiss --> I([Component unmounts])
-    G -- complete all steps --> J([Session ends / summary shown])
+    A["/powerup invoked"] --> B["Handler: asyncPowerupHandler (e47)"]
+    B --> C["createElement: build JSX lesson component"]
+    B --> D["Inject 'system' role message"]
+    C --> E["renderAnimation (H)"]
+    E --> F{"Math.random() * 2"}
+    F -->|"result < 1"| G["Short delay branch\n(setTimeout, lower bound)"]
+    F -->|"result >= 1"| H_node["Longer delay branch\n(setTimeout, upper bound)"]
+    G --> I["Display feature lesson UI"]
+    H_node --> I
 ```
 
-> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-> Sub-paths G → H, G → I, and G → J are inferred from the `local-jsx` rendering contract and the command description. Actual branching conditions require a `--depth 4` re-traversal of module `VDq`.
+Analysis basis: CC v2.1.132 bundle.js:+10750014 (createElement call), +10750049 (renderAnimation call), +10750062 (system literal), +12264283 (random multiplier), +12264299 (threshold), +12264285 (Math.random), +12264322 (setTimeout)
 
 ---
 
 ## Behavioral Spec
 
-### Command Resolution
+### Handler Entry Point
+
+The primary handler (`asyncPowerupHandler`) is an `AsyncFunction` resolved from module `f9q` via the `module_id` resolution path. It is loaded inline (no separate dynamic import boundary at invocation time).
 
 ```
-function resolveSlashCommand(userInput):
-    token = extractFirstToken(userInput)          // strips leading '/'
-    if token == "powerup":
-        return loadModule("VDq")
+async function asyncPowerupHandler(context):
+    lessonComponent = createElement(LessonView, props)
+    scheduleAnimation(lessonComponent)
+    emit system-role message to conversation context
+    return lessonComponent
+```
+
+Analysis basis: CC v2.1.132 bundle.js:+10750014, +10750049, +10750062
+
+### JSX Component Rendering
+
+`asyncPowerupHandler` calls the framework's `createElement` function (aliased as `FkA.createElement`) to construct a JSX tree representing the interactive lesson view. This is a **local-jsx** command, meaning the rendered output is displayed directly in the CLI UI rather than forwarded to the agent as a prompt string.
+
+```
+function buildLessonComponent(props):
+    return createElement(LessonView, {
+        role: "system",
+        ...props
+    })
+```
+
+Analysis basis: CC v2.1.132 bundle.js:+10750014 (createElement), +10750062 ("system" role literal)
+
+### System-Role Message Injection
+
+A string literal `"system"` is passed as the role designator at invocation time. This indicates that the lesson display message is injected into the conversation context under the `system` role rather than as a user or assistant turn.
+
+Analysis basis: CC v2.1.132 bundle.js:+10750062
+
+### Randomized Animation / Display Timing
+
+The helper function (`renderAnimation`) introduces a randomized timing delay before the lesson content becomes fully visible. The mechanism:
+
+1. Generate a floating-point value via `Math.random()`.
+2. Multiply by the constant `2` to produce a value in the range `[0, 2)`.
+3. Compare against the threshold `1`:
+   - Values in `[0, 1)` resolve to a shorter display delay.
+   - Values in `[1, 2)` resolve to a longer display delay.
+4. Pass the selected delay to `setTimeout` to schedule the reveal.
+
+```
+function renderAnimation(component):
+    raw = Math.random()          // uniform [0, 1)
+    scaled = raw * 2             // scale constant: 2  (bundle.js:+12264283)
+    threshold = 1                // split point       (bundle.js:+12264299)
+
+    if scaled < threshold:
+        delay = computeShortDelay(scaled)
     else:
-        return NOT_FOUND
+        delay = computeLongDelay(scaled)
+
+    setTimeout(() => revealComponent(component), delay)
 ```
 
-Analysis basis: CC v2.1.144 bundle.js:+11074597 (registration record for `powerup`)
+Analysis basis: CC v2.1.132 bundle.js:+12264283 (constant `2`), +12264299 (constant `1`), +12264285 (`Math.random`), +12264322 (`setTimeout`)
 
----
-
-### Module Load & JSX Render
-
-Because the command type is `local-jsx`, the dispatcher does **not** forward the invocation to the language model. Instead it loads the registered module and renders its default export as a React component inside the active terminal pane.
-
-```
-function dispatchLocalJsx(moduleId):
-    module = dynamicImport(moduleId)              // moduleId == "VDq"
-    if module.defaultExport is undefined:
-        raise RenderError("no entry functions found for module")
-    component = module.defaultExport
-    mountInTerminalPane(component, props={})
-```
-
-Analysis basis: CC v2.1.144 bundle.js:+11074597 (`type: "local-jsx"` field)
-
+> **Note on delay magnitude:** The exact millisecond values passed to `setTimeout` are not present in the depth-2 literal set. The two numeric constants `2` and `1` represent the scaling factor and branch threshold respectively, not raw delay durations.
 > <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-> The exact props passed to the component, and whether it receives session context (e.g., conversation ID, user preferences), could not be confirmed at depth 2.
-
----
-
-### Lesson Progression (Inferred)
-
-The command description states "quick interactive lessons," implying a multi-step UI flow. The exact step count, lesson content strings, and advancement mechanism are not present in the extracted data.
-
-```
-function lessonFlow(lessonList):
-    currentIndex = 0
-    while currentIndex < length(lessonList):
-        renderStep(lessonList[currentIndex])
-        userAction = awaitUserInput()
-        if userAction == ADVANCE:
-            currentIndex += 1
-        elif userAction == DISMISS:
-            unmount()
-            return
-    renderCompletionScreen()
-    unmount()
-```
-
-> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-> `lessonList` contents, step count, and `renderStep` implementation are not visible at depth 2.
 
 ---
 
@@ -134,12 +141,13 @@ function lessonFlow(lessonList):
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at depth-2 traversal. <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Hook registration | `local-jsx` type bypasses the model; no prompt hook is registered. Analysis basis: CC v2.1.144 bundle.js:+11074597 |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Network I/O | None inferred; `local-jsx` commands render fully client-side without an API call. |
-| Persistence | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> (lesson progress state unknown) |
+| Telemetry | None detected in depth-2 traversal (telemetry array is empty) |
+| Hook registration | None detected in depth-2 traversal |
+| appState changes | None detected in depth-2 traversal |
+| Conversation context | Injects a `"system"`-role message at invocation (bundle.js:+10750062) |
+| Timer | Schedules one `setTimeout` callback per invocation to drive the animation reveal (bundle.js:+12264322) |
+| Randomness | Consumes one `Math.random()` call per invocation; no seed is set — output is non-deterministic (bundle.js:+12264285) |
+| Sound | None detected in depth-2 traversal |
 
 ---
 
@@ -147,16 +155,17 @@ function lessonFlow(lessonList):
 
 | Version | Change |
 |---|---|
-| v2.1.144 | Initial analysis — registration confirmed; internal implementation opaque at depth 2 |
+| v2.1.132 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting model output.** Because `/powerup` is `local-jsx`, it never sends a request to the Anthropic API. Expecting a streamed text response (as with prompt commands) will result in no visible output from the model.
-2. **Assuming stable module ID `VDq`.** Module identifiers are minifier-assigned and will change across bundle versions. Do not hard-code `VDq` in tooling that patches or monkey-patches the bundle.
-3. **Re-running traversal at depth 2 only.** The call graph, literals, telemetry, and identifier tables are all empty at depth 2 because no entry function was resolved for module `VDq`. Any further behavioral analysis requires `--depth 4` or manual bundle inspection.
-4. **Confusing `/powerup` with a persistent settings command.** The description says "quick interactive lessons," not a configuration toggle. It does not persistently enable or disable any feature flag (unconfirmed, but no literals or state writes were detected).
+1. **Expecting agent-side handling:** `/powerup` is type `local-jsx` — it renders its output directly in the CLI UI. It does not send a prompt to the Claude agent and does not produce an assistant response in the normal conversation flow.
+2. **Assuming deterministic animation timing:** The display delay is randomized via `Math.random()` on every invocation. Do not rely on a fixed reveal time in scripts or tests.
+3. **Confusing the system-role injection with a user message:** The lesson content is injected under the `"system"` role. Downstream tooling that filters by role may not surface it in user-visible history.
+4. **Expecting telemetry events:** No `tengu_*` telemetry events were found for this command at depth-2. Usage analytics integrations should not assume this command emits any instrumentation signals in v2.1.132.
+5. **Re-invoking to change content:** Because the timing is randomized but the lesson content selection logic was not reachable within the depth-2 call graph, it is unclear whether repeated invocations cycle through different lessons or repeat the same one. <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
@@ -166,6 +175,6 @@ function lessonFlow(lessonList):
 
 | Identifier | Role |
 |---|---|
-| `VDq` | Module ID for the `/powerup` command implementation (not a function identifier, but included for traceability) |
-
-> No obfuscated function identifiers were returned by the depth-2 traversal (`"identifiers": []`). A `--depth 4` traversal of module `VDq` is required to populate this table.
+| `e47` | Primary async command handler (`asyncPowerupHandler`); AsyncFunction resolved from module `f9q` via `module_id` path (bundle.js:+10750014) |
+| `H` | Animation / display-timing helper (`renderAnimation`); calls `Math.random` and `setTimeout` to schedule lesson reveal (bundle.js:+12264285) |
+| `FkA` | JSX framework namespace; `FkA.createElement` is the element factory used to build the lesson component (bundle.js:+10750014) |

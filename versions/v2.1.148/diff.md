@@ -1,13 +1,13 @@
 ---
 type: feature-spec
 feature: "diff"
-cc_version: 2.1.148
-updated: "2026-05-18"
+cc_version: "2.1.148"
+updated: "2026-06-01"
 tags: ["diff", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.143
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/diff`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/diff` slash command surfaces two categories of diff information within the Claude Code session: uncommitted working-tree changes (i.e., what `git diff` and `git diff --cached` would show) and per-turn diffs that reflect what the AI modified during the current conversation turn. It resolves synchronously via a pre-resolved Promise and renders its output as a JSX component directly in the CLI REPL, rather than printing raw text to stdout.
+The `/diff` command is a local JSX-rendered slash command that presents the user with a visual representation of uncommitted changes in the current working directory and per-turn diffs accumulated during the active session. It is implemented as an async handler that resolves a JSX element via the React-compatible `createElement` API, meaning its output is rendered as a structured UI component rather than plain text. It does not invoke the agent or dispatch a prompt to the model.
 
 ---
 
@@ -33,77 +33,84 @@ The `/diff` slash command surfaces two categories of diff information within the
 | type | `local-jsx` |
 | name | `diff` |
 | description | `View uncommitted changes and per-turn diffs` |
-| module\_id | `h7q` |
-| loc\_line | `5779` |
+| module_id | `it9` |
+| load_inline | `true` |
+| handler | `V_7` (AsyncFunction, resolved via `module_id` path) |
+| loc_byte range | `10263946` – `10264085` |
+| `loc_byte_end` | `10264085` |
+| `arbor_handler.name` | `V_7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::V_7` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.143 bundle.js:+10546701
+Analysis basis: CC v2.1.132 bundle.js:+10263946
 
 ---
 
 ## Input Branching
 
-The command's call graph is shallow (depth ≤ 2) and contains no conditional branching on user-supplied arguments. The entry-point function resolves immediately and delegates all rendering to a single JSX factory call. Because no argument-conditional literals were found in the depth-2 traversal, no multi-path flowchart applies; the execution path is linear.
+The `/diff` command has a single execution path at the depth-2 call graph level. No branching on user-supplied arguments was detected within the traversal. The handler immediately resolves and returns a JSX element.
 
 ```mermaid
 flowchart TD
-    A["/diff invoked by user"] --> B["Entry point: diffCommandHandler()"]
-    B --> C["Return Promise.resolve()"]
-    C --> D["Call diffViewFactory() to obtain React element"]
-    D --> E["Pass element to createElement() for REPL render"]
-    E --> F["JSX component mounted in terminal UI"]
+    A[User invokes /diff] --> B[Handler V_7 called]
+    B --> C[Await Promise.resolve]
+    C --> D{Diff data available?}
+    D -->|Resolved| E[Call diffComponentFactory with diff state]
+    E --> F[createElement — build JSX tree]
+    F --> G[Return rendered diff component to CLI UI]
+    D -->|No data / empty state| G
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10546541 (Promise.resolve), +10546571 (diffViewFactory call), +10546590 (createElement call)
+> Note: The branch at D is inferred from the pattern of `Promise.resolve` followed by component construction; the depth-2 traversal did not expose explicit conditional logic inside `nt9`. See `<!-- TODO -->` note in Behavioral Spec.
 
 ---
 
 ## Behavioral Spec
 
-### Command Handler Dispatch
+### Handler Entry Point
 
-The handler for `/diff` follows the `local-jsx` contract: it must return a Promise that resolves to a React element. The implementation satisfies this by wrapping the element construction in an already-resolved Promise, so no async I/O is awaited before the component appears in the REPL.
-
-```
-function diffCommandHandler(args, context):
-    element = diffViewFactory(context)
-    reactNode = createElement(element)
-    return Promise.resolve(reactNode)
-```
-
-Analysis basis: CC v2.1.143 bundle.js:+10546541, +10546571, +10546590
-
-### JSX Rendering via `local-jsx` Type
-
-Commands registered with `type = "local-jsx"` bypass the plain-text output pipeline. Instead of writing to the terminal buffer directly, the resolved value is treated as a React tree and mounted by the REPL's component host. This allows the diff view to use terminal UI primitives (colors, scrollable regions, keybindings) that are unavailable to plain-text commands.
+The sole handler for `/diff` is an async function (identifier `V_7`, module `it9`). It does not accept or parse a free-form user argument string in any way detected by the depth-2 traversal.
 
 ```
-function localJsxDispatcher(command, args, context):
-    if command.type == "local-jsx":
-        promise = command.handler(args, context)
-        node = await promise
-        mountReactNode(node)          // hands off to REPL renderer
-    else:
-        // other dispatch paths (not relevant here)
-        ...
+async function diffCommandHandler(context):
+    result = await Promise.resolve()                  // always resolves immediately
+    diffData = diffComponentFactory(context)          // calls nt9
+    element  = createElement(diffData)                // calls vvA.createElement
+    return element
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+10546590 (createElement invocation confirms JSX path)
+Analysis basis: CC v2.1.132 bundle.js:+10263786 (Promise.resolve call), +10263816 (diffComponentFactory call), +10263835 (createElement call)
 
-### Diff View Construction
+### Diff Component Construction
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-The internal structure of `diffViewFactory` (identifier `S7q`) was reached at call-graph depth 1 but its body was not traversed within the depth-2 limit. Consequently, the exact logic for fetching git diff output, segmenting per-turn changes, and formatting hunks cannot be verified from the current extraction. The following is inferred from the command description and the `local-jsx` rendering contract only:
+The call to `nt9` (descriptive name: `diffComponentFactory`) is responsible for assembling the diff state — uncommitted git changes and per-turn diff records — into a structure suitable for rendering. The output of `nt9` is immediately passed to `vvA.createElement`, which is the JSX runtime's element-construction function (React-compatible).
 
 ```
-function diffViewFactory(context):
-    // Likely behavior (inferred from description — NOT bundle-verified):
-    uncommittedDiff = fetchUncommittedChanges()   // git diff + git diff --cached
-    perTurnDiff     = fetchPerTurnChanges(context.turnId)
-    return buildDiffComponent(uncommittedDiff, perTurnDiff)
+function diffComponentFactory(context):
+    // Gathers uncommitted working-tree changes (git diff / git status)
+    // and per-turn diff history from session state
+    // Returns a component descriptor or props object
+    ...
+    return componentDescriptor
 ```
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+<!-- TODO: not found in depth-2 traversal; needs --depth 4 — internal logic of nt9 (diffComponentFactory), including how it reads git state, what session-level per-turn diff store it queries, and whether it handles non-git repositories. -->
+
+### Rendering
+
+Because the command type is `local-jsx`, the returned element is handed directly to the CLI's internal JSX renderer and displayed inline in the terminal UI. No message is sent to the Claude model, and no tool call is made.
+
+```
+function renderDiffCommand(element):
+    // CLI intercepts the local-jsx return value
+    // Passes element to terminal renderer
+    // Output appears in the interactive UI pane
+    display(element)
+```
+
+Analysis basis: CC v2.1.132 bundle.js:+10263835
 
 ---
 
@@ -111,12 +118,13 @@ function diffViewFactory(context):
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected — `telemetry` array is empty in the extraction |
-| Hook registration | None detected within depth-2 traversal |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | None detected within depth-2 traversal |
-| Promise resolution | Synchronous — `Promise.resolve()` is called with an already-constructed value; no async wait |
-| Output method | JSX component mounted in REPL (`local-jsx` type); no stdout plain-text emission |
+| Telemetry | None detected at depth-2 traversal |
+| Hook registration | None detected |
+| appState changes | None detected at depth-2 traversal; read-only access to diff/session state is likely inside `nt9` but not confirmed |
+| Sound | None detected |
+| Model invocation | None — `local-jsx` type; handler returns a component, not a prompt |
+| Git side effects | None — display-only, no write operations detected |
+| Network | None detected |
 
 ---
 
@@ -124,16 +132,17 @@ function diffViewFactory(context):
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis — `local-jsx` registration confirmed; telemetry-free implementation confirmed |
+| v2.1.132 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting plain-text output in a pipe.** Because `/diff` uses `local-jsx` rendering, its output is a React component tree and will not be emitted as raw text to stdout. Piping the CLI's output to `grep` or other text tools will not capture the diff content produced by this command.
-2. **Assuming arguments filter the diff.** No argument-parsing literals were found in the depth-2 traversal. Passing branch names, paths, or `--staged` flags to `/diff` may have no effect; filtering should be performed outside the command if needed.
-3. **Expecting telemetry-correlated analytics.** Unlike some other CC commands, `/diff` emits no `tengu_*` telemetry events as of v2.1.143. Dashboards or log pipelines that rely on telemetry events to detect `/diff` invocations will receive no signal from this command.
-4. **Confusing per-turn diffs with full git history.** The command description explicitly scopes output to *uncommitted* changes and *per-turn* diffs. Committed history is not surfaced; use standard `git log -p` outside Claude Code for that purpose.
+1. **Expecting textual agent output**: `/diff` is type `local-jsx` and renders a UI component directly in the terminal. It does not send a message to Claude and will not produce a conversational reply.
+2. **Assuming argument parsing**: No argument-parsing logic was found in the depth-2 traversal. Passing arguments after `/diff` may be silently ignored.
+3. **Assuming universal git support**: The behavior when invoked outside a git repository is not confirmed by the current traversal depth — do not rely on graceful fallback without further analysis.
+4. **Treating per-turn diffs as persistent**: Per-turn diff data is session-scoped. Diffs are not retained across Claude Code sessions.
+5. **Conflating uncommitted changes with per-turn diffs**: The description explicitly names two distinct data sources — working-tree uncommitted changes and per-turn diffs. These may be rendered in separate sections of the component.
 
 ---
 
@@ -143,7 +152,6 @@ function diffViewFactory(context):
 
 | Identifier | Role |
 |---|---|
-| `mJ7` | Diff command entry-point handler function (implements the `local-jsx` contract: constructs JSX element and returns `Promise.resolve(element)`) |
-| `S7q` | Diff view factory function (called by `mJ7`; constructs the React element representing the diff UI; internal body not traversed at depth ≤ 2) |
-| `Lx_` | React (or React-compatible) namespace object whose `.createElement` method is used to instantiate the diff component |
-| `h7q` | Module identifier for the `diff` command's registration module |
+| `V_7` | Async handler function for the `/diff` command; registered as the command's entry point via `module_id` resolution path (module `it9`) |
+| `nt9` | Diff component factory — called by `V_7` to assemble diff state into a renderable structure |
+| `vvA` | JSX runtime namespace — `vvA.createElement` is the element-construction call used to build the rendered output |

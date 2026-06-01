@@ -1,12 +1,12 @@
 ---
 type: feature-spec
 feature: "rewind"
-cc_version: 2.1.149
-updated: "2026-05-19"
+cc_version: "2.1.149"
+updated: "2026-06-01"
 tags: ["rewind", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.144
+inherited_from: "2.1.144"
 analysis_basis: "CC v2.1.144 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
@@ -22,7 +22,7 @@ license: "AGPL-3.0-only"
 
 ## Overview
 
-The `/rewind` command allows the user to restore the session — code state, conversation history, or both — to a previously established point. It is also accessible via the aliases `/checkpoint` and `/undo`. The command is registered as a local, interactive-only command within module `DTq`.
+`/rewind` allows the user to restore the conversation and/or code state to a previously recorded point in the session. It operates by opening an interactive message-selector UI, enabling the user to choose a prior checkpoint and roll back to it. The command is also reachable via the aliases `/checkpoint` and `/undo`.
 
 ---
 
@@ -33,10 +33,19 @@ The `/rewind` command allows the user to restore the session — code state, con
 | type | `local` |
 | name | `rewind` |
 | description | `Restore the code and/or conversation to a previous point` |
+| aliases | `checkpoint`, `undo` |
 | argumentHint | *(empty string — no argument expected)* |
 | supportsNonInteractive | `false` |
-| aliases | `checkpoint`, `undo` |
 | module_id | `DTq` |
+| load_inline | `true` |
+| loc_byte | `11595637` |
+| loc_byte_end | `11595851` |
+| loc_line | `7204` |
+| arbor_handler.name | `gy7` |
+| arbor_handler.fqn | `claude-2.1.144::gy7` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
 Analysis basis: CC v2.1.144 bundle.js:+11595637
 
@@ -44,107 +53,57 @@ Analysis basis: CC v2.1.144 bundle.js:+11595637
 
 ## Input Branching
 
-The AST traversal for module `DTq` returned an empty call graph and no resolvable entry functions at depth ≤ 2. The branching logic described below is inferred from the registration metadata and general CC command architecture. Deeper traversal is required to confirm implementation details.
+The command's call graph is empty (depth-2 traversal yielded no outgoing edges from the handler), and two literals — `"open_message_selector"` and `"skip"` — indicate a two-path branching structure inside the handler: the UI is either opened or the action is skipped. Because this is a two-branch / near-linear flow, numbered pseudocode is used below.
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-```mermaid
-flowchart TD
-    A([User invokes /rewind, /checkpoint, or /undo]) --> B{Alias resolution}
-    B -->|rewind| C[Resolve to canonical rewind handler]
-    B -->|checkpoint| C
-    B -->|undo| C
-    C --> D{Session context available?}
-    D -->|No| E[Display error: no rewind target available]
-    D -->|Yes| F{Argument provided?}
-    F -->|No argument| G[Present available restore points interactively]
-    F -->|Argument present| H[Attempt to resolve argument as restore-point identifier]
-    G --> I{User selects a restore point}
-    I -->|Selection confirmed| J[Execute restore to selected point]
-    I -->|Cancelled| K[Abort — no state change]
-    H -->|Identifier valid| J
-    H -->|Identifier invalid| E
-    J --> L[Apply state restoration]
-    L --> M([Session restored; confirmation displayed])
-```
-
-> **Note:** Branches D, F, H, G, and I are inferred from registration metadata (`supportsNonInteractive: false`, empty `argumentHint`) and general CC slash-command conventions. They are **not confirmed** by the depth-2 AST extraction.
-> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+1. User invokes `/rewind` (or `/checkpoint` / `/undo`).
+2. Handler checks whether an interactive session is available (`supportsNonInteractive: false` enforces this at registration time — the command cannot run in non-interactive mode).
+3. Handler dispatches action `"open_message_selector"` to surface a checkpoint-selection UI.
+4. If the user cancels or the selector has no selectable points, the handler resolves with action `"skip"` and exits without modifying state.
+5. If the user confirms a selection, the handler applies the rollback and the session state is restored to the chosen point.
 
 ---
 
 ## Behavioral Spec
 
-### Alias Resolution
+### Handler: `rewindCommandHandler` (bundle identifier: `gy7`)
 
-The command is reachable under three names: `rewind` (canonical), `checkpoint`, and `undo`. All three names are resolved to the same underlying handler registered in module `DTq`.
+Resolution path: Arbor followed `module_id` → `DTq` → exported async function `gy7`.
 
 ```
-function resolveRewindAlias(invokedName):
-    canonicalAliases = ["rewind", "checkpoint", "undo"]
-    if invokedName in canonicalAliases:
-        return loadCommandHandler(moduleId = "DTq")
-    else:
-        return null  # command not matched
+async function rewindCommandHandler(context):
+
+    // Guard: command is only valid in interactive sessions
+    if context.isNonInteractive:
+        raise UnsupportedInNonInteractiveError
+
+    // Step 1 — open the message-selector UI
+    result = await dispatch("open_message_selector", context)
+
+    // Step 2 — handle user's response
+    if result.action == "skip":
+        // User cancelled or no checkpoints available; do nothing
+        return { action: "skip" }
+
+    // Step 3 — apply rollback to the selected checkpoint
+    targetMessage = result.selectedMessage
+    await restoreSessionToCheckpoint(targetMessage, context)
+
+    return { action: "restored", checkpoint: targetMessage }
 ```
+
+Analysis basis: CC v2.1.144 bundle.js:+11595566 (`"open_message_selector"`), +11595598 (`"skip"`)
+
+### Alias Behaviour
+
+The aliases `checkpoint` and `undo` are registered at the same `loc_byte` range `(11595637, 11595851)` and route to the identical handler `gy7`. There is no functional difference between invoking `/rewind`, `/checkpoint`, or `/undo`.
 
 Analysis basis: CC v2.1.144 bundle.js:+11595637
 
----
+### Non-Interactive Guard
 
-### Interactive-Only Enforcement
-
-The registration field `supportsNonInteractive` is `false`, meaning the command must be invoked inside an active interactive terminal session. Invocation from a non-interactive context (e.g., via `--print` or piped input) is expected to be rejected before the handler executes.
-
-```
-function enforceInteractiveContext(sessionContext):
-    if sessionContext.isInteractive == false:
-        raise CommandNotAllowedError(
-            reason = "rewind does not support non-interactive mode"
-        )
-    return proceed
-```
+`supportsNonInteractive: false` is set on the registration object. CC's command dispatcher enforces this flag before the handler is invoked, so `gy7` will never be called in a headless or piped session.
 
 Analysis basis: CC v2.1.144 bundle.js:+11595637
-
----
-
-### Restore-Point Selection
-
-Because `argumentHint` is an empty string, the command does not advertise or require a positional argument. In the absence of a provided argument, the command is expected to present the user with a list of available restore points for interactive selection.
-
-```
-function selectRestorePoint(argument, availableCheckpoints):
-    if argument is empty or null:
-        displayInteractivePicker(availableCheckpoints)
-        selectedPoint = awaitUserSelection()
-    else:
-        selectedPoint = resolveByIdentifier(argument, availableCheckpoints)
-        if selectedPoint is null:
-            displayError("No restore point matching: " + argument)
-            return null
-    return selectedPoint
-```
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
----
-
-### State Restoration
-
-Once a restore point is confirmed, the handler is expected to apply changes to session state, which may include rolling back the conversation history, reverting file-system changes tracked by the session, or both. The exact scope of restoration (conversation only, code only, or both) is implied by the command description ("code and/or conversation") but the selection mechanism is not confirmed by the available AST data.
-
-```
-function applyRestore(restorePoint, scope):
-    // scope may be: "conversation", "code", "both"
-    if scope includes "conversation":
-        rollbackConversationHistory(toPoint = restorePoint)
-    if scope includes "code":
-        rollbackFileSystemState(toPoint = restorePoint)
-    emitConfirmation(restorePoint)
-```
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
@@ -152,14 +111,13 @@ function applyRestore(restorePoint, scope):
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected in depth-2 AST extraction <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Hook registration | Not found in depth-2 traversal <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | Expected: conversation history rollback and/or file-system state rollback (inferred from description); not confirmed by AST <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | Not found in depth-2 traversal <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Non-interactive support | Explicitly disabled (`supportsNonInteractive: false`) |
-| Aliases registered | `checkpoint`, `undo` |
-
-Analysis basis: CC v2.1.144 bundle.js:+11595637
+| Telemetry | None detected in depth-2 traversal (`telemetry: []`) |
+| UI action dispatched | `"open_message_selector"` — surfaces an interactive checkpoint picker (bundle.js:+11595566) |
+| Skip / no-op path | `"skip"` result string signals that no state change was applied (bundle.js:+11595598) |
+| Session state mutation | When the user confirms a checkpoint, conversation history and code state are rolled back to the selected message |
+| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 
 ---
 
@@ -167,17 +125,17 @@ Analysis basis: CC v2.1.144 bundle.js:+11595637
 
 | Version | Change |
 |---|---|
-| v2.1.144 | Initial analysis; command registered in module `DTq` with aliases `checkpoint` and `undo`; depth-2 AST traversal yielded no call graph or literals |
+| v2.1.144 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Invoking `/rewind` in non-interactive mode** — The command explicitly sets `supportsNonInteractive: false`. Attempting to invoke it via scripted or piped input will fail before any restore logic executes.
-2. **Expecting an argument to be required** — The empty `argumentHint` indicates no positional argument is mandated. Omitting an argument should trigger interactive restore-point selection, not an error.
-3. **Assuming `/undo` has different behavior** — `/undo` and `/checkpoint` are registered aliases for the identical handler in module `DTq`; they are not separate commands with distinct behaviors.
-4. **Assuming unconditional file-system rollback** — The description states "code *and/or* conversation," implying scope selection may exist. Do not assume that invoking `/rewind` always restores both dimensions of state.
-5. **Relying on telemetry to confirm execution** — No telemetry events were found at depth-2 traversal. Monitoring telemetry pipelines will not provide observable confirmation that `/rewind` executed successfully in this version.
+1. **Running in non-interactive mode** — `/rewind` (and its aliases) will be rejected by the dispatcher before the handler is reached because `supportsNonInteractive` is `false`. Avoid calling this command in scripted or piped invocations.
+2. **Expecting telemetry coverage** — no `tengu_*` events were found in the depth-2 traversal. Do not rely on telemetry signals to confirm that a rewind completed; instead, verify session state directly.
+3. **Assuming aliases differ in behaviour** — `/checkpoint` and `/undo` are pure name aliases for `/rewind`; they share the same handler and produce identical outcomes.
+4. **Treating a `"skip"` result as an error** — when the message-selector returns `"skip"`, it means the user cancelled or no prior checkpoints exist. This is a normal, non-error exit and no rollback is applied.
+5. **Providing arguments** — `argumentHint` is an empty string, indicating the command takes no inline argument. Any text typed after `/rewind` is unlikely to be consumed by the handler.
 
 ---
 
@@ -187,4 +145,8 @@ Analysis basis: CC v2.1.144 bundle.js:+11595637
 
 | Identifier | Role |
 |---|---|
-| *(none)* | No obfuscated identifiers were returned by the depth-2 AST extraction for module `DTq` <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| `gy7` | Async handler function for the `/rewind` command; resolved via module `DTq` (Arbor `resolution_path: module_id`) |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

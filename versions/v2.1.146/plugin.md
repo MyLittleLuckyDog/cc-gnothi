@@ -1,13 +1,13 @@
 ---
 type: feature-spec
 feature: "plugin"
-cc_version: 2.1.146
-updated: "2026-05-19"
+cc_version: "2.1.146"
+updated: "2026-06-01"
 tags: ["plugin", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.144
-analysis_basis: "CC v2.1.144 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/plugin`
 
-> Analysis basis: CC v2.1.144 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.144
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/plugin` command provides a management interface for Claude Code plugins, allowing users to discover, install, and administer plugins from within the CLI. It is registered as a `local-jsx` command, meaning its output is rendered as a JSX component directly in the terminal UI rather than as plain text. The command is aliased as both `/plugins` and `/marketplace`, suggesting it serves as the entry point to a plugin discovery and management surface.
+The `/plugin` command provides a plugin management interface within Claude Code, allowing users to discover, install, and manage Claude Code plugins. It is implemented as a `local-jsx` command, meaning its output is rendered as a React JSX component rather than plain text, indicating a rich interactive UI surface. The command is also accessible via the aliases `/plugins` and `/marketplace`.
 
 ---
 
@@ -33,87 +33,77 @@ The `/plugin` command provides a management interface for Claude Code plugins, a
 | type | `local-jsx` |
 | name | `plugin` |
 | description | `Manage Claude Code plugins` |
-| aliases | `plugins`, `marketplace` |
+| aliases | `["plugins", "marketplace"]` |
 | immediate | `true` |
-| module_id | `ATq` |
+| module_id | `X3q` |
+| load_inline | `true` |
+| handler | `Ez7` (AsyncFunction, resolved via `module_id` path) |
+| `loc_byte_end` | `11253906` |
+| `arbor_handler.name` | `Ez7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::Ez7` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.144 bundle.js:+11591484
+Analysis basis: CC v2.1.132 bundle.js:+11253735 – +11253906
+
+**Notes on registration shape:**
+
+- `immediate: true` means the command executes and renders its UI immediately upon invocation, without requiring any further user confirmation step.
+- `load_inline: true` indicates the handler module is resolved inline (i.e., `load: () => Promise.resolve({call: Ez7})`) rather than via a dynamic import boundary.
+- The `local-jsx` type distinguishes this from text-only prompt commands: the handler returns a JSX element tree that the CLI renders directly in the terminal UI layer.
+- The handler `Ez7` was resolved via Arbor's `module_id` resolution path (`module_id: "X3q"` → module exports → name lookup). This is the unambiguous entry point for the command.
 
 ---
 
 ## Input Branching
 
-The `immediate: true` flag indicates this command executes without requiring additional user confirmation or argument parsing at the slash-command dispatch layer. Because the AST traversal found no exported entry functions in module `ATq` at depth ≤ 2, the internal branching logic of the rendered JSX component cannot be described from extracted data alone.
+The depth-2 call graph for this command is minimal: the handler (`Ez7`) calls `JSA.createElement` directly, indicating the primary logic is JSX component construction rather than a branching text-processing pipeline.
 
 ```mermaid
 flowchart TD
-    A([User types /plugin, /plugins, or /marketplace]) --> B{Alias resolution}
-    B -->|plugin| C[Resolve to canonical 'plugin' handler]
-    B -->|plugins| C
-    B -->|marketplace| C
-    C --> D{immediate = true: skip confirmation}
-    D --> E[Dispatch to module ATq]
-    E --> F{Entry function resolvable at depth-2?}
-    F -->|No — note: no entry functions found| G[<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->]
-    F -->|Yes — if resolved at greater depth| H[Render local-jsx plugin management UI]
+    A[User invokes /plugin, /plugins, or /marketplace] --> B[CLI resolves alias to 'plugin' registration]
+    B --> C{immediate: true → execute immediately}
+    C --> D[Call async handler: pluginManagerHandler]
+    D --> E[Construct JSX element tree via createElement]
+    E --> F[Return rendered plugin management UI component]
+    F --> G[CLI renders component in terminal UI layer]
 ```
+
+Because `literals` and `telemetry` arrays are empty in the extracted data, no string-constant-driven branching paths or sub-command routing logic were detectable at depth ≤ 2.
+
+<!-- TODO: internal UI component branching (e.g., list vs install vs remove sub-views) not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
 ## Behavioral Spec
 
-### Alias Resolution
+### Plugin Manager UI Rendering
 
-All three invocation forms (`/plugin`, `/plugins`, `/marketplace`) resolve to the same command handler via the `aliases` field in the registration object.
-
-```
-function resolvePluginCommand(userInput):
-    canonicalName = "plugin"
-    knownAliases  = ["plugins", "marketplace"]
-
-    if userInput matches canonicalName or any entry in knownAliases:
-        return dispatchCommand(canonicalName)
-    else:
-        return noMatch
-```
-
-Analysis basis: CC v2.1.144 bundle.js:+11591484
-
-### Immediate Dispatch
-
-Because `immediate` is set to `true`, the slash-command router does not pause for a secondary confirmation step before invoking the plugin management UI.
+The handler is an `AsyncFunction` that, when invoked, constructs and returns a JSX component tree representing the plugin management interface. The CLI framework then mounts this component into the terminal rendering pipeline.
 
 ```
-function dispatchPluginCommand(command):
-    if command.immediate == true:
-        invokeImmediately(command.handler)
-    else:
-        awaitUserConfirmation()
-        invokeAfterConfirmation(command.handler)
+async function pluginManagerHandler(context):
+    // Build the plugin management JSX UI tree
+    uiElement = createElement(PluginManagerComponent, props_derived_from_context)
+    return uiElement
 ```
 
-Analysis basis: CC v2.1.144 bundle.js:+11591484
+Analysis basis: CC v2.1.132 bundle.js:+11253614 (call edge: `Ez7` → `JSA.createElement`)
 
-### JSX Rendering
+**Behavioral properties observable from registration and call graph:**
 
-The `type: local-jsx` registration type instructs the CLI rendering pipeline to mount the command's output as a React/JSX component inside the terminal UI rather than emitting raw text. The actual component tree rendered by module `ATq` is not recoverable from the depth-2 traversal.
+1. **Immediate execution**: Because `immediate: true` is set, the CLI does not prompt the user for confirmation or additional arguments before invoking the handler. The UI surface appears as soon as the slash command is entered.
 
-```
-function renderPluginCommand(command):
-    if command.type == "local-jsx":
-        component = loadJSXModule(command.module_id)   // module ATq
-        mountInTerminalUI(component)
-    else:
-        renderAsPlainText(command.output)
-```
+2. **JSX rendering path**: The `local-jsx` type instructs the CLI runtime to treat the handler's return value as a renderable React element rather than a string message. This enables interactive UI elements (lists, buttons, input fields) within the plugin manager.
 
-Analysis basis: CC v2.1.144 bundle.js:+11591484
+3. **Async handler**: The handler is an `AsyncFunction`, implying it may perform asynchronous operations (e.g., fetching available plugins from a registry, reading local plugin state) before resolving the component to render.
 
-### Plugin Management Logic (internal)
+4. **Alias unification**: All three entry points — `/plugin`, `/plugins`, `/marketplace` — resolve to the same handler (`Ez7`) and produce identical behavior. There is no alias-specific branching detected at depth ≤ 2.
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+<!-- TODO: specific plugin operations (install, remove, list, search, enable/disable) not found in depth-2 traversal; needs --depth 4 -->
 
-The internal sub-features of module `ATq` — such as plugin listing, installation, removal, enabling/disabling, or marketplace API calls — were not reachable by the AST extractor at the configured traversal depth. A re-extraction with `--depth 4` or greater is required to document these behaviors.
+<!-- TODO: any network calls or filesystem interactions within the plugin manager not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
@@ -121,11 +111,14 @@ The internal sub-features of module `ATq` — such as plugin listing, installati
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at depth ≤ 2 — <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | None detected at depth ≤ 2 traversal (`telemetry: []`) |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Alias side effects | None; `/plugins` and `/marketplace` are pure aliases that resolve to the same handler without independent state |
+| Filesystem I/O | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Network calls | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Sound | None detected |
+
+**Note on telemetry absence**: The empty `telemetry` array means no `tengu_*` event strings were found within the depth-2 call graph from `Ez7`. This may indicate telemetry is fired from deeper component lifecycle methods not reached at this traversal depth, or that telemetry is absent by design for this command.
 
 ---
 
@@ -133,16 +126,19 @@ The internal sub-features of module `ATq` — such as plugin listing, installati
 
 | Version | Change |
 |---|---|
-| v2.1.144 | Initial analysis; command registered with aliases `plugins` and `marketplace`; internal module `ATq` entry functions not resolved at depth-2 |
+| v2.1.132 | Initial analysis. `local-jsx` plugin manager command with aliases `plugins` and `marketplace`; handler `Ez7` confirmed via Arbor `module_id` resolution. |
 
 ---
 
 ## Common Mistakes
 
-1. **Assuming `/marketplace` has different behavior from `/plugin`** — all three invocation forms (`/plugin`, `/plugins`, `/marketplace`) are strict aliases and dispatch to the identical handler with no behavioral distinction.
-2. **Expecting a confirmation prompt** — because `immediate: true` is set, the command fires without any secondary prompt; users should not expect a "are you sure?" step before the plugin UI mounts.
-3. **Treating the command output as plain text** — the `local-jsx` type means the output is a mounted UI component; tools or tests that scrape raw text from stdout may receive no output or partial ANSI framing rather than structured content.
-4. **Concluding the command is a no-op because no entry functions were found** — the absence of resolved entry functions is an artifact of the depth-2 traversal limit on module `ATq`, not evidence that the command lacks implementation.
+1. **Expecting text output**: Because this is a `local-jsx` command, it renders an interactive UI component — not a plain text response. Automation or scripting that captures stdout text output from this command may receive no meaningful plain-text content.
+
+2. **Using `/marketplace` expecting a distinct behavior**: All three aliases (`/plugin`, `/plugins`, `/marketplace`) are registered to the same handler and produce identical behavior. There is no separate marketplace-specific view detectable at depth ≤ 2; the alias distinction is cosmetic/discoverability only.
+
+3. **Assuming the command requires arguments**: With `immediate: true`, the command fires without any argument prompt. Passing sub-command arguments (e.g., `/plugin install foo`) may not be handled if the JSX component manages its own internal navigation — this is <!-- TODO: not confirmed at depth ≤ 2; needs --depth 4 -->.
+
+4. **Expecting telemetry-visible invocation tracking**: No `tengu_*` telemetry events were found at depth ≤ 2. Do not rely on telemetry signals from this command for usage analytics without deeper verification.
 
 ---
 
@@ -152,6 +148,4 @@ The internal sub-features of module `ATq` — such as plugin listing, installati
 
 | Identifier | Role |
 |---|---|
-| `ATq` | Module ID for the plugin command's JSX implementation; used internally by the CLI module loader to resolve the command handler |
-
-> No additional obfuscated function-level identifiers were emitted by the depth-2 AST traversal for this command. Re-run extraction with `--depth 4` to populate this table.
+| `Ez7` | Async handler function for the `/plugin` command; entry point resolved via `module_id: "X3q"` through Arbor symbol graph (`fqn: claude-2.1.132::Ez7`). Constructs the plugin manager JSX element tree. |
