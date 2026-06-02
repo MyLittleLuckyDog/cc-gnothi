@@ -1,13 +1,12 @@
 ---
 type: feature-spec
 feature: "background"
-cc_version: 2.1.153
-updated: "2026-05-26"
+cc_version: "2.1.153"
+updated: "2026-06-02"
 tags: ["background", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.150
-analysis_basis: "CC v2.1.150 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.153 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +14,14 @@ license: "AGPL-3.0-only"
 
 # `/background`
 
-> Analysis basis: CC v2.1.150 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.150
+> Analysis basis: CC v2.1.153 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.153
 
 ---
 
 ## Overview
 
-The `/background` command (alias `/bg`) detaches the current interactive Claude Code session from the terminal and hands it off to a background daemon process, freeing the controlling TTY. An optional prompt argument is forwarded to the backgrounded session before it is detached, allowing the user to queue work before releasing the terminal. Internally the command performs permission and state gate checks, spawns or claims a daemon worker, serialises session state, and emits a detach-request signal.
+The `/background` command (alias `/bg`) detaches the current interactive Claude Code session from the terminal and hands it off to the background daemon, freeing the controlling terminal for other use. Internally it validates preconditions (session persistence enabled, at least one message exchanged), ensures the daemon is running, dispatches a fork-session job via a Unix control socket, and then signals the foreground PTY to detach.
 
 ---
 
@@ -32,354 +31,320 @@ The `/background` command (alias `/bg`) detaches the current interactive Claude 
 |---|---|
 | type | `local-jsx` |
 | name | `background` |
-| description | Send this session to the background and free the terminal |
+| description | `Send this session to the background and free the terminal` |
+| aliases | `["bg"]` |
 | argumentHint | `[prompt]` |
-| aliases | `bg` |
 | immediate | `null` |
-| module_id | `Fn1` |
+| module_id | `dt1` |
+| load_inline | `true` |
+| loc_byte | `12723694` |
+| loc_byte_end | `12723934` |
+| loc_line | `9988` |
+| arbor_handler.name | `Sz5` |
+| arbor_handler.fqn | `claude-2.1.153::Sz5` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.150 bundle.js:+12662141
+Analysis basis: CC v2.1.153 bundle.js:+12723694
 
 ---
 
 ## Input Branching
 
-The command entry-point (`commandHandler`) performs a series of sequential gate checks before attempting the actual background operation. Each failed gate aborts with a user-visible error message.
+There are four or more distinct precondition branches before the command proceeds to dispatch; a Mermaid flowchart is used.
 
 ```mermaid
 flowchart TD
-    A(["/background [prompt] invoked"]) --> B{Session persistence\nenabled?}
-    B -- No --> B1["Error: Cannot background — session persistence is disabled,\nso the forked job would have nothing to resume.\nAbort."]
-    B -- Yes --> C{Already running\nin background mode?}
-    C -- Yes --> C1["Emit tengu_background_already_bg\nReturn early (no-op)"]
-    C -- No --> D{Permission mode\n== bypassPermissions?}
-    D -- Yes --> D1{Disclaimer\naccepted interactively?}
-    D1 -- No --> D2["Error: --bg with bypassPermissions requires\naccepting the disclaimer first.\nAbort. (gate_blocked)"]
-    D1 -- Yes --> E
-    D -- No --> E{Permission mode\n== auto?}
-    E -- Yes --> E1{Auto mode opted-in\ninteractively?}
-    E1 -- No --> E2["Error: --bg with auto mode requires\nopting in first.\nAbort. (gate_blocked)"]
-    E1 -- Yes --> F
-    E -- No --> F{Conversation has\nat least one message?}
-    F -- No --> F1["Error: Nothing to background yet —\nsend a message first.\nAbort."]
-    F -- Yes --> G["Build daemon launch arguments\n(buildDaemonArgs)"]
-    G --> H["Attempt spawn / claim\nbackground daemon worker"]
-    H --> I{Spawn succeeded?}
-    I -- No --> I1["Emit tengu_background_spawn_failed\nReport error to user"]
-    I -- Yes --> J["Emit tengu_background\nSend detach-request\nRelease terminal"]
+    A(["/background invoked"]) --> B{Session persistence\nenabled?}
+    B -- No --> ERR1["Error: Cannot background —\nsession persistence is disabled"]
+    B -- Yes --> C{At least one\nmessage sent?}
+    C -- No --> ERR2["Error: Nothing to background yet —\nsend a message first."]
+    C -- Yes --> D{bypassPermissions\nflag active?}
+    D -- Yes --> E{Interactive disclaimer\nalready accepted?}
+    E -- No --> ERR3["Error: --bg with bypassPermissions\nrequires accepting disclaimer first"]
+    E -- Yes --> F{Permission mode\n== 'auto'?}
+    D -- No --> F
+    F -- Yes --> G{Auto-mode opted\nin interactively?}
+    G -- No --> ERR4["Error: --bg with auto mode\nrequires opting in first"]
+    G -- Yes --> H[Ensure daemon running\nvia daemonEnsureRunning]
+    F -- No --> H
+    H --> I{Daemon\nreachable?}
+    I -- No --> ERR5["Emit error to UI\n(not running / timed out / socket missing)"]
+    I -- Yes --> J[Dispatch fork-session\nvia control socket]
+    J --> K{Dispatch\nack received?}
+    K -- No --> ERR6["Dispatch error\n(ack-timeout / enoconn / etc.)"]
+    K -- Yes --> L[Signal PTY to detach;\nemit tengu_background telemetry]
+    L --> M([Terminal freed])
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+12657656, +12661502, +12661583, +12661759, +12655223, +12655385, +12658526, +12658595
+Analysis basis: CC v2.1.153 bundle.js:+12723029 (handler entry `Sz5`), +12723110 (persistence guard), +12723286 (empty-session guard), +12716536 (bypass-permissions guard), +12716698 (auto-mode guard)
 
 ---
 
 ## Behavioral Spec
 
-### Gate 1 — Session Persistence Check
+### Handler entry — `backgroundCommandHandler` (`Sz5`)
+
+The Arbor-resolved handler `Sz5` is an `AsyncFunction`.
 
 ```
-function checkSessionPersistenceEnabled(appState):
-    if appState.sessionPersistenceDisabled == true:
-        return error(
-            "Cannot background — session persistence is disabled, " +
-            "so the forked job would have nothing to resume."
-        )
+async function backgroundCommandHandler(context):
+    sessionConfig = context.sessionConfig          // includes persistence flag
+    messages     = context.messages
+
+    // Guard 1: persistence must be enabled
+    if not sessionConfig.persistenceEnabled:
+        return errorMessage("Cannot background — session persistence is disabled, "
+                            "so the forked job would have nothing to resume.")
+
+    // Guard 2: at least one user message must exist
+    if messages is empty:
+        return errorMessage("Nothing to background yet — send a message first.")
+
+    // Guard 3: bypassPermissions + disclaimer check
+    permissionMode = resolvePermissionMode(sessionConfig)   // via Ig / kz5 path
+    if permissionMode == "bypassPermissions":
+        if not disclaimerAccepted(userSettings):
+            return errorMessage("--bg with bypassPermissions requires accepting the "
+                                "disclaimer first. Run `claude --dangerously-skip-permissions` "
+                                "once interactively.")
+
+    // Guard 4: auto-mode opt-in check
+    if permissionMode == "auto":
+        if not autoModeOptedIn(userSettings):
+            return errorMessage("--bg with auto mode requires opting in first. "
+                                "Run `claude --permission-mode auto` once interactively.")
+
+    // Ensure daemon is available
+    daemonReachable = await ensureDaemonRunning(context)    // qF path (daemonEnsureRunning)
+    if not daemonReachable:
+        return renderDaemonUnavailableError()
+
+    // Dispatch the fork-session job
+    dispatchResult = await dispatchForkSession(context)     // Pz5 / L_A path
+    if dispatchResult.error:
+        return renderDispatchError(dispatchResult)
+
+    // Fire telemetry and detach PTY
+    emit("tengu_background", { ... })
+    detachPty(context.pty)                                  // k5H / ta path → detach-request
+```
+
+Analysis basis: CC v2.1.153 bundle.js:+12723029, +12723041, +12723077, +12723081, +12723095, +12723247
+
+---
+
+### Permission-mode resolution — `resolvePermissionFlags` (`kz5`)
+
+```
+function resolvePermissionFlags(argv):
+    // Strip everything after "--"
+    separatorIdx = argv.indexOf("--")
+    effective    = argv.slice(0, separatorIdx)   // or full argv if no "--"
+
+    // Detect --permission-mode bypassPermissions
+    pmIdx = effective.indexOf("--permission-mode")
+    if pmIdx >= 0 and effective[pmIdx+1] == "bypassPermissions":
+        return { mode: "bypassPermissions" }
+
+    // Detect --dangerously-skip-permissions / --allow-dangerously-skip-permissions
+    if effective.includes("--dangerously-skip-permissions")
+       or effective.includes("--allow-dangerously-skip-permissions"):
+        return { mode: "bypassPermissions" }
+
+    // Detect --permission-mode auto → check Ig feature flag
+    if effective.includes("auto") and featureFlagEnabled("auto"):
+        return { mode: "auto" }
+
+    return { mode: "default" }
+```
+
+Analysis basis: CC v2.1.153 bundle.js:+12716293 (`kz5` → `H.indexOf`), +12716303 (`"--"` literal), +12716336, +12716367, +12716399, +12716445, +12716678, +12716687
+
+---
+
+### Daemon lifecycle — `daemonEnsureRunning` (`qF`)
+
+```
+async function daemonEnsureRunning(opts):
+    status = getDaemonStatus()               // reads daemon.status.json
+    if status == "up":
+        return true
+
+    platform = detectPlatform()              // "macos" | "linux" | "windows"
+
+    // If service exec path is stale (binary deleted), fall back to transient spawn
+    if staledExecPath():
+        emit("tengu_bg_daemon_service_stale_exec")
+        warn("daemon service exec path is stale — falling back to transient spawn")
+
+    // If no daemon and user hasn't declined, ask to install
+    if status == "ask" and not userDeclinedInstall():
+        answer = promptUser("Install as a service now? [y/N/never, or 'once' just for now] ")
+        emit("tengu_bg_daemon_cold_start_ask_answer", { answer })
+        if answer in ["yes", "once"]:
+            installDaemonService()           // emit("tengu_bg_daemon_install")
+        elif answer == "never":
+            persistNeverInstall()
+
+    // Spawn transient daemon if still not up
+    if not daemonReachable():
+        result = spawnTransientDaemon(["run", "--origin", "transient",
+                                       "--spawned-by", processId])
+        if result.error:
+            emit("tengu_bg_daemon_spawn_failed")
+            return false
+
+    // Wait for daemon to become reachable (up to 30 000 ms / 60 000 ms)
+    ok = await waitForDaemonReachable(timeoutMs)
+    if not ok:
+        emit("tengu_bg_daemon_service_poll_fallthrough")
     return ok
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+12661583
+Analysis basis: CC v2.1.153 bundle.js:+12659755 (`qF`), +12659803, +12659818, +12659863, +12659880, +12660137, +12660155, +12660396, +12661158, +12661219, +12661230, +12661396, +12661483, +12661505
 
 ---
 
-### Gate 2 — Already-Backgrounded Guard
+### Fork-session dispatch — `forkSessionDispatch` (`Pz5`)
 
 ```
-function checkNotAlreadyBackground(appState):
-    if appState.runMode == "bg":
-        emit telemetry("tengu_background_already_bg")
-        return already_bg   // silent no-op to caller
-    return ok
+async function forkSessionDispatch(context):
+    // Build argv for the background worker
+    argv = ["--agent"]
+    if context.sessionName:
+        argv += ["--name", context.sessionName, "-n", context.sessionName]
+    if context.resumeId:
+        argv += ["--resume=<id>"]           // "--resume=" prefix
+    if context.continueSession:
+        argv += ["-c", "--continue"]
+    if context.forkSessionId:
+        argv += ["--fork-session", "--session-id=<id>"]
+
+    // Determine session kind
+    kind = determineSessionKind(context)    // "repl", "none", "bg", "slash" etc.
+
+    // Write dispatch file and connect to control socket
+    dispatchId   = generateUUID()
+    dispatchFile = writeDispatchFile(context.jobsDir, dispatchId, argv)
+    // connect via bO (controlSocketConnect) with protocol "cli-bg-dispatch"
+    socket = await connectControlSocket(daemonSocketPath, dispatchId)
+
+    // Await acknowledgement (timeout: 6 000 ms)
+    ack = await awaitAck(socket, 6000)
+    if not ack:
+        emit("tengu_bg_dispatch_fallback", { reason: "no ack" })
+        return { error: "ack-timeout" }
+
+    // Handle EALIVE / ESTALE response codes
+    if ack.code == "EALIVE":
+        return { error: "short_alive",
+                 message: "Previous session is still shutting down — try again in a moment" }
+    if ack.code == "ESTALE":
+        return { error: "stale_short" }
+
+    emit("tengu_bg_dispatch")
+    return { ok: true, sessionId: ack.sessionId }
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+12661516, +12639492
+Analysis basis: CC v2.1.153 bundle.js:+12699199, +12699222, +12699287, +12699309, +12699347, +12699381, +12699490, +12700011, +12700031, +12700091, +12700156, +12695022, +12695026, +12695055, +12695111, +12695267, +12695348, +12695369, +12695499, +12696880
 
 ---
 
-### Gate 3 — Permission-Mode Safety Gates
+### PTY detach — `sendDetachRequest` (`k5H` → `ta`)
 
 ```
-function checkPermissionGates(config):
-    mode = config.permissionMode   // "--permission-mode" flag value
-
-    if mode == "bypassPermissions":
-        if not config.dangerouslySkipPermissionsAccepted:
-            return gate_blocked(
-                "--bg with bypassPermissions requires accepting the " +
-                "disclaimer first. Run `claude --dangerously-skip-permissions` " +
-                "once interactively."
-            )
-
-    if mode == "auto":
-        if not config.autoModeOptedIn:
-            return gate_blocked(
-                "--bg with auto mode requires opting in first. " +
-                "Run `claude --permission-mode auto` once interactively."
-            )
-
-    return ok
+function sendDetachRequest(ptyHandle):
+    // Sends the "detach-request" control message to the worker PTY
+    writeControlMessage(ptyHandle.sa, "detach-request")
+    // Worker signals its controlling PTY to release the terminal
 ```
 
-Relevant CLI flags parsed during this step:
-- `--permission-mode` (Analysis basis: CC v2.1.150 bundle.js:+12655023)
-- `bypassPermissions` value (Analysis basis: CC v2.1.150 bundle.js:+12655054)
-- `--dangerously-skip-permissions` (Analysis basis: CC v2.1.150 bundle.js:+12655086)
-- `--allow-dangerously-skip-permissions` (Analysis basis: CC v2.1.150 bundle.js:+12655132)
-- `auto` mode value (Analysis basis: CC v2.1.150 bundle.js:+12655365)
-
-The string `"gate_blocked"` is recorded in the abort result. Analysis basis: CC v2.1.150 bundle.js:+12637953
+Literal `"detach-request"` confirmed at:
+Analysis basis: CC v2.1.153 bundle.js:+10732563
 
 ---
 
-### Gate 4 — Conversation Non-Empty Check
+### Away-summary on re-attach — `awaySummaryManager` (`I`)
+
+When the user later reattaches (`/background` places the session in the daemon pool), an away-summary may be generated:
 
 ```
-function checkConversationHasMessages(messages):
-    if messages.length == 0:
-        return error("Nothing to background yet — send a message first.")
-    return ok
+async function maybeTriggerAwaySummary(session):
+    now = Date.now()
+
+    if cacheAgeUnknown:
+        log("[awaySummary] skipped: cache age unknown")
+        return
+
+    if cacheStale(now, 0.9):
+        log("[awaySummary] skipped: cache stale")
+        return
+
+    if nearRateLimit():
+        log("[awaySummary] skipped: at or near rate limit")
+        return
+
+    if draftInputPresent():
+        log("[awaySummary] skipped: draft input present")
+        return
+
+    generateAwaySummary(session)
+    emit("away_summary_generate")
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+12661759
+Analysis basis: CC v2.1.153 bundle.js:+14831362, +14831438, +14831526, +14831609, +14831840
 
 ---
 
-### Building Daemon Launch Arguments
+### Spare-pool management — `spawnBgSpare` (`wLA`)
+
+The daemon pre-warms spare workers so `/background` dispatch is fast:
 
 ```
-function buildDaemonArgs(currentSession, userArgs):
-    args = []
-
-    // Carry forward session identity
-    args.append("--session-id", currentSession.id)  // "--session-id"
-
-    // Mode flags
-    args.append("--agent")     // marks daemon as agent-mode worker
-    if userArgs.name:
-        args.append("--name", userArgs.name)   // "-n" / "--name"
-
-    // Continue / resume flags (mutually exclusive)
-    if currentSession.continueMode:
-        args.append("-c")        // "--continue"
-    if currentSession.resumeTarget:
-        args.append("-r", currentSession.resumeTarget)   // "--resume"
-
-    // Tool allow/deny lists forwarded verbatim
-    if currentSession.allowedTools:
-        args.append("--allowed-tools", join(currentSession.allowedTools))
-    if currentSession.disallowedTools:
-        args.append("--disallowed-tools", join(currentSession.disallowedTools))
-
-    // Model / effort forwarded if non-default
-    if currentSession.model != "default":
-        args.append("--model", currentSession.model)
-    if currentSession.effort:
-        args.append("--effort", currentSession.effort)
-
-    // Additional working directories
-    for dir in currentSession.additionalDirs:
-        args.append("--add-dir", dir)
-
-    // Optional user-supplied prompt appended last
-    if userArgs.prompt:
-        args.append(userArgs.prompt)
-
-    return args
+function spawnBgSpare():
+    emit("tengu_bg_spare_spawn")
+    bytes = randomBytes()
+    socketPath = buildSocketPath(joinPaths(...))
+    proc = Bun.spawn([
+        "--bg-pty-host", "200", "50",
+        "--bg-spare",
+        "ignore"   // stdio
+    ])
+    proc.unref()
+    trackSpare(proc)
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+12638461, +12638488, +12638504, +12638591, +12638601, +12638619, +12638629, +12638912, +12658024, +12658059, +12658100, +12658131, +12658153, +12658177
+When a dispatch claims a spare, `tengu_bg_spare_claim` is emitted; on failure, `tengu_bg_spare_claim_fail`.
+
+Analysis basis: CC v2.1.153 bundle.js:+15365388, +15365429, +15365466, +15365627, +15365645, +15365663, +15365669, +15365686, +15387474, +15387595, +15387858
 
 ---
 
-### Daemon Spawn / Spare-Claim Pipeline
-
-The daemon acquisition follows a try-spare-then-spawn sequence:
+### Dispatch error rendering — `renderDispatchError` (`Nk8`)
 
 ```
-function acquireDaemonWorker(launchArgs, signal):
-    // Phase 1: attempt to claim a pre-warmed spare worker
-    spare = tryClaimSpareWorker()
-    if spare.ok:
-        emit telemetry("tengu_bg_spare_claim")
-        return spare.worker
-
-    emit telemetry("tengu_bg_spare_claim_fail")
-
-    // Phase 2: check available memory before spawning fresh
-    freeMem = os.freemem()          // mqA.freemem
-    if freeMem < LOW_MEM_THRESHOLD:
-        emit telemetry("tengu_bg_dispatch_low_mem")
-        // warn user but do not abort
-
-    // Phase 3: spawn a new daemon worker process
-    worker = daemonSpawn(launchArgs, signal)   // bB.spawn
-    if not worker.ok:
-        emit telemetry("tengu_background_spawn_failed")
-        return error
-
-    emit telemetry("tengu_bg_spare_spawn")
-    return worker
+function renderDispatchError(result):
+    switch result.errorCode:
+        case "not running":
+            return "Background service is not running"
+        case "timed out":
+            return "Background service timed out"
+        case "dispatch-write":
+            return "Couldn't write dispatch file"
+        case "socket missing":
+            return "Socket missing"
+        case "estarting":
+            return "Service still starting"
+        case "gate_blocked":
+            emit("tengu_background_spawn_failed")
+            return renderGateBlockedError()
+        default:
+            emit("tengu_background", { ... })
 ```
 
-- Spare-claim enabled telemetry: `tengu_bg_spare_enable` (Analysis basis: CC v2.1.150 bundle.js:+15262145)
-- Spare claim attempt: `tengu_bg_spare_claim` (Analysis basis: CC v2.1.150 bundle.js:+15262266)
-- Spawn fallback: `tengu_bg_spare_spawn` (Analysis basis: CC v2.1.150 bundle.js:+15260564)
-- Send-claim failure: `tengu_bg_sendclaim_failed` (Analysis basis: CC v2.1.150 bundle.js:+15241972)
-- Low-memory detection uses `mqA.freemem` (Analysis basis: CC v2.1.150 bundle.js:+15261280)
-
----
-
-### Dispatch and Detach
-
-```
-function dispatchAndDetach(worker, prompt, sessionState):
-    // Send optional queued prompt before disconnecting
-    if prompt != "":
-        sendPromptToWorker(worker, prompt, type="slash")
-
-    // Register a detach-request event so the daemon takes ownership
-    sendDetachRequest(worker)     // "detach-request" signal
-
-    // Mark terminal as released; update UI label
-    appState.label = "(backgrounded)"
-    appState.runMode = "bg"
-
-    // Wait up to 5000 ms for worker acknowledgement
-    // If ack not received within 6000 ms, escalate
-    // Timeout constants: ack_wait=5000 ms, escalate=6000 ms
-    waitForAck(worker, ackTimeout=5000, escalateTimeout=6000)
-
-    releaseTerminal()
-```
-
-- Timeout 5000 ms (ack wait): Analysis basis: CC v2.1.150 bundle.js:+12641749
-- Timeout 6000 ms (escalate): Analysis basis: CC v2.1.150 bundle.js:+12641766
-- Label string `"(backgrounded)"`: Analysis basis: CC v2.1.150 bundle.js:+12659283
-- Detach-request signal name: Analysis basis: CC v2.1.150 bundle.js:+10683137
-- Prompt type recorded as `"slash"`: Analysis basis: CC v2.1.150 bundle.js:+12640355
-
----
-
-### Dispatch Rescue Path
-
-If a previous daemon session file is detected as `"stale-short"` (a daemon that started but exited within its short-alive window):
-
-```
-function handleStaleShortSession(staleSessionPath):
-    // Stale short-alive session detected
-    if sessionAge < SHORT_ALIVE_THRESHOLD:
-        emit telemetry("tengu_bg_dispatch_rescued")    // attempt recovery
-        userMessage = "Previous session is still shutting down — try again in a moment"
-        return retry_later
-
-    removeStaleSession(staleSessionPath)   // t_H.rm
-```
-
-- `"short-alive"` / `"stale-short"` literals: Analysis basis: CC v2.1.150 bundle.js:+12642120, +12642281
-- User-facing retry message: Analysis basis: CC v2.1.150 bundle.js:+12642314
-- `tengu_bg_dispatch_rescued`: Analysis basis: CC v2.1.150 bundle.js:+12641391
-
----
-
-### SIGKILL Escalation in Worker Supervisor
-
-If a background worker process does not terminate gracefully after receiving SIGTERM, the supervisor escalates:
-
-```
-function supervisorEscalate(worker):
-    send(worker, SIGTERM)
-    wait(timeout=100 ms)       // 100 ms grace period
-    if worker.stillAlive:
-        emit telemetry("tengu_bg_dispatch_sigkill_escalate")
-        send(worker, SIGKILL)
-```
-
-- Grace period 100 ms: Analysis basis: CC v2.1.150 bundle.js:+15260943
-- SIGKILL escalation telemetry: Analysis basis: CC v2.1.150 bundle.js:+15260871
-- Signal names `"SIGTERM"` / `"SIGKILL"`: Analysis basis: CC v2.1.150 bundle.js:+15242210, +15260919
-
----
-
-### Session Roster Entry
-
-After successful detach, a roster entry is written so other CLI invocations can discover the backgrounded session:
-
-```
-function writeRosterEntry(sessionId, workerPid, launchArgs):
-    entry = {
-        sessionId:  sessionId,
-        pid:        workerPid,
-        startedAt:  Date.now(),
-        mode:       "bg",
-        status:     "working",      // transitions to "idle"/"done"/"crashed" later
-    }
-    roster.rosterEntry(entry)      // _.rosterEntry
-    scheduleCleanup(after=300000)  // 5-minute roster TTL
-```
-
-- Roster TTL 300 000 ms (5 min): Analysis basis: CC v2.1.150 bundle.js:+15267635
-- Status literals `"working"`, `"active"`, `"idle"`, `"done"`, `"killed"`, `"stopped"`, `"failed"`, `"crashed"`: Analysis basis: CC v2.1.150 bundle.js:+15266413, +15266439, +12639761, +15266068, +15266086, +15266095, +15266105, +15266252
-
----
-
-### AbortSignal Timeout
-
-The entire background-spawn pipeline is wrapped in an `AbortSignal.timeout` to prevent indefinite hangs:
-
-```
-function backgroundWithTimeout(launchArgs, prompt):
-    signal = AbortSignal.timeout(BACKGROUND_SPAWN_TIMEOUT_MS)
-    return acquireDaemonWorker(launchArgs, signal)
-```
-
-`AbortSignal.timeout` is called directly at Analysis basis: CC v2.1.150 bundle.js:+12658721
-
-The per-session dispatch timeout used when communicating with an already-running daemon is 120 seconds:
-- 120 s constant: Analysis basis: CC v2.1.150 bundle.js:+12659053
-
----
-
-### macOS Low-Memory Guard
-
-On macOS, free memory is sampled before spawning a new worker; if it falls below the threshold, a `tengu_bg_low_mem_mb` event is emitted and a warning is shown, but the spawn is not blocked:
-
-```
-function checkMemoryMacos():
-    if platform == "macos":
-        freeMb = os.freemem() / 1024    // 1024 divisor
-        if freeMb < LOW_MEM_THRESHOLD:
-            emit telemetry("tengu_bg_low_mem_mb", {mb: freeMb})
-```
-
-- Platform string `"macos"`: Analysis basis: CC v2.1.150 bundle.js:+12607135
-- Divisor 1024: Analysis basis: CC v2.1.150 bundle.js:+12607184
-- Telemetry: Analysis basis: CC v2.1.150 bundle.js:+12607162
-
----
-
-### Daemon Error Classification
-
-Connection errors returned from the daemon are normalised to lowercase codes for consistent handling:
-
-| Raw error code | Normalised code | Meaning |
-|---|---|---|
-| `ENOENT` | `enoent` | Socket/pipe file not found — daemon not started |
-| `ECONNREFUSED` | `econnrefused` | Daemon process exists but refuses connection |
-| `ack-timeout` | `ack-timeout` | Daemon did not acknowledge within 5 s window |
-| `enoconn` | `enoconn` | No connection available |
-| `estarting` | `estarting` | Daemon is still starting up |
-| `daemon-unreachable` | `daemon_unavailable` | Daemon cannot be reached after retries |
-
-Analysis basis: CC v2.1.150 bundle.js:+15262438, +15262447, +15262460, +15262475, +12641121, +12641147, +12641169, +12642507, +12642528
+Analysis basis: CC v2.1.153 bundle.js:+12706120, +12706158, +12706197, +12706248, +12706287, +12706336, +12719993, +12720056, +12720064
 
 ---
 
@@ -387,30 +352,25 @@ Analysis basis: CC v2.1.150 bundle.js:+15262438, +15262447, +15262460, +15262475
 
 | Item | Detail |
 |---|---|
-| Telemetry — `tengu_background` | Emitted on every successful backgrounding. Analysis basis: +12658595 |
-| Telemetry — `tengu_background_already_bg` | Emitted when the session is already in background mode (no-op path). Analysis basis: +12661516 |
-| Telemetry — `tengu_background_spawn_failed` | Emitted when daemon worker spawn fails. Analysis basis: +12658526 |
-| Telemetry — `tengu_bg_dispatch_rescued` | Emitted when a stale short-alive session is recovered. Analysis basis: +12641391 |
-| Telemetry — `tengu_bg_dispatch_sigkill_escalate` | Emitted when SIGTERM grace period expires and SIGKILL is sent. Analysis basis: +15260871 |
-| Telemetry — `tengu_bg_low_mem_mb` | Emitted with free-MB metric on macOS when memory is low. Analysis basis: +12607162 |
-| Telemetry — `tengu_bg_dispatch_low_mem` | Emitted in dispatcher when system memory is insufficient. Analysis basis: +15261450 |
-| Telemetry — `tengu_bg_spare_enable` | Emitted when the spare-worker pool is enabled. Analysis basis: +15262145 |
-| Telemetry — `tengu_bg_spare_claim` | Emitted when a pre-warmed spare worker is successfully claimed. Analysis basis: +15262266 |
-| Telemetry — `tengu_bg_spare_claim_fail` | Emitted when spare worker claim fails (falling back to spawn). Analysis basis: +12658529 (see +15262529) |
-| Telemetry — `tengu_bg_spare_spawn` | Emitted when a new daemon worker process is freshly spawned. Analysis basis: +15260564 |
-| Telemetry — `tengu_bg_sendclaim_failed` | Emitted when the send-claim IPC call to a spare worker fails. Analysis basis: +15241972 |
-| Telemetry — `tengu_rename_full_session_fork` | Emitted during the session-fork rename step triggered by background. Analysis basis: +11647764 |
-| Telemetry — `tengu_feature_ok` / `tengu_feature_bad` | General feature health events emitted by underlying IPC layer. Analysis basis: +963421, +963479 |
-| Telemetry — `tengu_config_auth_loss_prevented` | Emitted if a config save would have silently dropped auth credentials. Analysis basis: +3191047 |
-| Hook registration | `a9` calls `W7A.register` to register the command handler with the slash-command dispatcher. Analysis basis: +12658814, +58272 |
-| `appState` changes | `runMode` set to `"bg"`; session label set to `"(backgrounded)"`. Analysis basis: +12639492, +12659283 |
-| Roster file | A roster entry is written to disk and scheduled for cleanup after 300 000 ms (5 min). Analysis basis: +15267635 |
-| Filesystem — mkdir | A daemon working directory is created (`t_H.mkdir`). Analysis basis: +12638038 |
-| Filesystem — rm | Stale session directories are removed (`t_H.rm`) on rescue or cleanup. Analysis basis: +12638181, +12642058 |
-| IPC socket | A Unix socket connection is established (`Vh8.connect`) for daemon communication. Analysis basis: +15242119 |
-| Signal — SIGTERM | Sent to worker on graceful shutdown request. Analysis basis: +15242210 |
-| Signal — SIGKILL | Sent if SIGTERM is not acknowledged within 100 ms. Analysis basis: +15260919 |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry — primary | `tengu_background` (success path) |
+| Telemetry — already backgrounded | `tengu_background_already_bg` |
+| Telemetry — spawn failed | `tengu_background_spawn_failed` |
+| Telemetry — dispatch | `tengu_bg_dispatch`, `tengu_bg_dispatch_fallback`, `tengu_bg_dispatch_rescued` |
+| Telemetry — daemon lifecycle | `tengu_bg_daemon_cold_start_ask`, `tengu_bg_daemon_cold_start_ask_answer`, `tengu_bg_daemon_install`, `tengu_bg_daemon_service_stale_exec`, `tengu_bg_daemon_service_poll_fallthrough`, `tengu_bg_daemon_spawn_failed` |
+| Telemetry — spare pool | `tengu_bg_spare_spawn`, `tengu_bg_spare_enable`, `tengu_bg_spare_claim`, `tengu_bg_spare_claim_fail`, `tengu_bg_spare_refill` |
+| Telemetry — attach path | `tengu_bg_attach`, `tengu_bg_attach_kick`, `tengu_bg_attach_stall_ms`, `tengu_bg_attach_stall_gave_up`, `tengu_bg_attach_stall_respawn`, `tengu_bg_attach_legacy_autorespawn` |
+| Telemetry — memory / signal | `tengu_bg_dispatch_sigkill_escalate`, `tengu_bg_dispatch_low_mem`, `tengu_bg_low_mem_mb` |
+| Telemetry — daemon control | `tengu_daemon_control`, `tengu_daemon_config_reload`, `tengu_daemon_idle_exit` |
+| Telemetry — config guards | `tengu_config_parse_error`, `tengu_config_lock_contention`, `tengu_config_stale_write`, `tengu_config_auth_loss_prevented` |
+| Dispatch file | Written to `<configDir>/jobs/` directory; path built via `bK`/`tG` helpers |
+| Control socket | Unix domain socket; connected via `bO` (controlSocketConnect); protocol label `"cli-bg-dispatch"` |
+| Daemon status file | `daemon.status.json` read/written for lifecycle coordination |
+| PTY detach | `"detach-request"` message sent to worker PTY handle; terminal is released |
+| appState changes | `H.setAppState` called inside `yW8` (session state manager) when re-attach updates session phase |
+| Session name | Generated via `X86` → `f85` path (rename/generate-name sub-agent); telemetry `tengu_rename_full_session_fork` |
+| Away summary | Triggered on re-attach via `I` (awaySummaryManager); telemetry `away_summary_generate` |
+| Flush timeout | 2 000 ms timeout (`"flush timeout"` literal) applied before detach to allow pending writes |
+| Sound | None observed in depth-2 traversal |
 
 ---
 
@@ -418,25 +378,18 @@ Analysis basis: CC v2.1.150 bundle.js:+15262438, +15262447, +15262460, +15262475
 
 | Version | Change |
 |---|---|
-| v2.1.150 | Initial analysis |
+| v2.1.153 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Running `/background` before sending any message.** The command aborts with "Nothing to background yet — send a message first." You must have at least one exchange in the conversation. Analysis basis: CC v2.1.150 bundle.js:+12661759
-
-2. **Using `bypassPermissions` mode without first accepting the disclaimer interactively.** Running `claude` non-interactively or skipping the interactive acceptance step causes a `gate_blocked` error. You must run `claude --dangerously-skip-permissions` once in an interactive session first. Analysis basis: CC v2.1.150 bundle.js:+12655223
-
-3. **Using `auto` permission mode without the interactive opt-in.** Similar to the above: run `claude --permission-mode auto` interactively first. Analysis basis: CC v2.1.150 bundle.js:+12655385
-
-4. **Session persistence disabled.** If the Claude Code session was started without persistence (e.g. certain CI configurations), `/background` cannot work because there is no resumable state for the daemon to hand back. Analysis basis: CC v2.1.150 bundle.js:+12661583
-
-5. **Retrying immediately after a stale short-alive error.** When the previous daemon session is still in its shutdown window, the command returns "Previous session is still shutting down — try again in a moment." Waiting a few seconds before retrying resolves this. Analysis basis: CC v2.1.150 bundle.js:+12642314
-
-6. **Confusing `/bg` with a full re-attach command.** `/bg` only detaches the current terminal; to re-attach to a backgrounded session you must use `claude --resume` or `/resume` from a new terminal.
-
-7. **Low system memory on macOS.** When available memory is below the internal threshold the daemon spawn may degrade or warn. Check system memory before running long background tasks. Analysis basis: CC v2.1.150 bundle.js:+12607162
+1. **Invoking `/background` before sending any message.** The command hard-stops with `"Nothing to background yet — send a message first."` — at least one user turn must exist in the conversation.
+2. **Using `/background` with `--dangerously-skip-permissions` without prior interactive acceptance.** The disclaimer must be accepted by running `claude --dangerously-skip-permissions` at least once in an interactive session before backgrounding is permitted in bypass-permissions mode.
+3. **Using `/background` with `--permission-mode auto` without prior interactive opt-in.** Similarly, auto-mode requires one interactive run of `claude --permission-mode auto` before it can be used in background mode.
+4. **No daemon installed and declining installation.** If the user answers `"no"` or `"never"` to the service-installation prompt and no daemon is running, the background dispatch fails. Run `claude daemon install` first.
+5. **Session persistence disabled.** Some deployment configurations disable session persistence; `/background` is entirely unavailable in that configuration and will return an explicit error.
+6. **Rapid invocation after a prior background session exits.** The `"EALIVE"` error (`"Previous session is still shutting down — try again in a moment"`) can appear if the previous job's control socket has not yet been cleaned up.
 
 ---
 
@@ -446,88 +399,85 @@ Analysis basis: CC v2.1.150 bundle.js:+15262438, +15262447, +15262460, +15262475
 
 | Identifier | Role |
 |---|---|
-| `Xv8` | Top-level `/background` command handler function |
-| `Pv8` | JSX render component for the background command UI |
-| `$75` | Background command module entry / registration wrapper |
-| `wv` | Session list / active-sessions accessor |
-| `K` | Task-queue map utility (maps task entries) |
-| `L` | Individual task-queue item wrapper (tracks promise lifecycle via `q.add` / `q.delete`) |
-| `M` | Daemon IPC connection/message object |
-| `yf` | Boolean filter helper (used to remove falsy session entries) |
-| `rt_` | Permission-mode gate checker |
-| `h4` | Interactive acceptance checker for dangerous flags |
-| `cc` | Core background-dispatch orchestrator (builds args, invokes daemon) |
-| `L75` | CLI argument builder for the `shell` / daemon invocation |
-| `o45` | Full daemon session launch function |
-| `EH` | Error formatting / normalisation utility |
-| `K8` | Logging / debug output helper |
-| `ER8` | Additional-directory (`--add-dir`) list builder |
-| `w` | Background worker / daemon process manager |
-| `A` | Worker registry map |
-| `c` | Generic IPC / event-emitter helper |
-| `C` | Worker supervisor (handles mtime, SIGTERM/SIGKILL escalation) |
-| `H` | Jitter / random-delay utility (used in retry back-off) |
-| `uH` | Feature-ok telemetry emitter |
-| `bH` | Feature-bad telemetry emitter |
-| `Kv8` | macOS low-memory sampler |
-| `Oz6` | Roster file reader (reads JSON roster from disk) |
-| `RH` | Structured error reporter / log-error utility |
-| `g` | Settled-promise retirement helper (retires resolved/rejected tasks) |
-| `V6` | Spare-worker pool manager |
-| `yqA` | Send-claim IPC function (claims spare worker over socket) |
-| `uqA` | Background session lifecycle tracker (status transitions) |
-| `D` | Spare-worker spawner / pool refresher |
-| `S` | Disposable resource wrapper for daemon connections |
-| `P` | MCP server connection handler (SDK transport) |
-| `wh8` | MCP connection state accessor |
-| `c_` | Error constructor wrapper |
-| `T` | Additional MCP transport handler |
-| `HE6` | MCP transport type discriminator |
-| `j_` | JSX element factory helper |
-| `Dv` | Core JSX renderer |
-| `Gh` | UI component for backgrounding status display |
-| `V_H` | Renders the background command output panel |
-| `m6` | Session metadata / timestamp recorder |
-| `f8` | Global config save guard (prevents auth-loss on write) |
-| `ew6` | Working-directory context accessor |
-| `PvH` | Abort-signal propagation wrapper |
-| `$H6` | Session-fork / rename orchestrator |
-| `sQ_` | Session timestamp tracker |
-| `eiL` | Session-name generation via LLM (rename flow) |
-| `fE8` | Conversation message serialiser for session fork |
-| `nk` | Session-name generation prompt builder |
-| `vK` | Model / tool-schema validator |
-| `$K` | Message filter (removes disallowed message types) |
-| `_h1` | Session-name result extractor |
-| `N` | Markdown / ANSI text normaliser for session titles |
-| `XO` | Argument-slice utility (strips leading flags) |
-| `aW8` | Argument parser for positional prompt |
-| `WzH` | Context-file / working-directory loader |
-| `S6` | File-path resolver |
-| `yG` | Basename extractor for context file names |
-| `cq` | Context-file reader with stat + cache |
-| `Uw` | Context-file cache invalidator |
-| `x5` | Context-file writer / updater |
-| `j8` | Structured logger wrapper |
-| `a9` | Slash-command registration caller (`W7A.register`) |
-| `tU` | Array-type guard |
-| `O` | Background session label string container |
-| `k8` | String constant holder (`"background session"`) |
-| `nW8` | `tool_result` message type detector |
-| `_` | Utility array / collection helper |
-| `$y` | Conversation message pre-processor |
-| `Lc` | Message list normaliser |
-| `dtH` | Path `startsWith` guard |
-| `gO` | Config-path resolver (uses `S6` + `h4`) |
-| `fB` | Fallback config-path resolver |
-| `bq` | Daemon-worker process descriptor |
-| `f$H` | Worker process factory |
-| `ZLH` | Detach-request sender |
-| `al6` | Detach-request payload builder |
-| `PW1` | Task-type discriminator (`"task"` vs `"detach-request"`) |
-| `no` | IPC write helper (`lo.write`) |
-| `E_H` | Detach acknowledgement handler |
-| `_PH` | Environment / build-mode checker |
-| `mH` | String coercion utility (used in env checks) |
-| `li1` | Test-environment guard |
-| `jC` | Production/test mode branching helper |
+| `Sz5` | `backgroundCommandHandler` — Arbor-resolved async handler for `/background` |
+| `Nk8` | `renderDispatchError` / dispatch-result rendering function |
+| `Ik8` | Background status display component (renders `"(backgrounded)"` label) |
+| `kz5` | `resolvePermissionFlags` — parses argv for permission-mode flags |
+| `Pz5` | `forkSessionDispatch` — builds argv, writes dispatch file, connects socket |
+| `L_A` | `bgDispatchCore` — low-level dispatch orchestrator (socket write, ack wait) |
+| `qF` | `daemonEnsureRunning` — daemon lifecycle manager (install / spawn / wait) |
+| `Ul` | `buildDispatchPayload` — constructs job directory, UUID, dispatch record |
+| `Wk6` | `daemonInstallAndWait` — installs service and polls for reachability (5 000 ms) |
+| `wLA` | `spawnBgSpare` — spawns pre-warmed spare worker via `Bun.spawn` |
+| `k5H` | `sendDetachRequest` — sends `"detach-request"` control message to PTY host |
+| `ta` | `writeControlMessage` — writes raw bytes to the daemon worker control socket |
+| `bO` | `controlSocketConnect` — connects to Unix domain control socket |
+| `HV8` | `waitForControlLease` — awaits `"lease"` event on control socket with timeout |
+| `KRH` | `buildDispatchPath` — joins paths to produce the dispatch socket path |
+| `j_A` | `registerShutdownHook` — registers cleanup hook before PTY detach |
+| `h4` | `hookRegistrar` — internal hook registration mechanism |
+| `H9` | `q3ARegister` — underlying hook/signal registration call |
+| `gL` | `flushWithTimeout` — races a flush promise against a 2 000 ms timeout |
+| `kT` | `cleanupOnDetach` — cleanup routine called before terminal is freed |
+| `N9` | `daemonWorkerInit` — initialises the daemon-worker context |
+| `DOH` | `daemonWorkerLabel` — sets `"daemon-worker"` label on process |
+| `w2H` | `bgEnvironmentCheck` — checks `"production"` / `"test"` environment flag |
+| `sC` | `environmentResolver` — resolves current environment string |
+| `re1` | `bgModeValidator` — validates mode constraints for background operation |
+| `Ff` | `sessionListCollector` — collects active sessions via `K.values` |
+| `gv` | `sessionCountFilter` — filters sessions at index `0` (initial count check) |
+| `Ig` | `autoModeFeatureFlag` — reads the `"auto"` permission-mode feature flag |
+| `Bl` | `argvPermissionParser` — checks argv slice for `--permission-mode` tokens |
+| `S8` | `settingsReader` — reads `userSettings` / `localSettings` / `flagSettings` / `policySettings` |
+| `qp` | `settingsAccessor` — top-level accessor for merged settings object |
+| `b6` | `configFileWriter` — writes config with lock, calls `EzH` for file operations |
+| `EzH` | `configFileReadWrite` — atomic read/write of config JSON with backup rotation |
+| `jq7` | `configFileWatcher` — watches config file for external changes via `T88.watchFile` |
+| `Ar1` | `daemonStatusWriter` — writes `daemon.status.json` |
+| `dI6` | `daemonStatusPathBuilder` — joins paths for `daemon.status.json` |
+| `o9` | `jobsDirectoryManager` — manages the `jobs/` directory (stat, readFile, set/delete cache) |
+| `i5` | `dispatchFileWriter` — atomically writes dispatch file via `QO` |
+| `QO` | `atomicFileWrite` — atomic write via temp file + rename (uses `randomBytes` for temp name) |
+| `ew` | `dispatchCacheInvalidator` — deletes entry from `VYH` dispatch cache |
+| `tHH` | `jobStatusFormatter` — formats job state strings (`"working"`, `"active"`, `"daemon"`) |
+| `j4` | `pathSanitizer` — sanitizes and redacts `[REDACTED]` path segments |
+| `kt1` | `sessionListFormatter` — formats session list items joined by `", "` |
+| `Xz5` | `platformShellBuilder` — builds shell command array (`cmd.exe /d /s /c` or `/bin/sh`) |
+| `AB6` | `windowsShellCheck` — checks for Windows platform and Git Bash availability |
+| `Iz5` | `sessionIdExtractor` — extracts `--session-id=` / `--session-id` from argv |
+| `q_A` | `dispatchArgvNormalizer` — normalizes path-bearing argv segments, truncates at 80 chars |
+| `ht1` | `dispatchRetryScheduler` — schedules retry logic with `Date.now` timing |
+| `cF` | `dispatchListHandler` — handles `"list"` sub-command of dispatch result |
+| `dO` | `backgroundServiceChecker` — checks `"background service"` status via `GzH` |
+| `GzH` | `serviceStatusProbe` — probes background service reachability via `T6` |
+| `XHH` | `daemonErrorWrapper` — wraps daemon errors via `EKH` / `Bp` |
+| `EKH` | `errorKindMapper` — maps error codes to display kinds |
+| `b$` | `jsxErrorWrapper` — wraps error in JSX error boundary |
+| `D` | `daemonSessionManager` — manages active daemon sessions (spawn, retire, dispose) |
+| `wk8` | `lowMemoryChecker` — checks `ELA.freemem` and emits `tengu_bg_low_mem_mb` |
+| `wLA` | `spawnBgSpare` — see above |
+| `Y1` | `featureFlagReader` — reads feature flags via `SH` / `uH` |
+| `SH` | `syncFeatureCheck` — synchronous feature flag check |
+| `uH` | `asyncFeatureCheck` — async feature flag check |
+| `jm5` | `daemonControlProtocolHandler` — full daemon control protocol (ping/nudge/yield/reply/kill/resize/attach) |
+| `X86` | `sessionNameGenerator` — drives session-rename sub-agent via `f85` / `yy` |
+| `f85` | `renameAgentRunner` — runs the session-name generation agent |
+| `yy` | `agentQueryDispatcher` — dispatches agent query through `BRH` / `D8K` |
+| `D8K` | `mainQueryLoop` — central query/streaming loop (tool calls, retries, streaming fallback) |
+| `BRH` | `agentResponseBuilder` — builds agent response from `Td_` + `D8K` |
+| `I` | `awaySummaryManager` — manages away-summary generation on reattach |
+| `G58` | `awaySummaryAgent` — runs the away-summary agent call |
+| `yW8` | `sessionStateManager` — manages `getAppState` / `setAppState` transitions |
+| `I0` | `sessionAgentOrchestrator` — orchestrates per-session agent invocations |
+| `HH` | `voiceSessionManager` — manages voice recording/transcription sessions |
+| `P` | `repaintManager` — triggers terminal repaints after state changes |
+| `lAH` | `fsAsyncHelper` — async filesystem operations (`mkdir`, `rm`) |
+| `Rt1` | `pathJoinHelper` — joins paths for dispatch socket directory |
+| `St1` | `cryptoRandomHelper` — generates random bytes for socket names |
+| `vk8` | `daemonDirManager` — creates / unlinks daemon working directories |
+| `r8` | `controlSocketTimeout` — manages control socket connect timeout via `setTimeout` / `clearTimeout` |
+| `oTK` | `heartbeatManager` — sends `"heartbeat"` keepalives to daemon supervisor |
+| `z2H` | `supervisorStateSync` — syncs supervisor state and writes session status |
+| `ya1` | `sessionMetricsWriter` — writes per-session metrics (object keys, Math.max) |
+| `G` | `remoteControlHandler` — handles `"remoteControlAtStartup"` event (calls `Y`, `H`) |
+| `NYH` | `jobCacheRefresher` — refreshes job cache entries via `bK`, `o9`, `ew`, `i5` |

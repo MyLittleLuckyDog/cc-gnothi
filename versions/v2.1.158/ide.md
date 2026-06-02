@@ -1,13 +1,12 @@
 ---
 type: feature-spec
 feature: "ide"
-cc_version: 2.1.158
-updated: "2026-05-26"
+cc_version: "2.1.158"
+updated: "2026-06-02"
 tags: ["ide", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.150
-analysis_basis: "CC v2.1.150 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.158 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +14,16 @@ license: "AGPL-3.0-only"
 
 # `/ide`
 
-> Analysis basis: CC v2.1.150 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.150
+> Analysis basis: CC v2.1.158 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.158
 
 ---
 
 ## Overview
 
-The `/ide` command manages IDE integrations for Claude Code by detecting running IDE instances (VS Code, Cursor, Windsurf, JetBrains family), establishing or disconnecting MCP connections over SSE or WebSocket transports, and presenting a real-time status display. When invoked with the `open` argument it immediately opens the current project in the selected IDE; without arguments it renders an interactive status panel where the user can pick an IDE, monitor connection state, and disconnect.
+`/ide` manages IDE integrations for Claude Code, detecting running IDE instances that have the Claude Code extension installed, allowing the user to select an IDE (or open a project within one), and displaying live connection status. Internally it is an async command (`local-jsx` type) whose handler (`teL`) performs IDE detection, connection negotiation, and UI rendering in a JSX component.
+
+---
 
 ## Registration
 
@@ -30,428 +31,318 @@ The `/ide` command manages IDE integrations for Claude Code by detecting running
 |---|---|
 | type | `local-jsx` |
 | name | `ide` |
-| description | Manage IDE integrations and show status |
+| description | `Manage IDE integrations and show status` |
 | argumentHint | `[open]` |
-| module_id | `dZ1` |
+| module_id | `qR1` |
+| load_inline | `true` |
+| loc_byte | `11311634` |
+| loc_byte_end | `11311790` |
+| loc_line | `6867` |
+| arbor_handler.name | `teL` |
+| arbor_handler.fqn | `claude-2.1.158::teL` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.150 bundle.js:+11215536
+Analysis basis: CC v2.1.158 bundle.js:+11311634
+
+---
 
 ## Input Branching
 
+The handler has six or more distinct branches (no IDEs detected, no IDE selected, open-by-name with IDE type dispatch, connection success/failure/timeout, and disconnect), so a Mermaid flowchart is used.
+
 ```mermaid
 flowchart TD
-    A["/ide invoked"] --> B{argument present?}
-    B -- "no argument" --> C[Render interactive IDE status panel]
-    B -- "argument == 'open'" --> D[Detect IDEs, open project in selected IDE]
-    C --> E{IDEs detected?}
-    E -- "none found" --> F["Display: No IDEs with Claude Code extension detected."]
-    E -- "one or more found" --> G{User selects IDE}
-    G -- "selection cancelled" --> H["Display: IDE selection cancelled"]
-    G -- "IDE selected" --> I[Attempt connection]
-    I --> J{Connection state}
-    J -- "pending" --> K[Show connecting spinner]
-    J -- "connected" --> L[Show connected status + MCP tools]
-    J -- "timeout" --> M["Display: Error connecting to IDE."]
-    J -- "failed" --> N["Emit ide_connect_failed telemetry"]
-    D --> O{IDEs detected?}
-    O -- "none" --> P["Display: No IDEs with Claude Code extension detected."]
-    O -- "one" --> Q[Auto-select, open project]
-    O -- "multiple" --> R[Prompt user to pick IDE]
-    R -- "cancelled" --> S["Display: No IDE selected."]
-    Q --> T{Open result}
-    R --> T
-    T -- "success" --> U["Emit ide_open_project telemetry"]
-    T -- "failure" --> V["Emit ide_open_project_failed telemetry"]
+    A["/ide [open]"] --> B{argument provided?}
+    B -- "no argument" --> C[Detect running IDEs\nvia ideDetect / Ef8]
+    B -- "'open' argument" --> C
+
+    C --> D{IDEs detected?}
+    D -- "none found" --> E["Emit: 'No IDEs with Claude Code\nextension detected.'\nReturn"]
+    D -- "one or more" --> F{Single IDE or\nuser selection?}
+
+    F -- "no IDE selected\nafter prompt" --> G["Emit: 'No IDE selected.'\nReturn"]
+    F -- "IDE chosen" --> H{IDE type?}
+
+    H -- "vscode" --> I[Dispatch open-project\nfor VS Code]
+    H -- "cursor" --> J[Dispatch open-project\nfor Cursor]
+    H -- "windsurf" --> K[Dispatch open-project\nfor Windsurf]
+    H -- "jetbrains" --> L[Dispatch open-project\nfor JetBrains]
+
+    I & J & K & L --> M[Fire tengu_ext_ide_command\ntelemetry event]
+    M --> N{Connection\noutcome}
+
+    N -- "success" --> O["Emit ide_connect telemetry\nRender status UI (AR1 component)"]
+    N -- "failed" --> P["Emit ide_connect_failed\n'Error connecting to IDE.'"]
+    N -- "timeout" --> Q["Emit ide_connect_timeout\n'Error connecting to IDE.'"]
+
+    O --> R{MCP tool prefix\ncheck: 'mcp__ide__'?}
+    R -- "tools present" --> S[Show connected tool list\nvia piH / kI render]
+    R -- "no tools" --> T["Emit ide_disconnect\nif connection drops"]
+
+    S --> U[Monitor ws:/sse-ide connection\nfor disconnect events]
+    U --> T
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+11211758, +11211867, +11212005, +11214918
+Analysis basis: CC v2.1.158 bundle.js:+11307748 (teL entry), +11307965 (no-IDE string), +11308103 (no-selection string), +11308163–11308245 (IDE type strings), +11309853 (ide_connect), +11310047 (ide_connect_timeout), +11310165 (error string)
+
+---
 
 ## Behavioral Spec
 
-### Top-Level Command Handler
+### 1. Handler Entry (`teL`)
+
+The main handler is the async function `teL` (resolved via Arbor module_id path).
 
 ```
-function ideCommandHandler(args, appState):
-    // Trim and inspect first argument
-    subcommand = args[0] if args else null
+async function ideCommandHandler(commandContext):
+    emit telemetry("tengu_ext_ide_command")          // +11307750
+    get currentState via stateAccessor(d)            // +11307748
 
-    if subcommand == "open":
-        return openProjectFlow(appState)
-    else:
-        return renderIdeStatusPanel(appState)
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+11211758, +11211796
-
----
-
-### IDE Detection (`flH` → detectIDEs)
-
-```
-function detectIDEs(platform):
-    results = []
-
-    if platform == "wsl":
-        // WSL-specific detection path
-        wsResult = detectIDEsViaWSL()
-        results.push(wsResult)
-
-    if platform == "linux":
-        // Run process listing command and parse output
-        psOutput = exec(
-            "ps aux | grep -E \"code|cursor|windsurf|idea|pycharm|webstorm" +
-            "|phpstorm|rubymine|clion|goland|rider|datagrip|dataspell" +
-            "|aqua|gateway|fleet|android-studio\" | grep -v grep"
-        )
-        results.push(...parseLinuxProcessList(psOutput))
-
-    // Normalise, deduplicate, and classify each candidate
-    for each candidate in results:
-        candidate.name = normaliseIDEName(candidate.name)  // toLowerCase + classify
-        candidate.type = classifyIDEType(candidate.name)   // "vscode"|"cursor"|"windsurf"|"jetbrains"
-
-    // Attempt socket/port connection per candidate (up to 10 retries per IDE)
-    connected = []
-    for each candidate in results:
-        port = parseInt(candidate.port)
-        connection = tryConnect(port)   // uses j_ → connectionAttempt
-        if connection.ok:
-            connected.push(candidate)
-
-    emitTelemetry("ide_detect")            // on success
-    // on any failure: emitTelemetry("ide_detect_failed")
-
-    return connected
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+5255915, +5256019, +5256374, +5257258, +5257322, +5260792, +5261667
-
----
-
-### IDE Name Normalisation (`jX` → normaliseIDEName)
-
-```
-function normaliseIDEName(rawName):
-    lower = rawName.toLowerCase()
-
-    if lower contains "code":    return "vscode"
-    if lower contains "cursor":  return "cursor"
-    if lower contains "windsurf":return "windsurf"
-    if lower contains "idea"
-       or lower contains "pycharm"
-       or lower contains "webstorm"
-       or lower contains "appcode"
-       or other JetBrains products: return "jetbrains"
-
-    // Fall back to basename of process path
-    return path.basename(lower)
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+5261667, +5261725, +5261799, +11212065, +11212106, +11212147, +5261166
-
----
-
-### Open-Project Flow (`uQL` with `open` argument)
-
-```
-function openProjectFlow(appState):
-    emitTelemetry("tengu_ext_ide_command")
-
-    ideList = detectIDEs(currentPlatform)
+    ideList = await ideDetect(commandContext)         // calls Ef8 (+11307908)
 
     if ideList is empty:
-        display("No IDEs with Claude Code extension detected.")
+        display "No IDEs with Claude Code extension detected."  // +11307965
         return
 
-    selectedIDE = null
-
-    if ideList.length == 1:
-        selectedIDE = ideList[0]
-    else:
-        selectedIDE = promptUserToSelectIDE(ideList)
+    selectedIDE = await promptIDESelection(ideList)  // via HM (+11307870)
 
     if selectedIDE is null:
-        display("No IDE selected.")
+        display "No IDE selected."                   // +11308103
         return
 
-    // Determine open mode: "worktree" or "project"
-    openMode = determineOpenMode(appState)   // "worktree" | "project"
-
-    result = sendOpenProjectRequest(selectedIDE, openMode)
-
-    if result.success:
-        emitTelemetry("ide_open_project")
-        // record ide type (vscode / cursor / windsurf) in event properties
-    else:
-        emitTelemetry("ide_open_project_failed")
-        display("Exited without opening IDE")
+    open project in selectedIDE                      // dispatch per IDE type
+    render connectionStatusComponent(AR1)            // JSX local render
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+11211810, +11211867, +11212005, +11212178, +11212205, +11212239, +11212250, +11212312, +11212602
+Analysis basis: CC v2.1.158 bundle.js:+11307748
 
 ---
 
-### Interactive Status Panel (`QZ1` → renderIdeStatusPanel)
+### 2. IDE Detection (`Ef8` — ideDetect)
 
 ```
-function renderIdeStatusPanel(appState):
-    emitTelemetry("tengu_ext_ide_command")
+async function ideDetect(context):
+    port = parseInt(context.port ?? defaultPort)     // +5327857
+    processes = await scanRunningProcesses()         // via Zf8 (+5327906)
+    // On Linux: runs ps aux | grep for IDE process names (+5332733)
+    // Resolves home dir via iJ9.homedir (+5325727)
+    // Checks .claude directory for IDE registration files (+5325741)
 
-    // React hooks initialisation
-    [connectionState, setConnectionState] = useState("pending")
-    ideRef = useRef(null)
-    useEffect(...)   // mounts connection lifecycle
+    results = await Promise.all(processes.map(proc =>
+        resolveIDEInstance(proc)                     // Cu7 per process
+    ))
 
-    ideList = detectIDEs(currentPlatform)  // via x6 → getIDEList
+    for each result:
+        normalizeIDEName(result)                     // mX (+5328838)
+        // Recognizes: "vscode", "cursor", "windsurf", "jetbrains" (+11308163–11308245)
+        // Also detects "appcode" (+5333107) on macOS
 
-    if ideList is empty:
-        render("No IDEs with Claude Code extension detected.")
-        return
+    emit telemetry("ide_detect") on success          // +5329200
+    emit telemetry("ide_detect_failed") on error     // +5329264
 
-    selectedIDE = promptUserToSelectIDE(ideList)
+    return filteredIDEList
+```
 
-    if selectedIDE is null:
-        render("IDE selection cancelled")
-        return
+Analysis basis: CC v2.1.158 bundle.js:+5327857
 
-    setConnectionState("pending")
+---
 
-    // Attempt MCP connection
-    transport = chooseTransport(selectedIDE)
-    // transport is "sse-ide" or "ws-ide" depending on IDE endpoint
-    // "ws:" prefix in URL → WebSocket transport, otherwise SSE
-    connectToIDE(selectedIDE, transport, callbacks):
+### 3. IDE Instance Resolution (`Cu7` — resolveIDEInstance)
+
+```
+function resolveIDEInstance(processEntry):
+    basePaths = [homedir, ...IDE-specific paths]     // +5325727
+    // On WSL: also checks /mnt/c/Users (+5325948)
+    // Skips system accounts: "Public", "Default", "Default User", "All Users"
+    //   (+5326042, +5326061, +5326081, +5326106)
+
+    for each candidate path:
+        stat = fs.realpathSync(candidate)
+        if stat.isDirectory() and not stat.isSymbolicLink():
+            if path contains ".claude" subdir:
+                if not already visited (dedup set):
+                    add to results
+    return resolvedIDEEntries
+```
+
+Analysis basis: CC v2.1.158 bundle.js:+5325650
+
+---
+
+### 4. IDE Name Normalization (`mX` — normalizeIDEName)
+
+```
+function normalizeIDEName(rawName):
+    lower = rawName.toLowerCase()                    // +5333608
+    // Extract base from path via II.basename        // +5333666
+
+    if lower contains "cursor"  → return "cursor"
+    if lower contains "windsurf" → return "windsurf"
+    if lower contains "code"    → return "vscode"
+    if lower matches jetbrains pattern → return "jetbrains"
+    if lower contains "appcode" → return "appcode"  // +5333107
+
+    return normalized string
+```
+
+Analysis basis: CC v2.1.158 bundle.js:+5333608
+
+---
+
+### 5. Open-Project Dispatch (`teL` branch for `open` argument)
+
+```
+function dispatchOpenProject(ideType, projectPath):
+    telemetryPayload = {
+        type: idType,
+        scope: "worktree" or "project"    // +11308337, +11308348
+    }
+    emit telemetry("ide_open_project")    // +11308303
+
+    call _.onInstallIDEExtension(ideType) // +11308877
+    // Advise user to "restart your IDE" if extension not active (+11308968)
+
+    on failure:
+        emit telemetry("ide_open_project_failed")   // +11308410
+        log "Exited without opening IDE"            // +11308700
+```
+
+Analysis basis: CC v2.1.158 bundle.js:+11308303
+
+---
+
+### 6. Connection Status Component (`AR1` — ideStatusComponent, JSX)
+
+```
+function ideStatusComponent(props):
+    [connectionState, setConnectionState] = useState("pending")   // +11309809
+    ideStoreSnapshot = useIDEStore()           // J6 via wf.useState (+11309636)
+    ideRef = useRef()                          // +11309714
+    
+    useEffect(() => {
+        attempt connection to IDE via WebSocket or SSE
+        // Protocol endpoints: "sse-ide" (+11305735), "ws-ide" (+11305755)
+        // WS prefix check: "ws:" (+11310663)
+
         on connect:
             setConnectionState("connected")
-            emitTelemetry("ide_connect")
-            listMCPTools()   // tools prefixed "mcp__ide__"
+            emit telemetry("ide_connect")      // +11309853
+        on failure:
+            setConnectionState("failed")
+            emit telemetry("ide_connect_failed")  // +11309940
+            display "Error connecting to IDE."    // +11310165
         on timeout:
             setConnectionState("timeout")
-            emitTelemetry("ide_connect_timeout")
-            display("Error connecting to IDE.")
-        on error:
-            setConnectionState("failed")
-            emitTelemetry("ide_connect_failed")
+            emit telemetry("ide_connect_timeout") // +11310047
+            display "Error connecting to IDE."    // +11310165
+    }, [ideRef])
 
-    // Render connection status, active MCP tool list, disconnect button
-    render(
-        connectionStatusBar(connectionState),
-        mcpToolList(toolsWithPrefix("mcp__ide__")),
-        disconnectButton → onDisconnect()
-    )
+    useCallback for disconnect:
+        emit telemetry("ide_disconnect")       // +11310546
 
-function onDisconnect():
-    emitTelemetry("ide_disconnect")
-    teardownMCPConnection()
-    setConnectionState("pending")
-```
+    // Filter MCP tools with prefix "mcp__ide__" (+11310443)
+    ideTools = allTools.filter(t => t.name.startsWith("mcp__ide__"))
 
-Analysis basis: CC v2.1.150 bundle.js:+11213538, +11213599, +11213711, +11213755, +11213842, +11213949, +11214037, +11214345, +11214448, +11214552, +11214565, +11209637, +11209657
-
----
-
-### Connection Transport Selection
-
-```
-function chooseTransport(ideEndpointURL):
-    if ideEndpointURL.startsWith("ws:"):
-        return "ws-ide"    // WebSocket transport
+    // Render mode based on connection state:
+    if connectionState == "pending":
+        display "Connecting to <IDE name>…"    // +11310883
+    else if connectionState == "failed":
+        display error message
     else:
-        return "sse-ide"   // Server-Sent Events transport
+        display tool list via kI / piH render
+        show "dynamic" label if applicable    // +11310780
+
+    on unmount or user cancels:
+        display "IDE selection cancelled"      // +11311016
+
+    return JSX status view
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+11214565, +11214682, +11209637, +11209657
+Analysis basis: CC v2.1.158 bundle.js:+11309636
 
 ---
 
-### Daemon / Background Session Interactions (`w` → daemonSessionManager)
-
-The IDE command drives a background daemon session infrastructure used to host the MCP connection.
+### 7. IDE Instance List Formatting (`us_` — formatIDEList)
 
 ```
-function daemonSessionManager(ideTarget):
-    // Attempt to claim a pre-warmed spare session
-    spareSession = claimSpareSession()   // via yqA → claimSession
+function formatIDEList(ideInstances, windowWidth):
+    // Truncate list display at 100 items (+11311092)
+    // Start offset 0 (+11311111)
+    // Slice last 3 entries for abbreviated display (+11311165)
+    // Normalize display names with Unicode NFC (+11311233)
 
-    if spareSession is null:
-        // Spawn a fresh background PTY host process
-        spawnBackgroundPTYHost(args=[
-            "--bg-pty-host", "200", "50", "--", "--bg-spare"
-        ])
+    paths = ideInstances.map(inst => inst.normalize("NFC"))
+    if paths.length > 3:
+        abbreviated = paths.slice(0, 3).join(", ") + ", …"  // +11311390, +11311404
+    else:
+        abbreviated = paths.join(", ")
 
-    // Connection error handling
-    on error code "ENOENT" or "enoent":
-        handleMissingSocket()
-    on error code "ECONNREFUSED" or "econnrefused":
-        handleRefusedConnection()
-    on error code "unknown":
-        handleUnknownConnectionError()
-
-    // Session lifecycle retry loop
-    // Retries with 2000 ms delay between attempts
-    // After 30 s total: escalate to SIGKILL
-    // After 15 s grace: send SIGTERM first
-    on session idle > 300000 ms (5 minutes):
-        markSessionIdle()
-        scheduleCleanup()
+    return formatted string
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+15260497, +15260826, +15260837, +15260912, +15260919, +15261296, +15262245, +15262438, +15262460, +15267635, +15240695, +15240713, +15240719, +15240736
+Analysis basis: CC v2.1.158 bundle.js:+11311092
 
 ---
 
-### Path and String Normalisation Utility (`Rl_` → normaliseIDESocketPaths)
+### 8. Connection Transport Helpers
 
-```
-function normaliseIDESocketPaths(rawPaths):
-    // Generate a random suffix of 3 hex characters
-    randomSuffix = Math.floor(Math.random() * 100) padded to base value
+The handler negotiates IDE connections via two transports:
 
-    // Normalise each path to NFC Unicode form
-    normalisedPaths = rawPaths.map(p => path.normalize(p).normalize("NFC"))
+- **SSE** (`sse-ide`, +11305735): Server-Sent Events transport, used as fallback.
+- **WebSocket** (`ws-ide`, +11305755; prefix `ws:`, +11310663): primary real-time transport.
 
-    // Select first and slice/truncate lists for display
-    primary   = normalisedPaths[0]              // index 0
-    displayed = normalisedPaths.slice(0, 3)     // up to 3 entries shown
-    remainder = normalisedPaths.slice(3)        // overflow
+Connection lifecycle uses `jfA` (claimConnection), `ZfA` (sessionLifecycle), and `wfA` (spawnDaemon background worker) — the full daemon infrastructure is engaged when establishing an IDE session.
 
-    // Format overflow as ", …" when more than 3 entries exist
-    label = displayed.join(", ")
-    if remainder.length > 0:
-        label += ", …"
-
-    return { primary, label }
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+11215037, +11215067, +11215098, +11215123, +11215135, +11215144, +11215210, +11215269, +11215292, +11215306
+Analysis basis: CC v2.1.158 bundle.js:+11305735, +11305755
 
 ---
-
-### IDE Status Display Component (`oN7` → buildIDEStatusEntries)
-
-```
-function buildIDEStatusEntries(ideRegistry):
-    entries = []
-
-    for each [key, value] in Object.entries(ideRegistry):
-        // Skip IDE types not in current allowed list
-        if not allowedIDETypes.includes(key):
-            continue
-
-        name = value.toLowerCase()
-        entry = {
-            id:     key,
-            label:  name,
-            status: value.status   // "connected" | "pending" | "failed" | etc.
-        }
-        entries.push(entry)
-
-    // Sort and return for rendering
-    return entries
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+5259903, +5260206, +5260263, +5260278, +5260708, +5260719
-
----
-
-### Daemon Spare Pool Management (`kqA` → spawnSpareSession)
-
-```
-function spawnSpareSession(platform):
-    label = "daemon_bg_spare_refill"
-    randomToken = crypto.randomBytes(4).toString("hex")
-
-    socketDir = path.join(tempDir, randomToken)
-    fs.mkdir(socketDir, { mode: 448 })   // octal 0o700
-
-    process = Bun.spawn([
-        currentExecutable,
-        "--bg-pty-host", "200", "50",
-        "--", "--bg-spare"
-    ], { stdio: "ignore" })
-
-    process.unref()   // detach from parent
-
-    // Poll until ready or timeout
-    deadline = Date.now() + CONNECTION_TIMEOUT
-    loop:
-        if Date.now() > deadline:
-            process.kill("SIGTERM")
-            break
-        sleep(POLL_INTERVAL)
-
-    on exit:
-        log via H.onExit / H.log
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+15240399, +15240438, +15240479, +15240495, +15240507, +15240538, +15240547, +15240571, +15240669, +15240677, +15240695, +15240713, +15240719, +15240724, +15240736, +15240779, +15240836, +15240899, +15241298
-
----
-
-### Reconnect / Restart Hint Display
-
-When the connection state is `failed` or `timeout`, the panel advises:
-
-> "restart your IDE"
-
-Analysis basis: CC v2.1.150 bundle.js:+11212870
-
----
-
-### MCP Tool Filtering for IDE
-
-After connection, the panel lists only tools whose names start with `"mcp__ide__"`. All other MCP tools are excluded from the IDE status view.
-
-Analysis basis: CC v2.1.150 bundle.js:+11214345
 
 ## State & Side Effects
 
 | Item | Detail |
 |---|---|
-| Telemetry — `tengu_ext_ide_command` | Fired on every invocation of `/ide` (both `open` and status modes) |
-| Telemetry — `ide_detect` | Fired when IDE detection succeeds |
-| Telemetry — `ide_detect_failed` | Fired when IDE detection fails |
-| Telemetry — `ide_open_project` | Fired when the project is successfully opened in the IDE |
-| Telemetry — `ide_open_project_failed` | Fired when the project open request fails |
-| Telemetry — `ide_connect` | Fired when MCP connection to IDE is established |
-| Telemetry — `ide_connect_failed` | Fired when MCP connection attempt fails |
-| Telemetry — `ide_connect_timeout` | Fired when MCP connection attempt times out |
-| Telemetry — `ide_disconnect` | Fired when user disconnects from IDE |
-| Telemetry — `tengu_bg_spare_enable` | Fired when spare background session pool is enabled |
-| Telemetry — `tengu_bg_spare_spawn` | Fired when a spare session is spawned |
-| Telemetry — `tengu_bg_spare_claim` | Fired when a spare session is successfully claimed |
-| Telemetry — `tengu_bg_spare_claim_fail` | Fired when spare session claim fails |
-| Telemetry — `tengu_bg_dispatch_low_mem` | Fired when background dispatch is constrained by low memory |
-| Telemetry — `tengu_bg_dispatch_sigkill_escalate` | Fired when SIGKILL escalation occurs for a background session |
-| Telemetry — `tengu_bg_sendclaim_failed` | Fired when the background session claim message send fails |
-| Telemetry — `tengu_bg_low_mem_mb` | Memory metric event for background sessions (macOS; threshold 1024 MB) |
-| Telemetry — `tengu_daemon_control` | Fired on daemon control operations (stop/start) |
-| Telemetry — `tengu_daemon_yield` | Fired when daemon yields to foreground session |
-| Telemetry — `tengu_feature_ok` | Fired when a feature gate check passes |
-| Telemetry — `tengu_feature_bad` | Fired when a feature gate check fails |
-| Telemetry — `tengu_feature_sad` | Fired on feature gate error/exception path |
-| Transport registration | Registers either `"sse-ide"` or `"ws-ide"` MCP transport depending on IDE endpoint URL scheme |
-| appState changes | Sets `ide` key in appState to `"pending"` → `"connected"` / `"failed"` / `"timeout"` |
-| Background daemon | May spawn or claim a background PTY host process (`--bg-pty-host`) |
-| Socket cleanup | Removes socket files and lock files (`unlinkSync`, `yY.unlink`, `yY.rm`) on session teardown |
-| Idle session cleanup | Sessions idle for longer than 300 000 ms (5 minutes) are scheduled for cleanup |
-| Process signals | SIGTERM sent first; SIGKILL escalation after grace period (15 s first warning, 30 s hard kill) |
+| Telemetry: `tengu_ext_ide_command` | Fired at handler entry (bundle.js:+11307750) |
+| Telemetry: `ide_detect` | Fired after successful IDE scan (bundle.js:+5329200) |
+| Telemetry: `ide_detect_failed` | Fired on scan error (bundle.js:+5329264) |
+| Telemetry: `ide_open_project` | Fired when opening a project in the IDE (bundle.js:+11308303) |
+| Telemetry: `ide_open_project_failed` | Fired on project-open failure (bundle.js:+11308410) |
+| Telemetry: `ide_connect` | Fired on successful IDE connection (bundle.js:+11309853) |
+| Telemetry: `ide_connect_failed` | Fired on connection failure (bundle.js:+11309940) |
+| Telemetry: `ide_connect_timeout` | Fired on connection timeout (bundle.js:+11310047) |
+| Telemetry: `ide_disconnect` | Fired when IDE connection drops (bundle.js:+11310546) |
+| Telemetry (infra): `tengu_bg_spare_claim`, `tengu_bg_spare_claim_fail` | Background daemon spare-worker tracking (bundle.js:+15469044, +15469307) |
+| Telemetry (infra): `tengu_bg_dispatch_sigkill_escalate` | SIGKILL escalation in dispatch layer (bundle.js:+15467649) |
+| Telemetry (infra): `tengu_daemon_control` | Daemon lifecycle control events (bundle.js:+15503486) |
+| Telemetry (infra): `tengu_daemon_yield` | Daemon yielding to foreground (bundle.js:+15486331) |
+| Telemetry (infra): `tengu_config_parse_error` | Config parse errors within IDE config layer (bundle.js:+3210888) |
+| appState changes | IDE connection state written via `useSetAppState` (AR1 component); connection status transitions: `"pending"` → `"connected"` / `"failed"` / `"timeout"` |
+| Hook registration | `useEffect` hook in AR1 registers connect/disconnect listeners; cleaned up on component unmount |
+| MCP tool filtering | Tools with prefix `mcp__ide__` are filtered and displayed in the status view (bundle.js:+11310443) |
+| Transport | WebSocket (`ws-ide`) and SSE (`sse-ide`) sockets opened; sockets released on disconnect |
+| OS process scan (Linux) | Runs shell command via `ps aux | grep` for IDE process names (bundle.js:+5332733) |
+| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+
+---
 
 ## Version History
 
 | Version | Change |
 |---|---|
-| v2.1.150 | Initial analysis |
+| v2.1.158 | Initial analysis |
+
+---
 
 ## Common Mistakes
 
-1. **Running `/ide open` with no IDE running**: If no IDE with the Claude Code extension is active, the command exits immediately with "No IDEs with Claude Code extension detected." Launch your IDE and install the Claude Code extension first.
-2. **Connection timeout after selection**: If the MCP connection times out ("Error connecting to IDE."), heed the "restart your IDE" hint — the extension may need reloading. The timeout is not configurable from the CLI.
-3. **WSL environments**: Detection uses a distinct code path on WSL. On plain Linux the command spawns a `ps aux | grep …` process; if that process list is unexpectedly empty (e.g., restricted `/proc` access), no IDEs will be found.
-4. **Multiple IDEs open**: When more than one IDE is detected the command prompts for selection. Pressing escape or cancelling the prompt results in "IDE selection cancelled" with no connection made.
-5. **MCP tool prefix assumption**: Only tools prefixed `mcp__ide__` appear in the IDE status tool list. Custom MCP servers whose tool names accidentally share this prefix may appear in the list.
-6. **Transport mismatch**: The transport (SSE vs. WebSocket) is selected automatically based on whether the IDE endpoint URL starts with `ws:`. Manually specifying an endpoint with the wrong scheme is not supported via the `/ide` command.
-7. **Spare session pool on low-memory hosts**: On macOS systems with less than 1024 MB free memory, background spare session spawning is suppressed (`tengu_bg_low_mem_mb` telemetry is emitted). This can cause slightly longer connection setup times.
+1. **Running `/ide` without the Claude Code extension installed in the IDE** — detection will succeed at the process level but the extension handshake will fail, producing `ide_connect_failed`. Install and enable the extension, then retry.
+2. **Using `/ide open` when no IDE process is running** — the IDE scan returns an empty list and the command exits with "No IDEs with Claude Code extension detected." Start the IDE first.
+3. **Expecting `/ide` to work in a headless / non-interactive environment** — the connection-status component is JSX-rendered and requires an interactive terminal. In non-interactive mode the command may silently return.
+4. **WSL users ignoring `/mnt/c/Users` path resolution** — IDE instances installed on the Windows host are discovered via the `/mnt/c/Users` prefix; if WSL filesystem mounts are non-standard the detection may miss the IDE.
+5. **Assuming a single MCP tool is enough** — the UI filters tools by the `mcp__ide__` prefix; if the extension registers tools under a different prefix they will not appear in the `/ide` status panel.
+
+---
 
 ## Appendix — Identifier Mapping
 
@@ -459,65 +350,178 @@ Analysis basis: CC v2.1.150 bundle.js:+11214345
 
 | Identifier | Role |
 |---|---|
-| `Rl_` | normaliseIDESocketPaths — formats and truncates IDE socket path lists for display |
-| `x6` | getIDEList — retrieves the current list of detected IDE connections from store |
-| `Mm6` | ideStoreAccessor — reads IDE state from the application store via `Lm6.getStore` |
-| `j_` | connectionAttempt — low-level TCP/socket connection probe |
-| `H` | randomSuffixGenerator — uses `Math.random` + `setTimeout` for token generation |
-| `A` | pathNormaliser — wraps `M.toLowerCase` and Unicode NFC normalisation |
-| `M` | socketConnectionHandle — manages `A.close`, `q.close`, `L` lifecycle |
-| `q` | socketFileSet — file-system socket entry collection (`unlinkSync`) |
-| `D` | daemonSessionManager — top-level background session orchestrator |
-| `V6` | sessionRegistrar — registers/deregisters sessions in the global session map |
-| `$` | disposableHandle — wraps `HQ1`, exposes `.dispose()` |
-| `Kv8` | platformSpawnHelper — platform-aware (`macos`, 1024 MB threshold) session spawner |
-| `kqA` | spawnSpareSession — spawns a detached background PTY host process |
-| `c` | appStateStore — core application state container |
-| `Dz` | diagnosticsLogger — structured diagnostic/warning logger |
-| `N` | platformEnvReader — reads platform env vars, normalises to uppercase |
-| `K8` | sessionStateUpdater — updates session status fields in appState |
-| `RH` | errorEventEmitter — emits structured error events with `ll.logError` |
-| `w` | sessionLifecycleController — manages connect/kill/retry/dispose for a session |
-| `C` | supervisorProcess — background supervisor write/kill handler |
-| `uH` | featureGateOkHandler — callback for feature gate pass (`tengu_feature_ok`) |
-| `bH` | featureGateBadHandler — callback for feature gate fail (`tengu_feature_bad`) |
-| `Oz6` | rosterFileReader — reads roster JSON file via `vP.readFile` |
-| `g` | retiredSessionFilter — filters and retires settled sessions |
-| `yqA` | claimSession — claims a pre-warmed spare background session via `bB.claim` |
-| `uqA` | sessionRequestHandler — manages full session request lifecycle including cleanup |
-| `L` | sessionRequestHandlerAlias — shares queue/lifecycle logic with `uqA` |
-| `S` | disposableSessionRef — session reference with `.dispose()` |
-| `uQL` | ideCommandEntryPoint — main `/ide` command React component / handler |
-| `yf` | argumentParser — extracts and validates the `[open]` argument |
-| `flH` | detectIDEsAndConnect — orchestrates full IDE detection + connection negotiation |
-| `M48` | jetBrainsSocketScanner — scans JetBrains socket paths, builds port list |
-| `FN7` | lockFileResolver — resolves `.lock` file paths for JetBrains IDEs |
-| `mH` | stringCoercer — wraps `String()` for safe coercion |
-| `s3q` | vscodeSocketPathParser — parses VS Code socket paths via regex (`H.match`) |
-| `K` | statusColumnFormatter — pads status columns with `M.padEnd` and two-space separator |
-| `W` | debounceEmitter — debounced event emitter using `clearTimeout`/`setTimeout`/`z.clear` |
-| `X` | socketDataReader — reads buffered socket data, handles `ETOOLARGE` / `EUNKNOWN` |
-| `P` | mcpClientConnector — establishes MCP client connection (`connected`, `Connection failed`) |
-| `Y$q` | processKillHelper — wraps `process.kill` for IDE process termination |
-| `f` | ideSessionRegistry — maps IDE sessions by key, exposes `L.get`/`L.values` |
-| `jX` | ideNameNormaliser — lowercases and classifies IDE process names |
-| `_` | ideListAccumulator — collects detected IDE entries via `_.push` / `_.filter` |
-| `_8` | featureSadHandler — callback for feature gate exception path (`tengu_feature_sad`) |
-| `E8` | ideStatusPanelRenderer — renders the IDE status panel using `G_` sub-renderer |
-| `G_` | ideConnectionStatusView — renders per-IDE connection status rows |
-| `u0_` | ideExtensionInstallHandler — handles `_.onInstallIDEExtension` user action |
-| `oN7` | buildIDEStatusEntries — builds display entries from IDE registry |
-| `Wr` | ideRestartHintRenderer — renders "restart your IDE" advisory message |
-| `hQL` | ideStatusFooter — renders footer section of the IDE status panel |
-| `QZ1` | ideInteractivePanel — full interactive IDE panel React component |
-| `J6` | appStateSubscriber — subscribes to appState slice via `sOH.useSyncExternalStore` |
-| `Tz_` | appStateContextReader — reads from `AppStateProvider` context, throws `ReferenceError` if missing |
-| `zA` | appStateSetterHook — exposes the appState setter from context |
-| `AO` | mcpContextProvider — provides MCP context via `KKH.useContext` / `KKH.useSyncExternalStore` |
-| `z` | daemonControlActions — exposes `daemon_stop` / `daemon_stop_failed` control actions |
-| `OI` | cleanupOrchestrator — orchestrates `K.cleanup` after connection teardown |
-| `ytH` | connectionHealthChecker — runs `CH` health probe |
-| `O` | backgroundSessionKiller — invokes `k8` to terminate background sessions |
-| `k8` | backgroundSessionTerminator — low-level background session kill primitive |
-| `j` | allSessionKiller — iterates `A.values` and issues `y.kill` to each |
-| `y` | transientSessionHandle — manages transient session write/kill lifecycle |
+| `teL` | Main async handler for `/ide` command (Arbor-resolved) |
+| `us_` | IDE instance list formatter / display truncation helper |
+| `AR1` | JSX connection-status component rendered by `/ide` |
+| `Ef8` | IDE detection orchestrator (async) |
+| `Zf8` | Process-scan aggregator; maps raw process entries to IDE candidates |
+| `Cu7` | Per-process IDE instance resolver (path walking, dedup) |
+| `mX` | IDE name normalizer (vscode / cursor / windsurf / jetbrains) |
+| `Bu7` | IDE extension capability checker |
+| `aV_` | IDE extension install/open helper |
+| `Su7` | IDE sub-process resolver helper |
+| `x1_` | Shell command executor for IDE detection |
+| `G_` | Generic shell command runner with timeout |
+| `rJ9` | Process kill helper (process.kill) |
+| `HH9` | Process output matcher (H.match) |
+| `h6` | App-state store accessor |
+| `iB6` | AsyncLocalStorage store getter helper |
+| `dn` | Default state initializer |
+| `O_` | State observable / subscription helper |
+| `qN` | Notification queue helper |
+| `H` | Random delay / setTimeout wrapper (used in detection retry) |
+| `A` | Path normalizer / Unicode NFC normalizer |
+| `f` | Socket / file-handle close manager |
+| `q` | File-system unlink / sync FS operations module |
+| `L` | Promise lifecycle (add/finally/delete) wrapper |
+| `D` | Daemon session normalize/dispose coordinator |
+| `G6` | IDE config store accessor / MCP config normalizer |
+| `sz6` | Config schema validator A |
+| `tz6` | Config schema validator B |
+| `Ex` | Config entry formatter |
+| `CH` | Config string coercer |
+| `Zx` | Config serializer |
+| `q_8` | Config dedup / cache set helper |
+| `Uz_` | Experiment event emitter |
+| `dz_` | Config batch-write helper |
+| `S6` | IDE config reader / file watcher coordinator |
+| `szH` | IDE config file reader (readFileSync, statSync) |
+| `m17` | IDE config file watcher (watchFile / unwatchFile) |
+| `$s1` | Daemon status file writer |
+| `ii` | Daemon status helper |
+| `s9` | AsyncLocalStorage store getter (YJ7) |
+| `pk6` | Daemon status path builder |
+| `RH` | JSON.stringify serializer helper |
+| `By8` | Background memory/platform checker (macOS/1024 MB threshold) |
+| `wfA` | Background daemon PTY-host spawner |
+| `X1` | Platform feature flag helper |
+| `hH` | Platform feature "ok" emitter |
+| `bH` | Platform feature "bad" emitter |
+| `Vh1` | Spare PTY socket path builder |
+| `tl` | Claude config directory path helper |
+| `vh1` | Alternate spare path builder |
+| `bB5` | Array validator helper |
+| `l$` | Array.isArray wrapper |
+| `dT` | PTY pid file path builder |
+| `bRH` | PTY subdirectory path builder |
+| `hB5` | Daemon process environment builder |
+| `M` | Plugin/extension path resolver |
+| `nS6` | Plugin name sanitizer / path resolver |
+| `z` | Daemon stop / daemon-stop-failed controller |
+| `Sy` | Session event emitter helper |
+| `Fm` | Promise.race / Promise.all shutdown coordinator |
+| `N` | Log message formatter / debug logger |
+| `lCK` | Log formatter detail builder |
+| `v4` | Log path formatter |
+| `EuH` | Log entry normalizer |
+| `rCK` | Log file writer / buffer-length tracker |
+| `d` | Shared state / context object |
+| `Iz` | Error formatter |
+| `J8` | Error code extractor |
+| `SH` | Queue-based async runner |
+| `F_` | Error/String coercer |
+| `L1` | Queue processing trigger |
+| `$VA` | Queue item executor |
+| `G_4` | Queue shift/push manager |
+| `w` | IDE connection / dispatch manager |
+| `S` | PTY supervisor spawn helper |
+| `nVK` | Realpath / stat resolver |
+| `P8` | Error code checker (J8 wrapper) |
+| `qF5` | Workspace path array builder |
+| `aW8` | Workspace path joiner |
+| `fw6` | Pinned-jobs / MCP jobs config reader |
+| `GP_` | Jobs config path builder |
+| `DT` | Config directory builder |
+| `p6` | JSON.parse wrapper |
+| `HP7` | Jobs directory reader |
+| `K` | IDE tool list renderer (map + padEnd) |
+| `U89` | Jobs config writer |
+| `B` | MCP tool filter / retireIfSettled manager |
+| `VH` | Plugin marketplace / MCP config loader |
+| `LB` | File extension checker (.mcpb / .dxt) |
+| `GH` | Plugin detail resolver |
+| `l6` | Plugin list helper |
+| `v6` | MCP server config builder (stdio/sse/http/sdk) |
+| `dH` | Orphaned-permission tracker |
+| `E` | Permission entry |
+| `jfA` | IDE claim/connection negotiator |
+| `t9A` | Auth token file writer |
+| `dN6` | Auth directory path builder |
+| `$s_` | Auth config path builder |
+| `EH` | String coercer (String wrapper) |
+| `RB5` | Send-claim with timeout helper |
+| `CB5` | Low-level socket connect helper |
+| `g8` | Abort-aware timer / promise helper |
+| `SB5` | Claim frame builder caller |
+| `QM` | Error message formatter (J8) |
+| `DF` | Binary frame encoder (Buffer.allocUnsafe, writeUInt32BE) |
+| `ZfA` | Session lifecycle manager (create/kill/roster) |
+| `gK` | Job config path builder |
+| `t9` | Job state file reader/writer |
+| `YD` | Active-session checker |
+| `bV` | Session activity helper |
+| `ff` | Atomic config file writer (B3 + RH) |
+| `B3` | Atomic file write (randomBytes + writeFile + rename) |
+| `Oj` | Cache-delete helper |
+| `T86` | Roster file watcher / parser |
+| `TF` | Roster file reader |
+| `htL` | Roster file writer |
+| `MfH` | PTY socket path builder |
+| `GF` | PTY socket file manager |
+| `Ls_` | PTY instance tracker |
+| `W86` | PTY config path builder |
+| `Y` | Session map manager (get/set/delete/start/stop) |
+| `u2H` | Session config builder |
+| `xe1` | Session display formatter |
+| `G` | Remote-control startup handler |
+| `dVK` | Heartbeat emitter |
+| `V` | Session instance |
+| `R` | Idle exit timer |
+| `HM` | IDE selection prompt helper |
+| `v8` | Platform-aware command builder |
+| `piH` | IDE tool list display renderer |
+| `kI` | Tool/capability renderer |
+| `to` | IDE open dispatch helper |
+| `neL` | IDE status sub-component |
+| `J6` | IDE store subscriber |
+| `hJ_` | App-state context accessor |
+| `fA` | App-state context read helper |
+| `m5` | Shared context / memo hook helper |
+| `Mk` | Telemetry hash / cleanup manager |
+| `T66` | Telemetry event hasher |
+| `prH` | Hash builder (createHash sha256) |
+| `O` | Fallback render helper |
+| `I8` | Render output helper |
+| `j` | Active connection map iterator |
+| `y` | Background session writer |
+| `XP` | Extension capability query |
+| `RGH` | RPC client factory |
+| `W` | OS-detection / uppercase helper |
+| `DL` | Platform discriminator |
+| `X` | Socket reader / frame splitter |
+| `J` | Connection reference |
+| `Qf` | Socket end/reply helper |
+| `FB5` | Full daemon protocol handler |
+| `gB5` | Frame builder helper |
+| `tO` | Background-service error tagger |
+| `PfA` | Protocol frame acknowledgement |
+| `VVK` | Frame dispatch with timeout |
+| `P` | Repaint coordinator |
+| `P0` | PTY path resolver |
+| `c$` | PTY realpath normalizer |
+| `s$H` | PTY log tail reader |
+| `UB5` | Attach-stall tracker |
+| `p` | Write-flush helper |
+| `b` | Session stall watchdog |
+| `tAH` | Terminal resize helper |
+| `BB5` | Session re-adopt helper |
+| `I` | Away-summary generator |
+| `o` | Voice toggle silence timeout |
+| `x` | Idle exit timer updater |
+| `r` | Voice focus silence timeout |
+| `g` | JSX render pair (B + $) |
+| `l` | Filter helper for terminal output |
+| `a` | Terminal stream writer |
+| `c` | Terminal passthrough stream |
+| `_R6` | Raw socket write/destroy helper |
+| `T` | Terminal renderer pair |

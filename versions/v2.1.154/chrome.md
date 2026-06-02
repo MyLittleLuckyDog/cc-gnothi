@@ -1,13 +1,13 @@
 ---
 type: feature-spec
 feature: "chrome"
-cc_version: 2.1.154
+cc_version: "2.1.154"
+updated: "2026-06-02"
 tags: ["chrome", "commands", "slash-commands"]
-updated: "2026-05-19"
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.144
-analysis_basis: "CC v2.1.144 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/chrome`
 
-> Analysis basis: CC v2.1.144 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.144
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/chrome` slash command provides access to settings for the **Claude in Chrome** browser integration (currently in beta). It is registered as a `local-jsx` command, meaning its output is rendered as a JSX component directly within the Claude Code CLI interface rather than producing plain text output.
+The `/chrome` command opens or navigates to the **Claude in Chrome (Beta)** settings panel within the Claude Code CLI. It is registered as a `local-jsx` command, meaning its output is rendered as a local JSX UI component rather than dispatching a prompt to the agent. The command's async handler (`WD7`) is resolved via module `I$q` and loaded inline.
 
 ---
 
@@ -32,61 +32,86 @@ The `/chrome` slash command provides access to settings for the **Claude in Chro
 |---|---|
 | type | `local-jsx` |
 | name | `chrome` |
-| description | `Claude in Chrome (beta) settings` |
-| module_id | `DEq` |
+| description | `Claude in Chrome (Beta) settings` |
+| module\_id | `I$q` |
+| load\_inline | `true` |
+| handler | `WD7` (AsyncFunction, resolved via `module_id`) |
+| loc\_byte span | `11305321` – `11305498` |
+| loc\_line | `7103` |
+| `loc_byte_end` | `11305498` |
+| `arbor_handler.name` | `WD7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::WD7` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.144 bundle.js:+11644201
+Analysis basis: CC v2.1.132 bundle.js:+11305321
 
 ---
 
 ## Input Branching
 
-The AST traversal at depth ≤ 2 returned an empty call graph for module `DEq`. No branching paths, argument parsing logic, or conditional dispatch were recoverable at this traversal depth.
+The depth-2 call-graph traversal returned no edges for this command, indicating that the handler (`WD7`) either resolves entirely within module `I$q` without further cross-module calls visible at depth ≤ 2, or that its logic is self-contained within the async function body.
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-The following flowchart reflects only what can be confirmed from registration data:
+Because no branching signals were recovered, the input-branching diagram reflects what can be structurally inferred from the registration type and handler shape:
 
 ```mermaid
 flowchart TD
-    A([User types /chrome]) --> B{Command matched?}
-    B -- Yes --> C[Dispatch to module DEq]
-    B -- No --> D[No-op / command not found]
-    C --> E[Render local-jsx component]
-    E --> F([Chrome beta settings UI displayed])
+    A([User types /chrome]) --> B[CLI matches command name 'chrome']
+    B --> C{Registration type?}
+    C -- local-jsx --> D[Load module I$q inline]
+    D --> E[Invoke async handler WD7]
+    E --> F[Render JSX settings panel for Claude in Chrome Beta]
+    F --> G([Settings UI displayed in terminal / UI surface])
 ```
 
-Analysis basis: CC v2.1.144 bundle.js:+11644201
+> **Note:** No branching literals or conditional call-graph edges were found at depth ≤ 2. The flowchart above represents the known structural path only.
+
+<!-- TODO: internal handler branching not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
 ## Behavioral Spec
 
-### Command Dispatch and JSX Rendering
+### Command Dispatch and Handler Invocation
 
-Because the command type is `local-jsx`, the CLI framework renders the command's output as a React/JSX component inline in the terminal UI rather than streaming text. The general dispatch pattern for `local-jsx` commands follows the pseudocode below:
+Because `/chrome` is typed as `local-jsx`, the CLI does **not** forward user input to the language model as a prompt. Instead, control passes directly to the registered async handler after module resolution.
 
 ```
-function dispatchLocalJsxCommand(commandName, args, appState):
-    registration = lookupCommand(commandName)
-    if registration.type != "local-jsx":
-        return fallbackHandler(commandName, args)
-    component = loadModule(registration.module_id)   // module "DEq"
-    props = buildProps(args, appState)
-    return renderJSX(component, props)
+async function chromeCommandHandler(context):
+    # Step 1 — Module resolution
+    module = await loadInlineModule("I$q")
+
+    # Step 2 — Handler invocation
+    result = await module.WD7(context)
+
+    # Step 3 — JSX rendering
+    # result is a JSX element or component tree
+    renderLocalJSX(result)
+
+    # Step 4 — Display
+    # The rendered component presents Chrome Beta settings to the user
+    displayComponent(result)
 ```
 
-The specific internal behavior of module `DEq` (the Chrome beta settings UI) could not be recovered at traversal depth ≤ 2.
+Analysis basis: CC v2.1.132 bundle.js:+11305321
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+### Handler Type
 
-Analysis basis: CC v2.1.144 bundle.js:+11644201
+The handler `WD7` is declared as an `AsyncFunction` (Analysis basis: CC v2.1.132 bundle.js:+11305321), meaning it may perform asynchronous operations (e.g., reading configuration state, checking browser integration availability) before returning the JSX tree. Callers must await its resolution before rendering.
 
-### Beta Status
+### Rendering Model
 
-The description string `"Claude in Chrome (beta) settings"` confirms the feature is explicitly marked as beta at this version. This label is part of the registered description field and is displayed to the user wherever command descriptions appear (e.g., `/help` output).
+The `local-jsx` type distinguishes `/chrome` from `prompt`-type commands:
 
-Analysis basis: CC v2.1.144 bundle.js:+11644201
+| Characteristic | `local-jsx` (`/chrome`) | `prompt`-type |
+|---|---|---|
+| Sends text to model | No | Yes |
+| Renders UI locally | Yes | No |
+| Async handler | Yes (`WD7`) | Varies |
+| Agent interaction | None | Full round-trip |
+
+<!-- TODO: JSX component tree returned by WD7 not recoverable at depth-2; needs --depth 4 -->
 
 ---
 
@@ -94,11 +119,13 @@ Analysis basis: CC v2.1.144 bundle.js:+11644201
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at traversal depth ≤ 2 <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | None detected at depth ≤ 2 (`telemetry: []`) |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Render mode | `local-jsx` — output is rendered as an inline JSX component, not as streamed text |
+| Module loaded | `I$q` loaded inline at invocation time (`load_inline: true`) |
+
+> Because the telemetry array is empty and the call-graph returned no edges, no side-effect claims beyond module loading can be made with confidence.
 
 ---
 
@@ -106,15 +133,16 @@ Analysis basis: CC v2.1.144 bundle.js:+11644201
 
 | Version | Change |
 |---|---|
-| v2.1.144 | Initial analysis — command registered as `local-jsx`, module `DEq`, beta status confirmed |
+| v2.1.132 | Initial analysis — `local-jsx` command registered at bundle.js:+11305321, handler `WD7` in module `I$q` |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting text output**: Because `/chrome` is a `local-jsx` command, it renders a UI component rather than printing text. Piping or scripting its output will not yield plain-text settings data.
-2. **Assuming stable behavior from this spec alone**: The internal logic of module `DEq` was not recoverable at AST traversal depth ≤ 2. Settings options, toggles, and persistence behavior require a deeper traversal (`--depth 4`) before they can be documented authoritatively.
-3. **Treating beta features as stable**: The `(beta)` designation in the description indicates the Chrome integration may change significantly across minor versions. Do not rely on undocumented sub-behaviors persisting beyond v2.1.144.
+1. **Expecting a model response.** `/chrome` is a `local-jsx` command and does not send any prompt to Claude. Users should not expect a conversational reply; the command exclusively renders a settings panel.
+2. **Passing arguments.** No argument-handling literals or parameter-parsing call edges were found at depth ≤ 2. Passing extra text after `/chrome` is likely ignored or unsupported.
+3. **Assuming synchronous rendering.** The handler `WD7` is an `AsyncFunction`; in constrained environments or slow storage, the settings panel may not appear instantaneously.
+4. **Confusing with a browser-launch command.** `/chrome` does not launch or control a Chrome browser process directly from the CLI; it surfaces *settings* for the Claude in Chrome Beta integration.
 
 ---
 
@@ -124,6 +152,9 @@ Analysis basis: CC v2.1.144 bundle.js:+11644201
 
 | Identifier | Role |
 |---|---|
-| `DEq` | Module ID for the `/chrome` command's JSX component implementation |
+| `WD7` | Async handler function for the `/chrome` command; resolved from module `I$q` via `module_id` path; returns JSX component tree for Chrome Beta settings |
+| `I$q` | Module containing the `/chrome` handler; loaded inline (`load_inline: true`) at command invocation |
 
-> No additional obfuscated short-form identifiers were present in the extracted AST data for this command at traversal depth ≤ 2.
+---
+
+*Note: The call-graph for this command returned zero edges at depth ≤ 2 and no string literals or telemetry events were extracted. All behavioral claims beyond registration metadata are structurally inferred and marked with `<!-- TODO -->` where deeper traversal is required.*

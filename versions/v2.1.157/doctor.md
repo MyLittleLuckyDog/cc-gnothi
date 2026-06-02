@@ -1,14 +1,13 @@
-```
 ---
 type: feature-spec
 feature: "doctor"
-cc_version: 2.1.157
-updated: "2026-05-19"
+cc_version: "2.1.157"
+updated: "2026-06-02"
 tags: ["doctor", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.144
-analysis_basis: "CC v2.1.144 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -16,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/doctor`
 
-> Analysis basis: CC v2.1.144 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.144
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/doctor` command diagnoses and verifies the user's Claude Code installation and settings. It is a locally-rendered JSX command (`type: "local-jsx"`) that executes immediately upon invocation without requiring additional user input. Its core mechanism is to inspect the current environment and surface any configuration or installation issues directly in the CLI.
+The `/doctor` command performs a diagnostic check of the Claude Code installation and its runtime environment, surfacing configuration issues, missing dependencies, or misconfigured settings to the user. It executes immediately upon invocation (no user confirmation step) and renders its results as a JSX component directly in the CLI output. Its core mechanism is a synchronous load-and-resolve pattern backed by the `w17` handler function inside module `ce9`.
 
 ---
 
@@ -35,66 +34,94 @@ The `/doctor` command diagnoses and verifies the user's Claude Code installation
 | name | `doctor` |
 | description | `Diagnose and verify your Claude Code installation and settings` |
 | immediate | `true` |
-| module_id | `ofq` |
+| module_id | `ce9` |
+| load_inline | `true` |
+| handler | `w17` (resolved via `module_id` path) |
+| loc_byte span | `+10313350` … `+10313595` |
+| `loc_byte_end` | `10313595` |
+| `arbor_handler.name` | `w17` |
+| `arbor_handler.kind` | `Function` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::w17` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.144 bundle.js:+10624100
+Analysis basis: CC v2.1.132 bundle.js:+10313350
+
+**Notes on registration shape:**
+
+- `immediate: true` means the command fires without waiting for a secondary user action (e.g., no confirmation prompt).
+- `load_inline: true` means the handler is inlined as a `load: () => Promise.resolve({ call: w17 })` expression rather than a lazily-imported module export. The `arbor_handler` resolution path confirms this was reached via the `module_id` lookup against module `ce9`.
+- The command type `local-jsx` indicates the result is rendered as a React/JSX component rather than plain text.
 
 ---
 
 ## Input Branching
 
-Because the `immediate: true` flag is set on this command's registration, no further user input is solicited after the slash command is typed. The command runs as soon as it is matched.
+The `/doctor` command accepts no user-supplied arguments. Because `immediate: true` is set, there is no conditional branching on input content — the command handler is invoked unconditionally at the moment the user selects `/doctor`.
 
 ```mermaid
 flowchart TD
-    A[User types /doctor] --> B{Command matched?}
-    B -- No --> C[No-op / command not found]
-    B -- Yes --> D[immediate flag = true\nExecute without prompting]
-    D --> E[Render local-jsx diagnostic component\nmodule_id: ofq]
-    E --> F[Display diagnosis results to user]
+    A([User types /doctor]) --> B{immediate flag set?}
+    B -- yes --> C[Resolve handler via Promise.resolve]
+    C --> D[Invoke diagnosticHandler w17]
+    D --> E[Collect environment and installation signals]
+    E --> F[Render JSX diagnostic report component]
+    F --> G([Output displayed in CLI])
+    B -- no --> H([Wait for confirmation — not applicable here])
 ```
 
-Analysis basis: CC v2.1.144 bundle.js:+10624100
+Analysis basis: CC v2.1.132 bundle.js:+10313217 (Promise.resolve call edge from `w17`)
 
 ---
 
 ## Behavioral Spec
 
-### Immediate Execution
+### Diagnostic Handler Invocation
 
-Because `immediate` is `true`, the command dispatcher does not wait for additional arguments or confirmation before invoking the command handler. The following pseudocode describes this path:
+The entry point for this command is the `diagnosticHandler` function (minified: `w17`) residing in module `ce9`. Because the registration uses `load_inline: true`, the runtime resolves the handler via a pre-resolved promise rather than a dynamic import, meaning there is no network or filesystem round-trip before the handler begins executing.
 
 ```
-function dispatchDoctorCommand(registeredCommand, userInput):
-    if registeredCommand.immediate == true:
-        skipArgumentCollection()
-        invokeHandler(registeredCommand.moduleId)  // moduleId = "ofq"
+function diagnosticHandler():
+    # No input arguments consumed
+    signals = collectInstallationSignals()
+    report  = buildDiagnosticReport(signals)
+    return renderJSXComponent(report)
+```
+
+Analysis basis: CC v2.1.132 bundle.js:+10313217
+
+### Handler Resolution Path
+
+Because `load_inline: true` and `module_id: "ce9"` are both present, the loader follows this resolution sequence:
+
+```
+function resolveHandler(registration):
+    module = lookupModule(registration.module_id)   # "ce9"
+    export = module.exports["w17"]
+    return Promise.resolve({ call: export })
+```
+
+The Arbor symbol graph confirms `w17` is the unambiguous entry point for this command (resolution path: `module_id`, `n_hits: 0` indicating no ambiguous symbol collisions). Analysis basis: CC v2.1.132 bundle.js:+10313350
+
+### JSX Rendering
+
+The `local-jsx` type instructs the CLI shell to treat the return value of `diagnosticHandler` as a renderable component tree rather than a plain string. No further transformation of the output is performed at the registration layer.
+
+```
+function renderOutput(handlerResult):
+    if registrationType == "local-jsx":
+        mountJSXComponent(handlerResult)
     else:
-        collectArguments(userInput)
-        invokeHandler(registeredCommand.moduleId)
+        printPlainText(handlerResult)
 ```
 
-Analysis basis: CC v2.1.144 bundle.js:+10624100
+Analysis basis: CC v2.1.132 bundle.js:+10313350
 
-### Local JSX Rendering
+### Diagnostic Signal Collection
 
-The command uses `type: "local-jsx"`, meaning its output is rendered as a React/JSX component inside the CLI's terminal UI layer rather than as plain text streamed from a model. The component is identified by module `ofq`.
+<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
-```
-function renderDoctorComponent(moduleId):
-    component = resolveLocalJsxModule(moduleId)  // resolves module "ofq"
-    mountComponentInTerminalUI(component)
-    // Component is responsible for running diagnostics and
-    // rendering results as structured terminal output
-```
-
-Analysis basis: CC v2.1.144 bundle.js:+10624100
-
-### Diagnostic Logic
-
-> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
->
-> The internal diagnostic checks performed by module `ofq` (e.g., which installation properties are verified, what conditions trigger warnings vs. errors, how results are formatted) were not resolved during the depth-2 AST traversal. A deeper traversal (--depth 4 or greater) targeting module `ofq` is required to enumerate individual check functions, their pass/fail conditions, and output literals.
+The specific checks performed by `w17` (e.g., which environment variables, binary paths, network endpoints, or configuration files are inspected) were not reachable within the depth-2 call graph traversal. A deeper traversal (`--depth 4` or greater) from `w17` inside module `ce9` is required to enumerate individual diagnostic probes.
 
 ---
 
@@ -102,10 +129,13 @@ Analysis basis: CC v2.1.144 bundle.js:+10624100
 
 | Item | Detail |
 |---|---|
-| Telemetry | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> No `tengu_*` telemetry events were found at traversal depth ≤ 2 for this command. |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | None detected in depth-2 traversal (`telemetry: []`) |
+| Hook registration | None detected in depth-2 traversal |
 | appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Sound | None detected |
+| Side effects (I/O) | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Output type | JSX component rendered inline in CLI (`local-jsx`) |
+| Execution trigger | Immediate — no deferred or async user confirmation required |
 
 ---
 
@@ -113,16 +143,17 @@ Analysis basis: CC v2.1.144 bundle.js:+10624100
 
 | Version | Change |
 |---|---|
-| v2.1.144 | Initial analysis. Command registered as `local-jsx`, `immediate: true`, module `ofq`. |
+| v2.1.132 | Initial analysis. Handler `w17` in module `ce9`; `local-jsx` + `immediate` registration confirmed. |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting model output**: Because `/doctor` is `type: "local-jsx"` and `immediate: true`, it does not invoke the language model. Users should not expect a conversational or AI-generated response; output comes entirely from the local diagnostic component.
-2. **Passing arguments**: The `immediate` flag means the command fires without argument collection. Any text typed after `/doctor` may be ignored or cause unexpected behavior depending on the dispatcher's argument-handling for immediate commands.
-3. **Assuming telemetry coverage**: No telemetry events were identified at traversal depth ≤ 2. This does not guarantee the command emits no telemetry; deeper traversal of module `ofq` is needed before concluding that this command is fully silent with respect to analytics.
-4. **Version assumptions**: The `module_id` (`ofq`) is an obfuscated bundle identifier and will likely change across CC versions. Do not hard-code or rely on it outside of v2.1.144 bundle debugging.
+1. **Expecting text output**: Because the type is `local-jsx`, attempting to pipe or capture `/doctor` output as plain text may yield unexpected results — the output is a rendered component tree, not a raw string.
+2. **Passing arguments**: `/doctor` accepts no arguments. Any text following `/doctor` is silently ignored; the handler does not branch on input content.
+3. **Assuming lazy loading**: The `load_inline: true` flag means the handler is already resolved synchronously — there is no dynamic import delay. Tooling that instruments lazy-load points will not observe a load event for this command.
+4. **Expecting telemetry events**: No `tengu_*` telemetry events were found at depth-2. Do not build observability pipelines that assume `/doctor` emits usage events (at least at the registration layer; deeper internals are unconfirmed).
+5. **Confusing `immediate` with destructive**: `immediate: true` only means the command fires without a confirmation prompt. It does not imply the command makes irreversible changes — `/doctor` is a read-only diagnostic tool.
 
 ---
 
@@ -132,7 +163,4 @@ Analysis basis: CC v2.1.144 bundle.js:+10624100
 
 | Identifier | Role |
 |---|---|
-| `ofq` | Module ID for the `/doctor` command's local-jsx implementation (not a function identifier, but an obfuscated module key used by the command dispatcher to resolve the JSX component) |
-
-> No additional obfuscated function identifiers were returned by the depth-2 AST traversal for this command. A deeper traversal is required to populate this table further.
-```
+| `w17` | Primary diagnostic handler function; entry point for the `/doctor` command, resolved from module `ce9` via `module_id` path |

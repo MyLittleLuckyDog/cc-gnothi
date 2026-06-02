@@ -1,13 +1,12 @@
 ---
 type: feature-spec
 feature: "update"
-cc_version: 2.1.153
-updated: "2026-05-26"
+cc_version: "2.1.153"
+updated: "2026-06-02"
 tags: ["update", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.150
-analysis_basis: "CC v2.1.150 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.153 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +14,14 @@ license: "AGPL-3.0-only"
 
 # `/update`
 
-> Analysis basis: CC v2.1.150 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.150
+> Analysis basis: CC v2.1.153 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.153
 
 ---
 
 ## Overview
 
-The `/update` command upgrades the running Claude Code process to the latest installed version while preserving the current conversation context. It locates the `claude` binary using `Bun.which`, validates that no background tasks are active and that the session directory matches the original project, then performs an in-process teardown followed by an `execve`-style relaunch that passes `--resume` so the conversation continues seamlessly.
+The `/update` command performs an in-place upgrade of the Claude Code CLI to its latest version while preserving the current conversation session. It orchestrates a full teardown-and-relaunch sequence: flushing in-flight I/O, draining analytics, serializing session state, then exec-replacing the running process with the newly installed binary. The conversation continues seamlessly after reconnection.
 
 ---
 
@@ -33,284 +32,225 @@ The `/update` command upgrades the running Claude Code process to the latest ins
 | type | `local` |
 | name | `update` |
 | description | `Switch to the latest version (conversation continues)` |
+| loc_byte | `12329770` |
+| loc_byte_end | `12329972` |
+| loc_line | `9234` |
 | supportsNonInteractive | `false` |
 | isHidden | `true` |
-| module_id | `VF1` |
+| module_id | `Gn1` |
+| load_inline | `true` |
+| arbor_handler.name | `BL5` |
+| arbor_handler.fqn | `claude-2.1.153::BL5` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.150 bundle.js:+12273027
+Analysis basis: CC v2.1.153 bundle.js:+12329770
 
 ---
 
 ## Input Branching
 
-The command performs several sequential guard checks before initiating the relaunch sequence. The flowchart below captures all branching paths found in the call graph.
+The command has five distinct guard branches before the relaunch sequence begins, plus additional sub-branches during teardown — a Mermaid flowchart is required.
 
 ```mermaid
 flowchart TD
-    A["/update invoked"] --> B{Locate claude binary\nvia Bun.which}
-    B -- "not found" --> C["Emit tengu_update_refused\nReturn error message"]
-    B -- "found" --> D{Check active background tasks\nstatus == 'running' or 'pending'}
-    D -- "tasks active" --> E["Return: Cannot /update while background tasks\nare running — wait for them to finish,\nthen try again."]
-    D -- "no active tasks" --> F{Session directory matches\noriginal project directory?}
-    F -- "mismatch" --> G["Return: Cannot /update — this session was\nresumed from a different project directory.\nRestart manually with --resume to continue\non the latest version."]
-    F -- "match" --> H["Display: Switching to latest Claude Code…\nreconnecting"]
-    H --> I["Append last-prompt entry to conversation log"]
-    I --> J["Flush SDK message bridge\n(timeout: 2000 ms)"]
-    J --> K["Write SDK messages via O.writeSdkMessages"]
-    K --> L["Flush analytics\n(timeout: 1000 ms)"]
-    L --> M["Unmount UI / teardown renderer"]
-    M --> N["Drain async queues (kCH drain)"]
-    N --> O_["Run cleanup hooks\n(timeout: 30000 ms)"]
-    O_ --> P["Remove all process signal listeners\n(SIGINT, SIGTERM, SIGHUP)"]
-    P --> Q["Persist relaunch state via nX (writeFileSync)"]
-    Q --> R["execve into new claude binary\nwith --resume flag"]
-    R -- "execve fails" --> S["Write relaunch_spawn_error\nExit with code 128"]
-    R -- "success" --> T["Process replaced in-place\n(conversation resumes)"]
+    A(["/update invoked"]) --> B{Binary locatable?\nvia Bun.which}
+    B -- "not found" --> C[Emit tengu_update_refused\nReturn error to user]
+    B -- "found" --> D{Background tasks\nin 'running' or 'pending' state?}
+    D -- "yes" --> E["Return error:\n'Cannot /update while background\ntasks are running — wait for\nthem to finish, then try again.'"]
+    D -- "no" --> F{Session resumed\nfrom a different\nproject directory?}
+    F -- "yes (assistant- prefix check)" --> G["Return error:\n'Cannot /update — this session\nwas resumed from a different\nproject directory. Restart\nmanually with --resume to\ncontinue on the latest version.'"]
+    F -- "no" --> H[Serialize session state\nWrite SDK messages to bridge\nEmit user-visible message:\n'Switching to latest Claude Code…\nreconnecting']
+    H --> I[Flush bridge output\nTimeout: 2000 ms]
+    I --> J[Drain analytics\nTimeout: 30000 ms flush / 500 ms analytics]
+    J --> K[Teardown I/O / MCP connections\nStop background sessions\nDrain telemetry queue]
+    K --> L[Build relaunch argv\nInclude --resume + session flags\n+ --add-dir + permission flags]
+    L --> M{exec-replace\ndF1.spawnSync}
+    M -- "spawn error" --> N[Log relaunch_spawn_error\nExit with code 128]
+    M -- "success" --> O([New process takes over\nConversation resumes])
 ```
-
-Analysis basis: CC v2.1.150 bundle.js:+12270871, +12271232, +12271254, +12271335, +12271576, +12272087, +12272154, +12272157, +12272208, +12003575, +12003824
 
 ---
 
 ## Behavioral Spec
 
-### Binary Resolution
+### 1. Binary Discovery
+
+Before any update logic runs, the handler calls a resolver function (mapped from `mvA`) that invokes `Bun.which("claude")` to confirm the binary is reachable on `PATH`.
 
 ```
-function resolveBinary():
+function discoverBinary():
     path = Bun.which("claude")
-    if path is null or undefined:
-        emitTelemetry("tengu_update_refused")
-        return failure("claude binary not found")
-    return success(path)
+    if path is null:
+        emit telemetry: tengu_update_refused
+        return Err("binary not found")
+    return Ok(path)
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+12270871, +12270874, +1059700, +1059743
+Analysis basis: CC v2.1.153 bundle.js:+12327576, +12327579, +1061403
 
----
+### 2. Version Directory Resolution
 
-### Background-Task Guard
+A helper (mapped from `Wh` → `h28` / `K_H` / `L_H`) resolves the versioned installation paths under the user's home directory.
+
+```
+function resolveVersionPaths(homeDir):
+    versionsDir = path.join(homeDir, ".local", "share", "versions")
+    binDir = path.join(homeDir, ".local", "share", "bin")
+    return { versionsDir, binDir }
+```
+
+Key path segments found: `".local"`, `"share"`, `"versions"`, `"bin"`.
+
+Analysis basis: CC v2.1.153 bundle.js:+9033520, +7736788, +7736797, +7736868
+
+### 3. Background-Task Guard
+
+The handler reads background-task state via `Object.values` and checks for tasks whose status is `"running"` or `"pending"`. If any are found, the command is rejected.
 
 ```
 function checkBackgroundTasks(appState):
-    taskStatuses = Object.values(appState.tasks)
-    for each status in taskStatuses:
-        if status == "running" or status == "pending":
-            return failure(
-                "Cannot /update while background tasks are running " +
-                "— wait for them to finish, then try again."
-            )
-    return success()
+    tasks = Object.values(appState.backgroundTasks)
+    blocked = tasks.filter(t => t.status == "running" || t.status == "pending")
+    if blocked.length > 0:
+        return Err("Cannot /update while background tasks are running — wait for them to finish, then try again.")
+    return Ok()
 ```
 
-The literal error message is fixed at the bundle level.
-Analysis basis: CC v2.1.150 bundle.js:+12271194, +12271232, +12271254, +12271335
+Error string literal: `"Cannot /update while background tasks are running — wait for them to finish, then try again."` (bundle.js:+12328040)
 
----
+Analysis basis: CC v2.1.153 bundle.js:+12327899, +12327937, +12327959, +12328040
 
-### Project-Directory Guard
+### 4. Project-Directory Mismatch Guard
 
-```
-function checkProjectDirectoryMatch(currentSession, originalSession):
-    currentDir  = resolveSessionDirectory(currentSession)   // yG + NP.basename
-    originalDir = resolveSessionDirectory(originalSession)
-    if currentDir != originalDir:
-        return failure(
-            "Cannot /update — this session was resumed from a different " +
-            "project directory. Restart manually with --resume to continue " +
-            "on the latest version."
-        )
-    return success()
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+12271442, +12271449, +12271576, +4062208
-
----
-
-### Conversation State Preservation
-
-Before teardown, the command persists the last user prompt and conversation messages so the relaunched process can resume them.
+The handler inspects the session ID prefix for the `"assistant-"` marker to detect whether the session was resumed from a different working directory.
 
 ```
-function preserveConversationState(conversationLog):
-    // Append a "last-prompt" marker entry so the relaunched process
-    // knows where to resume
-    conversationLog.appendEntry("last-prompt", currentPrompt)   // ma_ + _.appendEntry
-
-    // Generate a fresh UUID for the resumed session
-    newSessionId = crypto.randomUUID()                          // EF1 + qV8.randomUUID
-
-    // Filter conversation to assistant-prefixed messages only
-    assistantMessages = messages.filter(m => m.id.startsWith("assistant-"))
-
-    // Write SDK messages to persistent store
-    sdkOutput.writeSdkMessages(assistantMessages)               // O.writeSdkMessages
+function checkProjectDirectoryMatch(sessionId, currentDir):
+    if sessionId.startsWith("assistant-") and currentDir != originalSessionDir:
+        return Err("Cannot /update — this session was resumed from a different project directory. Restart manually with --resume to continue on the latest version.")
+    return Ok()
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+12270957, +12271877, +12271902, +12272063, +12272083, +12269944, +12770352, +12770372
+Error string literal: `"Cannot /update — this session was resumed from a different project directory…"` (bundle.js:+12328281)
 
----
+Analysis basis: CC v2.1.153 bundle.js:+12328147, +12328582, +12328281
 
-### Bridge Flush
+### 5. Session State Serialization & Bridge Write
 
-```
-function flushBridge(bridge):
-    // Attempt to flush the SDK message bridge within a 2000 ms window
-    result = await Promise.race([
-        bridge.flush(),
-        timeout(2000, label="bridge flush")
-    ])
-    return result
-```
-
-Flush timeout: 2000 milliseconds.
-Analysis basis: CC v2.1.150 bundle.js:+12272154, +12272157, +12272167, +12272172, +2226079, +2226142
-
----
-
-### UI Teardown
+After all guards pass, the handler generates a fresh UUID (via `wI8.randomUUID`, function `Pn1`), serializes pending SDK messages, and writes them to the bridge output stream so they survive the exec-replace.
 
 ```
-function teardownUI():
-    // Write any remaining output synchronously to stdout
-    XDH.writeSync(pendingOutput)
-    // Retrieve any mounted Ink/React renderer instance
-    renderer = Y7.get(rendererId)
-    if renderer is not null:
-        renderer.unmount()          // H.unmount
-    // Finalize terminal state
-    wS.finalizeTerminal()
-    // Flush last lines to terminal
-    l68.flushLines()
+function serializeAndBridgeSession(state, outputStream):
+    resumeId = crypto.randomUUID()
+    messages = collectSdkMessages(state)
+    outputStream.writeSdkMessages(messages)
+    notifyUser("Switching to latest Claude Code… reconnecting")
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+5283718, +5283744, +5283795, +5283829, +5283877
+User-visible string: `"Switching to latest Claude Code… reconnecting"` (bundle.js:+12328792)
 
----
+Analysis basis: CC v2.1.153 bundle.js:+12328768, +12328788, +12328792, +12326649
 
-### Analytics Flush
+### 6. Flush & Drain Sequence
 
-```
-function flushAnalytics(analyticsClient):
-    result = await Promise.race([
-        analyticsClient.flush(),
-        timeout(1000, label="analytics flush timeout")
-    ])
-    return result
-```
-
-Analytics flush timeout: 1000 milliseconds.
-Analysis basis: CC v2.1.150 bundle.js:+12003008, +12003129, +12003134
-
----
-
-### Cleanup and Queue Drain
+The teardown proceeds in three timed phases:
 
 ```
-function drainAndCleanup():
-    // Drain any pending async write queues
-    W7A.drain()                                 // kCH -> W7A.drain
+function flushAndDrain(bridge, analyticsClient):
+    # Phase 1: bridge flush with 2000 ms deadline
+    await withTimeout(bridge.flush(), 2000, "bridge flush")
 
-    // Run all registered cleanup hooks with a 30000 ms deadline
-    await Promise.race([
-        runCleanupHooks(),
-        timeout(30000, label="flush timeout (relaunch)")
-    ])
+    # Phase 2: analytics teardown with 500 ms race + 30000 ms outer limit
+    await withTimeout(
+        Promise.race([analyticsClient.teardown(), delay(500)]),
+        30000, "analytics flush timeout"
+    )
+
+    # Phase 3: cleanup timeout guard
+    scheduleHardTimeout("cleanup timeout")
 ```
 
-Cleanup hook timeout: 30000 milliseconds.
-Analysis basis: CC v2.1.150 bundle.js:+12003016, +12003022, +12003067, +12003078, +58315
+Timeouts (all as facts):
+- Bridge flush deadline: **2000 ms** (bundle.js:+12328872)
+- Analytics teardown race inner: **500 ms** (bundle.js:+5318270)
+- Outer flush guard: **30000 ms** (bundle.js:+12056794)
 
----
+Analysis basis: CC v2.1.153 bundle.js:+12328862, +12328872, +12328913, +12056786, +12056794
 
-### Signal Handler Reset
+### 7. Relaunch Argument Construction
 
-```
-function resetSignalHandlers():
-    // Remove all existing listeners to prevent double-handling
-    // after execve replaces the process image
-    process.removeAllListeners("SIGINT")
-    process.removeAllListeners("SIGTERM")
-    process.removeAllListeners("SIGHUP")
-
-    // Install minimal pass-through handlers for the window
-    // between teardown and exec
-    process.on("SIGINT",  noOp)
-    process.on("SIGTERM", noOp)
-    process.on("SIGHUP",  noOp)
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+12003489, +12003498, +12003508, +12003518, +12003548
-
----
-
-### Relaunch via execve
+A helper (mapped from `bN8`) assembles the argv array for the replacement process, reconstructing the original CLI invocation and appending session-continuity flags.
 
 ```
-function relaunch(binaryPath, currentArgs, resumeStateFile):
-    // Build argv: original invocation args plus --resume pointing
-    // to the persisted state file
-    newArgv = buildArgv(binaryPath, currentArgs, "--resume", resumeStateFile)
-
-    // Persist relaunch metadata to a temp file so the new process
-    // can restore conversation state
-    nX.writeFileSync(joinPath(...), serializedState)             // nX
-
-    // Load platform-specific libc for execve
-    if platform == "macos":
-        lib = M.dlopen("/usr/lib/libSystem.B.dylib", ffiSchema)
-    else:
-        lib = M.dlopen("libc.so.6", ffiSchema)                  // Hu1
-
-    // Replace the current process image; does not return on success
-    f.execve(binaryPath, newArgv, currentEnv)                   // Hu1 -> f.execve
-
-    // Reached only if execve fails
-    nX.writeFileSync("relaunch_spawn_error", errorInfo)
-    process.exit(128)
+function buildRelaunchArgv(originalArgv, sessionId, addedDirs, permissionMode, effortLevel):
+    args = Array.from(originalArgv)
+    args.push("--resume", sessionId)
+    for dir in addedDirs:
+        args.push("--add-dir", dir)
+    if permissionMode:
+        args.push("--permission-mode", permissionMode)
+    if effortLevel:
+        args.push("--effort", effortLevel)
+    if dangerouslySkipPermissions:
+        args.push("--allow-dangerously-skip-permissions")
+    return args
 ```
 
-Exit code on relaunch failure: 128.
-Analysis basis: CC v2.1.150 bundle.js:+12002474, +12002098, +12002119, +12002148, +12002954, +12003575, +12003797, +12003800, +12003824, +12003937, +190091
+CLI flags forwarded: `--resume`, `--add-dir`, `--permission-mode`, `--effort`, `--allow-dangerously-skip-permissions`.
 
----
+Analysis basis: CC v2.1.153 bundle.js:+12056727, +12058251, +12058389, +12058531, +12058548, +12329094
 
-### Cross-Platform execve Loading
+### 8. Exec-Replace via spawnSync
 
-```
-function loadExecveLibrary(platform):
-    if platform == "windows":
-        // execve via Windows-specific path (details not found in depth-2 traversal)
-        <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-    else if platform == "macos":
-        lib = M.dlopen("/usr/lib/libSystem.B.dylib", {
-            execve: { args: ["ptr", "ptr", "ptr"], returns: "int" }
-        })
-    else:  // Linux
-        lib = M.dlopen("libc.so.6", {
-            execve: { args: ["ptr", "ptr", "ptr"], returns: "int" }
-        })
-    return lib
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+12001976, +12002075, +12002111, +12002119, +12002148, +12002175, +12002202
-
----
-
-### Update-Refused Telemetry Path
+The final step clears process signal handlers, re-registers minimal `beforeExit` / `exit` listeners, then calls `dF1.spawnSync` with `stdio: "inherit"` to exec-replace the running process.
 
 ```
-function handleUpdateRefused(reason, context):
-    // Fired whenever /update cannot proceed past binary-resolution
-    // or the initial guard checks
-    emitTelemetry("tengu_update_refused", {
-        reason: reason,
-        context: context
-    })
-    return buildErrorMessage(reason)
+function execReplace(binaryPath, argv, env):
+    process.removeAllListeners()
+    process.on("SIGINT", noOp)
+    process.on("SIGHUP", noOp)
+    result = dF1.spawnSync(binaryPath, argv, { stdio: "inherit", env })
+    if result.error:
+        logError("relaunch_spawn_error")
+        writeErrorState("relaunch_spawn_error")
+        process.exit(128)
+    # On success the new process has taken over; this point is unreachable.
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+12270971, +12270957
+Exit code on spawn failure: **128** (bundle.js:+12057715)
+
+Analysis basis: CC v2.1.153 bundle.js:+12057267, +12057286, +12057296, +12057326, +12057353, +12057388, +12057442, +12057483, +12057575, +12057602, +12057667, +12057715
+
+### 9. Hook Draining (tHA / kT)
+
+Before exec-replace, the handler drains any registered lifecycle hooks (mapped from `tHA` → `h4` → `H9` / `q3A.register`; `kT` → `h4`; `TxH` → `q3A.drain`). The last-prompt entry is appended to the hook queue under the key `"last-prompt"`.
+
+```
+function drainHooks(hookQueue):
+    hookQueue.appendEntry("last-prompt", currentPromptSnapshot)
+    await q3A.drain()
+```
+
+Analysis basis: CC v2.1.153 bundle.js:+12328500, +12832183, +12832269, +12832289, +12056845, +58493
+
+### 10. Conversation-State Passthrough (T_ / P$)
+
+The command reads `allowed_tools`, `disallowed_tools`, `avoid_prompts`, `effort`, and `model` from app state (via `T_` → `H.getAppState` and `P$` → `H.getAppState`) and serialises them into the relaunch argv so the resumed session inherits the same tool permissions and model settings.
+
+```
+function captureSessionPolicy(appState):
+    return {
+        allowedTools:    appState.allowed_tools,
+        disallowedTools: appState.disallowed_tools,
+        avoidPrompts:    appState.avoid_prompts,
+        effort:          appState.effort,
+        model:           appState.model,
+    }
+```
+
+Analysis basis: CC v2.1.153 bundle.js:+12329098, +12329104, +10638465, +10638573, +10638628, +10638689, +10638791, +10638804
 
 ---
 
@@ -318,16 +258,25 @@ Analysis basis: CC v2.1.150 bundle.js:+12270971, +12270957
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_update_refused` (emitted when update is blocked at binary resolution or guard checks, bundle.js:+12270971); `tengu_scroll_summary` (emitted during UI teardown scroll state capture, bundle.js:+5285263) |
-| Hook registration | All existing `SIGINT`, `SIGTERM`, and `SIGHUP` listeners are removed via `process.removeAllListeners` before relaunch (bundle.js:+12003518); new minimal handlers registered via `process.on` (bundle.js:+12003548) |
-| appState changes | `_.getAppState` is read to check background task statuses (bundle.js:+12271823); `_.setAppState` is called to mark the session as transitioning (bundle.js:+12271977) |
-| SDK output | `O.writeSdkMessages` persists filtered assistant messages; `O.flush` and `O.teardown` are called in sequence (bundle.js:+12272063, +12272157, +12272208) |
-| Conversation log | A `last-prompt` entry is appended via `_.appendEntry` before teardown (bundle.js:+12770352, +12770372) |
-| Async queues | `W7A.drain()` is called to empty write queues before process replacement (bundle.js:+58315) |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Process image | `f.execve` replaces the running process image entirely; the OS-level PID is preserved but all JS heap is discarded (bundle.js:+12002474) |
-| Relaunch state file | A serialized state file is written synchronously via `nX` / `eCH.writeFileSync` so the new process can load it via `--resume` (bundle.js:+190091, +12003797) |
-| Error exit | If `execve` fails, `relaunch_spawn_error` is written and the process exits with code `128` (bundle.js:+12003800, +12003937) |
+| Telemetry: `tengu_update_refused` | Fired when the binary cannot be located or a guard condition blocks the update (bundle.js:+12327676) |
+| Telemetry: `tengu_scroll_summary` | Fired during the terminal scroll/render teardown phase (bundle.js:+5317981) |
+| Telemetry: `tengu_amber_creek` | Fired during fullscreen/flicker-detection path (bundle.js:+3371527) |
+| Telemetry: `tengu_pewter_brook` | Fired during fullscreen/flicker-detection path (bundle.js:+3371435) |
+| Telemetry: `tengu_bg_dispatch_sigkill_escalate` | Fired if a background session requires SIGKILL escalation during teardown (bundle.js:+15386200) |
+| Telemetry: `tengu_feature_bad` / `tengu_feature_ok` | Feature-flag health checks during teardown (bundle.js:+965182, +965124) |
+| Telemetry: `tengu_bg_low_mem_mb` | Fired if memory pressure is detected during teardown (bundle.js:+12668289) |
+| Telemetry: `tengu_bg_dispatch_low_mem` | Background dispatcher low-memory event (bundle.js:+15386779) |
+| Telemetry: `tengu_bg_spare_enable` / `tengu_bg_spare_claim` / `tengu_bg_spare_spawn` / `tengu_bg_spare_claim_fail` | Background spare-worker lifecycle events during teardown (bundle.js:+15387474, +15387595, +15385893, +15387858) |
+| Telemetry: `tengu_bg_sendclaim_failed` | Background session claim failure during shutdown (bundle.js:+15366922) |
+| Telemetry: `tengu_daemon_control` | Daemon stop / stop-failed events (bundle.js:+15422336) |
+| Telemetry: `tengu_config_parse_error` | Config file parse error encountered during teardown (bundle.js:+3206730) |
+| appState changes | `_.getAppState` / `_.setAppState` called to read and mutate session state before relaunch (bundle.js:+12328528, +12328682) |
+| Bridge I/O | `O.writeSdkMessages`, `O.flush`, `O.teardown` drain the output stream (bundle.js:+12328768, +12328862, +12328913) |
+| Hook registration | `q3A.register` / `q3A.drain` flush lifecycle hooks; `_.appendEntry` writes last-prompt snapshot (bundle.js:+58450, +58493, +12832269) |
+| Process signal handlers | `process.removeAllListeners()` then minimal SIGINT/SIGHUP no-ops re-registered before exec (bundle.js:+12057296, +12057326) |
+| Exec-replace | `dF1.spawnSync` replaces the running process; on error exits with code **128** (bundle.js:+12057353, +12057715) |
+| Error state file | `LP` writes an error-state marker file (via `lxH.writeFileSync`) on spawn failure (bundle.js:+12057575, +190501) |
+| Sound | None detected in depth-2 traversal |
 
 ---
 
@@ -335,23 +284,18 @@ Analysis basis: CC v2.1.150 bundle.js:+12270971, +12270957
 
 | Version | Change |
 |---|---|
-| v2.1.150 | Initial analysis. Build timestamp: `2026-05-23T01:22:49Z`. Commit: `28d4819e0f0a51840356d175c2a710f0c83db5b4` (bundle.js:+12272756, +12272787) |
+| v2.1.153 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Running `/update` during active tool calls or background tasks.** The command explicitly blocks if any task has status `"running"` or `"pending"`. Wait for all background tasks to complete before invoking `/update`. (bundle.js:+12271335)
-
-2. **Expecting `/update` to work in a cross-directory resumed session.** If the session was started in one project directory and resumed from another, the project-directory guard will reject the command with a hard error. Use `--resume` on the command line instead. (bundle.js:+12271576)
-
-3. **Using `/update` in non-interactive (scripted) mode.** `supportsNonInteractive` is `false`; the command will not execute in headless or piped invocations. (bundle.js:+12273027)
-
-4. **Expecting the command to appear in `/help` or command lists.** `isHidden` is `true`; the command is intentionally unlisted. (bundle.js:+12273027)
-
-5. **Assuming a fresh conversation after update.** The relaunch is designed for continuity: the `--resume` flag and the persisted state file restore the conversation on the new binary. The conversation is not reset.
-
-6. **Interrupting the process during the teardown window.** Signal handlers are removed before `execve` is called. Sending `SIGINT` or `SIGTERM` during the teardown window (after `removeAllListeners` but before exec) may leave the state file in a partially-written state.
+1. **Running `/update` with active background tasks** — the command hard-blocks and returns the "background tasks are running" error. Wait for all background tasks to reach a terminal state before retrying.
+2. **Running `/update` in a `--resume`-d session from a different directory** — the project-directory mismatch guard will reject the command with an error asking you to restart manually with `--resume`.
+3. **Expecting `/update` in non-interactive mode** — `supportsNonInteractive: false` means the command cannot be triggered programmatically or from piped input; it must be issued interactively.
+4. **Assuming the command is visible in `/help`** — `isHidden: true` means `/update` does not appear in the slash-command list; it must be typed explicitly.
+5. **Interrupting the flush window** — the bridge flush has only a 2000 ms window. Sending SIGINT during this window may leave session state partially written, causing the resumed session to start fresh rather than continue.
+6. **Stale binary on PATH** — if the package manager has not yet written the new binary when `/update` is invoked, `Bun.which("claude")` may resolve the old binary and the "update" will actually relaunch the same version.
 
 ---
 
@@ -361,45 +305,116 @@ Analysis basis: CC v2.1.150 bundle.js:+12270971, +12270957
 
 | Identifier | Role |
 |---|---|
-| `LV8` | Binary-resolution entry point — resolves `claude` binary path via `Bun.which` |
-| `i3` | Wrapper that calls `sGA` to perform the actual `Bun.which` lookup |
-| `sGA` | Low-level binary locator; delegates to `Bun.which` |
-| `Ku` | Version-path resolver; builds the versioned binary path using `.local/bin` segments |
-| `ej8` | Path-join helper; constructs the versioned binary directory path |
-| `$8H` | Secondary path builder; joins `.local` and `bin` components |
-| `rf` | Array normalization utility; handles both array and scalar path inputs |
-| `E_5` | Main `/update` command handler (top-level orchestrator) |
-| `bq` | Process-type classifier; distinguishes `bg`, `daemon`, and `daemon-worker` modes |
-| `f$H` | Helper for process-type determination |
-| `c` | Generic continuation / callback utility used throughout the handler |
-| `yG` | Session-directory resolver; extracts basename via `NP.basename` |
-| `S6` | Shared utility used in directory resolution and message building |
-| `YI` | App-state accessor helper |
-| `Zo_` | Conversation-directory resolver; calls `Lu1.dirname` to find project root |
-| `j_` | Lower-level directory utility wrapping `Dv` |
-| `rK` | Additional directory resolution helper wrapping `Dv` |
-| `n_H` | Pre-teardown notification helper |
-| `wa` | Hook-type checker; tests whether a hook entry has type `"ant"` via `cL5.has` |
-| `Sv8` | Hook registry accessor used by `wa` |
-| `ma_` | Conversation-log persistence function; calls `_.appendEntry` with `"last-prompt"` |
-| `h4` | Conversation-entry builder used by `ma_` and `FV` |
-| `RH` | Network / essential-traffic drain helper; manages a capped queue via `xiK` |
-| `c_` | Error normalizer; coerces values to `Error` or `String` |
-| `mH` | String serialization utility |
-| `G1` | Essential-traffic handler invoking `Z2A` |
-| `xiK` | Fixed-size queue manager; shifts old entries and pushes new ones |
-| `eG` | Message-filter predicate; selects `assistant-` prefixed messages |
-| `O` | SDK output bridge object; exposes `writeSdkMessages`, `flush`, and `teardown` |
-| `k8` | Background-session writer used by `O` |
-| `EF1` | Session-ID generator; calls `qV8.randomUUID` |
-| `t5` | Timeout-race utility; wraps `setTimeout` / `clearTimeout` with `Promise.race` |
-| `PzH` | String coercion helper used during final state assembly |
-| `RXH` | Relaunch orchestrator; drives teardown, cleanup, and `execve` sequence |
-| `_j6` | File-descriptor utility wrapping `_G_` |
-| `TvH` | UI teardown function; unmounts renderer and flushes terminal output |
-| `X48` | Scroll-summary capture function; emits `tengu_scroll_summary` |
-| `FV` | Conversation flush helper; uses `h4` to finalize entries |
-| `kCH` | Async-queue drain wrapper; calls `W7A.drain` |
-| `P48` | Parallel shutdown coordinator; runs renderer teardown and related steps via `Promise.race` |
-| `Hu1` | Platform-aware `execve` loader; opens `libSystem.B.dylib` or `libc.so.6` via FFI |
-| `nX` | Relaunch-state file writer; calls `eCH.writeFileSync` to persist state |
+| `BL5` | Main async handler for `/update` (arbor_handler; AsyncFunction) |
+| `jI8` | Entry-point wrapper called by BL5; delegates to binary-discovery and version-path helpers |
+| `L$` | Binary-discovery wrapper; calls `mvA` → `Bun.which` |
+| `mvA` | `Bun.which` invocation for the `"claude"` binary |
+| `Wh` | Version-path resolver; orchestrates `h28`, `K_H`, `L_H` |
+| `h28` | Builds the versioned-install directory path |
+| `yf` | Array.isArray guard used inside path builder |
+| `K_H` | Resolves `~/.local/share` base via `Pw8` (homedir) |
+| `Pw8` | Calls `zc9.homedir()` to obtain user home directory |
+| `L_H` | Resolves `~/.local/share/bin` path |
+| `N9` | Reads/checks background-task state; emits `tengu_update_refused` |
+| `DOH` | Inner guard helper called by `N9` |
+| `c` | Generic utility used across multiple call sites |
+| `Hj` | Constructs text-type message for user-facing status output |
+| `y6` | Renders a message component (calls `Fv`) |
+| `Fv` | Low-level render/output primitive |
+| `FI` | File-system or path utility used during relaunch prep |
+| `xe_` | Builds relaunch environment / working-directory context |
+| `O_` | Inner helper of `xe_`; calls `Fv` |
+| `aK` | Secondary inner helper of `xe_`; calls `Fv` |
+| `BAH` | Session-metadata accessor |
+| `Gs` | Hook/attachment set membership check (uses `jD5.has`) |
+| `Bk8` | Hook registry lookup |
+| `tHA` | Hook-drain orchestrator; appends `"last-prompt"` entry |
+| `h4` | Hook executor (calls `H9`) |
+| `H9` | Calls `q3A.register` to register hooks |
+| `_` | App-state / store accessor object (`_.getAppState`, `_.setAppState`, `_.appendEntry`) |
+| `yH` | Subprocess / process-execution utility |
+| `l_` | Error-string helper |
+| `xH` | String coercion helper |
+| `_1` | Delegates to `fZA` for output formatting |
+| `fZA` | Output formatter; calls `xH` |
+| `GH4` | Queue rotation helper (`cU6.shift` / `cU6.push`) |
+| `VT` | App-state mutation helper |
+| `O` | Bridge output stream object (`writeSdkMessages`, `flush`, `teardown`) |
+| `N8` | Inner bridge implementation |
+| `Pn1` | UUID generator; calls `wI8.randomUUID` |
+| `gL` | Timeout-race utility (`setTimeout` / `Promise.race` / `clearTimeout`) |
+| `vYH` | String conversion helper for relaunch args |
+| `cPH` | Full teardown-and-exec-replace orchestrator |
+| `TX6` | Interval-clear helper; calls `CE_` |
+| `CE_` | Calls `clearInterval` |
+| `pNH` | Terminal/UI unmount helper |
+| `H` | Ink or terminal render host object (`H.unmount`, `H.replaceAll`) |
+| `$R` | Post-unmount cleanup helper |
+| `lA8` | Terminal output writer (`Sr.writeSync`); handles escape sequences |
+| `qVH` | Terminal-capability detector (ghostty, iTerm2 version checks) |
+| `eEH` | Secondary terminal helper |
+| `X0` | Tmux/screen escape-sequence replacer |
+| `D58` | Scroll/animation teardown orchestrator |
+| `KZ` | Scroll cleanup helper |
+| `Kj9` | Secondary scroll helper |
+| `qj9` | Timing/progress calculator (`Date.now`, `Math.max`, `Math.round`) |
+| `_j9` | Inner timing helper |
+| `$q` | Fullscreen/flicker-detection dispatcher |
+| `Y3H` | Local-agent check (`FrK.has`) |
+| `qY_` | Fullscreen helper |
+| `Yr` | Fullscreen transition helper |
+| `N` | Terminal-mode normalizer (`toUpperCase`, `trim`, etc.) |
+| `AY_` | Windows/platform detection helper |
+| `o_` | Platform-specific fullscreen helper |
+| `s17` | Fullscreen sub-path helper |
+| `T6` | Render/display state machine |
+| `kT` | Secondary hook-drain entry (calls `h4`) |
+| `TxH` | Calls `q3A.drain` to flush hook queue |
+| `w58` | Multi-process cleanup orchestrator (`Promise.race`, `Promise.all`) |
+| `r8` | Worker/child-process teardown helper |
+| `K` | Process-list formatter (`L.map`, `M.padEnd`) |
+| `q` | File-unlink helper (`VTK.unlinkSync`) |
+| `L` | Promise-tracking set (`q.add`, `M.finally`, `q.delete`) |
+| `gF1` | Exec-replace implementation (`f.execve`, `process.chdir`, `require`, `M.dlopen`) |
+| `M` | Native module / dynamic-library handle |
+| `A` | Connection/socket map |
+| `$` | Active-promise registry |
+| `Ar1` | Promise tracker entry creator |
+| `w` | Background-session dispatcher/monitor |
+| `R` | Background-session process record |
+| `uH` | Bad-feature telemetry reporter |
+| `SH` | Good-feature telemetry reporter |
+| `wk8` | Low-memory monitor helper |
+| `TD6` | Config file reader (`BP.readFile`) |
+| `B` | MCP client filter helper |
+| `jLA` | MCP connection manager |
+| `ZLA` | Background session lifecycle manager |
+| `D` | Spare-worker spawn decision helper |
+| `J8` | Generic error/status helper |
+| `S` | Disposable resource wrapper |
+| `f` | Exec-via-execve facade |
+| `YSH` | MCP server initializer |
+| `EWK` | MCP update applier (`H.applyMcpUpdate`) |
+| `Qb5` | MCP client reconciliation helper |
+| `z` | Daemon control object (`SH`, `uH`, `Dy`, `wm`) |
+| `Dy` | Daemon-stop dispatcher |
+| `wm` | Daemon-stop race (`Promise.race`, `process.exit`) |
+| `EH` | String error helper |
+| `LP` | Error-state file writer (`lxH.writeFileSync`) |
+| `bN8` | Relaunch argv builder (`Array.from`, flag assembly) |
+| `q96` | Session-flag serializer |
+| `b6` | Config-file watcher/backup helper |
+| `B6` | Config path resolver |
+| `CO_` | Config directory helper |
+| `EzH` | Config read/migrate/backup implementation |
+| `U6` | JSON parser wrapper |
+| `Pb` | String prefix stripper (`startsWith` / `slice`) |
+| `UUq` | Config backup enumerator |
+| `UO_` | Backup path constructor |
+| `jq7` | File-watch setup helper (`T88.watchFile`) |
+| `si` | Watch callback helper |
+| `T_` | Session-policy reader (`allowed_tools`, `disallowed_tools`, etc.) |
+| `pZ8` | Policy sub-reader (calls `sA`) |
+| `sA` | App-state field accessor |
+| `UZ8` | Secondary policy reader |
+| `P$` | Model/effort policy reader |

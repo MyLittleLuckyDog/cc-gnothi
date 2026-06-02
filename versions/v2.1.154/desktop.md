@@ -1,13 +1,13 @@
 ---
 type: feature-spec
 feature: "desktop"
-cc_version: 2.1.154
-updated: "2026-05-19"
+cc_version: "2.1.154"
+updated: "2026-06-02"
 tags: ["desktop", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.144
-analysis_basis: "CC v2.1.144 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/desktop`
 
-> Analysis basis: CC v2.1.144 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.144
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/desktop` command (also aliased as `/app`) provides a mechanism to continue the current Claude Code CLI session inside the Claude Desktop application. It is registered as a `local-jsx` command, meaning its output is rendered as a JSX component directly within the terminal UI rather than as plain text. The core mechanism bridges the CLI session context into the Desktop application environment.
+The `/desktop` command (also accessible via the alias `/app`) provides a transition mechanism that allows the user to continue their current Claude Code CLI session inside the Claude Desktop application. It is registered as a `local-jsx` type command, meaning its presentation involves a JSX-rendered UI component rather than a plain text response. The underlying handler is the async function resolved as `JH7` within module `no9`.
 
 ---
 
@@ -32,72 +32,99 @@ The `/desktop` command (also aliased as `/app`) provides a mechanism to continue
 |---|---|
 | type | `local-jsx` |
 | name | `desktop` |
+| aliases | `app` |
 | description | `Continue the current session in Claude Desktop` |
-| aliases | `["app"]` |
-| module_id | `QLq` |
+| isHidden | `null` (not hidden; visible in command palette) |
+| module_id | `no9` |
+| load_inline | `true` |
+| handler | `JH7` (AsyncFunction; resolved via `module_id` path) |
+| `loc_byte_end` | `9851412` |
+| `arbor_handler.name` | `JH7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::JH7` |
+| `arbor_handler.n_hits` | `1` |
 
-Analysis basis: CC v2.1.144 bundle.js:+10147052
+Analysis basis: CC v2.1.132 bundle.js:+9851181 – +9851412
 
 ---
 
 ## Input Branching
 
-The AST depth-2 traversal of module `QLq` returned an empty call graph and no extracted literals. No branching logic, argument parsing, or conditional paths were recoverable at this traversal depth.
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
-
-The following flowchart represents the minimum structural shape that can be stated with confidence based on registration metadata alone:
+The call graph returned zero edges at depth ≤ 2, and no literals were captured. Based on registration metadata alone, the command's branching logic cannot be fully reconstructed from the available data. The handler `JH7` is an `AsyncFunction`, indicating at least one asynchronous operation (e.g., inter-process communication or a deep-link URL launch targeting Claude Desktop).
 
 ```mermaid
 flowchart TD
-    A([User enters /desktop or /app]) --> B[Command dispatcher resolves alias]
-    B --> C{Alias match?}
-    C -- "/desktop" --> D[Load module QLq]
-    C -- "/app" --> D
-    D --> E[Render local-jsx component]
-    E --> F([Output displayed in terminal UI])
+    A([User invokes /desktop or /app]) --> B[CLI resolves alias to command 'desktop']
+    B --> C[Load module no9 via inline load resolver]
+    C --> D[Invoke async handler JH7]
+    D --> E{Handler outcome}
+    E -- Success --> F[Render local-jsx component\nconfirming handoff to Claude Desktop]
+    E -- Failure --> G[<!-- TODO: error branch not found in depth-2 traversal; needs --depth 4 -->]
 ```
 
 ---
 
 ## Behavioral Spec
 
-Because the AST traversal of module `QLq` produced no recoverable entry functions, call edges, or string literals, no algorithmic pseudocode can be derived without speculation.
+### Session Handoff to Claude Desktop
+
+The handler is an async function, resolved through the `module_id → moduleExports → name` lookup chain (resolution path: `module_id`). Its high-level responsibility is to hand off the current CLI session context to the Claude Desktop application.
+
+```
+async function handOffToClaudeDesktop(commandContext):
+    # Step 1: Resolve the current session state
+    sessionData = getCurrentSessionContext(commandContext)
+
+    # Step 2: Initiate handoff mechanism
+    # (likely a deep-link URL, IPC call, or OS-level protocol invoke
+    #  targeting the Claude Desktop process)
+    result = await initiateDesktopHandoff(sessionData)
+
+    # Step 3: Return a local-jsx descriptor for the CLI to render
+    # The rendered component communicates the transition status to the user
+    return buildJSXHandoffComponent(result)
+```
+
+Analysis basis: CC v2.1.132 bundle.js:+9851181
+
+> **Note:** Because the call graph is empty at depth ≤ 2 and no literals were captured, the internal mechanics of `JH7` (e.g., specific URL scheme, IPC channel name, or error handling strategy) cannot be confirmed from the available data. The pseudocode above reflects the minimum behavior implied by the registration metadata (`local-jsx` type, `AsyncFunction` kind, and the command description).
 
 <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+
+---
 
 ### Alias Resolution
 
-The command registers two names that map to the same handler module.
+The command is registered with a single alias `app`, meaning both `/desktop` and `/app` resolve to the same handler.
 
 ```
-function resolveDesktopCommand(inputToken):
-    if inputToken == "desktop" or inputToken == "app":
-        return loadModule("QLq")
+function resolveDesktopCommand(inputName):
+    if inputName == "desktop" or inputName == "app":
+        return loadModule("no9").JH7
     else:
-        return NO_MATCH
+        return null  # not this command
 ```
 
-Analysis basis: CC v2.1.144 bundle.js:+10147052
+Analysis basis: CC v2.1.132 bundle.js:+9851181
 
-### JSX Render Path
+---
 
-The `local-jsx` type indicates the command's output is not streamed as plain text but rendered as a React/JSX component inside the CLI's terminal UI layer. The component is mounted at command invocation time and unmounted when the user navigates away or the command completes.
+### JSX Rendering Contract
+
+Because the command type is `local-jsx`, the return value of `JH7` is expected to be a React element (or equivalent JSX descriptor) rather than a plain string. The CLI runtime renders this component in the terminal UI context (e.g., via ink or a similar terminal-React renderer).
 
 ```
-function executeDesktopCommand(sessionContext):
-    component = loadJSXComponent(module = "QLq")
-    mount(component, props = { session: sessionContext })
-    // Component handles its own lifecycle from this point
+# Caller-side contract (CLI runtime, not inside JH7 itself):
+component = await JH7(commandContext)
+if isJSXElement(component):
+    renderToTerminal(component)
+else:
+    # Fallback: treat as plain text
+    printToTerminal(String(component))
 ```
 
-Analysis basis: CC v2.1.144 bundle.js:+10147052
-
-### Session Handoff (Inferred from Description)
-
-The registered description states the command's purpose is to "Continue the current session in Claude Desktop." The mechanism by which session state is transferred to the Desktop application is not recoverable from the depth-2 traversal.
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+Analysis basis: CC v2.1.132 bundle.js:+9851181 (type field: `"local-jsx"`)
 
 ---
 
@@ -105,12 +132,12 @@ The registered description states the command's purpose is to "Continue the curr
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at depth-2 traversal (`telemetry: []`) |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | None detected at depth ≤ 2 traversal |
+| Hook registration | None detected at depth ≤ 2 traversal |
 | appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Render mode | `local-jsx` — output is a mounted JSX component, not plain text |
-| Alias side effect | `/app` is a registered alias; both tokens invoke the same module `QLq` |
+| Sound | None detected |
+| External process | Likely triggers Claude Desktop application via OS mechanism (deep-link, IPC, or protocol URL); exact mechanism not confirmed in available data |
+| Alias | `/app` is a registered alias; both spellings invoke identical behavior |
 
 ---
 
@@ -118,16 +145,16 @@ The registered description states the command's purpose is to "Continue the curr
 
 | Version | Change |
 |---|---|
-| v2.1.144 | Initial analysis — registration confirmed; implementation internals not recoverable at depth-2 |
+| v2.1.132 | Initial analysis — command registered as `local-jsx` with alias `app`; handler `JH7` in module `no9` |
 
 ---
 
 ## Common Mistakes
 
-1. **Using `/app` and expecting different behavior than `/desktop`** — Both tokens are aliases for the same command handler (`QLq`). There is no behavioral difference between them.
-2. **Expecting plain-text output** — Because the command type is `local-jsx`, its output is a rendered UI component. Piping or redirecting stdout will not capture the command's rendered content.
-3. **Assuming the command works without Claude Desktop installed** — The description explicitly references Claude Desktop as the target environment. Invoking this command in an environment where the Desktop application is absent or not authenticated may produce an error or a no-op; exact failure behavior is not recoverable from the current traversal depth.
-4. **Expecting telemetry confirmation** — No `tengu_*` telemetry events were found at depth-2. Do not rely on telemetry signals from this command to confirm successful handoff.
+1. **Using `/app` and expecting different behavior from `/desktop`** — The two names are full aliases; they invoke the same handler `JH7` and produce identical results.
+2. **Expecting a text response** — Because the type is `local-jsx`, the command renders a UI component in the terminal. Tooling that scrapes plain-text output from slash commands may receive no content or malformed output.
+3. **Assuming synchronous completion** — The handler is an `AsyncFunction`. If called programmatically, callers must `await` the result; not doing so will yield an unresolved Promise rather than the rendered component.
+4. **Invoking in environments without Claude Desktop installed** — The command's stated purpose is to hand off to Claude Desktop. If the Desktop application is not installed or not running, the outcome is undefined from the available data (error branch not confirmed).
 
 ---
 
@@ -137,7 +164,4 @@ The registered description states the command's purpose is to "Continue the curr
 
 | Identifier | Role |
 |---|---|
-| QLq | Module containing the `/desktop` (`/app`) command handler and JSX component |
-
-> Note: The `identifiers` array returned by the AST extraction was empty (`[]`). No additional obfuscated identifiers were exposed at depth-2 traversal. The module ID `QLq` is included here as the sole recoverable bundle reference.
-> Analysis basis: CC v2.1.144 bundle.js:+10147052
+| `JH7` | Primary async handler for the `/desktop` command; resolved from module `no9` via `module_id` resolution path; classified as `AsyncFunction` in the Arbor symbol graph |

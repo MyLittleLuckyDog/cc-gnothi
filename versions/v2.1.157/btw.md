@@ -1,14 +1,12 @@
-```
 ---
 type: feature-spec
 feature: "btw"
-cc_version: 2.1.157
-updated: "2026-05-19"
+cc_version: "2.1.157"
+updated: "2026-06-02"
 tags: ["btw", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.144
-analysis_basis: "CC v2.1.144 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.157 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -16,14 +14,14 @@ license: "AGPL-3.0-only"
 
 # `/btw`
 
-> Analysis basis: CC v2.1.144 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.144
+> Analysis basis: CC v2.1.157 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.157
 
 ---
 
 ## Overview
 
-The `/btw` ("by the way") slash command allows a user to pose a quick, ancillary question to the model without breaking the flow of an ongoing conversation. It is typed as `local-jsx`, meaning the command itself renders a JSX component on the client side before any network round-trip, and it is marked `immediate` so the question is dispatched to the thin-client control layer (`thinClientDispatch: "control-request"`) the moment the user submits, without waiting for any additional confirmation step.
+`/btw` ("by the way") lets the user inject a quick side question or remark into the session without disrupting the primary conversation flow. It is a `local-jsx` command that dispatches a `control-request` through the thin-client path and resolves immediately (`immediate: true`), so the user sees a response promptly even while a longer task is in progress.
 
 ---
 
@@ -37,79 +35,180 @@ The `/btw` ("by the way") slash command allows a user to pose a quick, ancillary
 | argumentHint | `<question>` |
 | immediate | `true` |
 | thinClientDispatch | `control-request` |
-| module\_id | `PKq` |
+| module_id | `Kv1` |
+| load_inline | `true` |
+| loc_byte | `10714283` |
+| loc_byte_end | `10714522` |
+| arbor_handler.name | `qnL` |
+| arbor_handler.fqn | `claude-2.1.157::qnL` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.144 bundle.js:+10084233
+Analysis basis: CC v2.1.157 bundle.js:+10714283
 
 ---
 
 ## Input Branching
 
-Because the AST traversal of module `PKq` produced an empty call graph and no additional literals, the precise internal branching logic within the command handler could not be recovered at depth ≤ 2.
+The command has two primary branches: the user provides no argument (usage error path) versus the user provides a non-empty question (dispatch path). Two branches → numbered pseudocode is appropriate.
 
-The following flowchart captures what is definitively known from the registration fields and general `local-jsx` / `immediate` command conventions observed in the bundle:
+1. **No argument supplied** — handler detects an empty input and returns an inline usage message.
+2. **Argument supplied** — handler constructs a `system`-role message envelope and dispatches the side-question via the `control-request` channel, then renders a JSX response element.
 
-```mermaid
-flowchart TD
-    A([User types /btw <question>]) --> B{Argument present?}
-    B -- "No argument" --> C[Render inline JSX prompt\nasking for the question text]
-    B -- "Argument provided" --> D[Package question as\na control-request payload]
-    C --> E{User submits text?}
-    E -- "Cancelled / empty" --> F([No-op — command exits])
-    E -- "Text entered" --> D
-    D --> G[Dispatch via thinClientDispatch\n= 'control-request']
-    G --> H([Model receives side question\nwithout replacing conversation context])
 ```
+function handleBtw(userInput):
+    if userInput is empty or missing:
+        return usageError("Usage: /btw <your question>")   // +10713880
 
-Analysis basis: CC v2.1.144 bundle.js:+10084233
+    envelope = buildSystemMessage(                          // +10713919
+        role  = "system",
+        body  = userInput
+    )
 
-> **Note:** Nodes C, E, and F represent inferred JSX-prompt behaviour common to all `local-jsx` commands in this bundle version.  
-> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+    dispatchControlRequest(envelope)                        // thin-client path
+
+    return renderJSX(responseElement)                       // +10713988
+```
 
 ---
 
 ## Behavioral Spec
 
-### Side-Question Dispatch
+### Handler — `qnL` (async side-question dispatcher)
 
-Because the entry-function list for module `PKq` is empty, no recovered pseudocode is available for the internal handler body.
+The Arbor-resolved handler `qnL` is an `AsyncFunction` loaded inline via module `Kv1`.
+
+Analysis basis: CC v2.1.157 bundle.js:+10713878
 
 ```
-// High-level reconstruction from registration fields only.
-// Internal implementation details are NOT available at traversal depth ≤ 2.
+async function sideQuestionDispatcher(args, appContext):
 
-function handleBtwCommand(rawArgument):
-    question = trim(rawArgument)
+    // 1. Guard: require a non-empty question argument
+    if args.question is blank:
+        emit inlineText("Usage: /btw <your question>")     // +10713880
+        return
 
-    if question is empty:
-        question = promptUserViaJSXComponent()   // local-jsx rendering
-        if question is empty or cancelled:
-            return NO_OP
+    // 2. Build the system-role message envelope
+    messageEnvelope = {
+        role: "system",                                     // +10713919
+        content: args.question
+    }
 
-    payload = buildControlRequest(
-        kind    = "control-request",   // thinClientDispatch value
-        content = question,
-        immediate = true               // fire without deferred confirmation
-    )
+    // 3. Resolve global config (with file lock, backup, and parse
+    //    validation — see Config Access sub-feature below)
+    config = await loadConfig()                             // → z8 → AY_ path
 
-    dispatchToThinClient(payload)
-    // Conversation context is preserved; only the side question is forwarded.
+    // 4. Dispatch the side question as a control-request
+    //    (thinClientDispatch = "control-request")
+    await sendControlRequest(messageEnvelope, config)
+
+    // 5. Return a JSX element to display the agent reply inline
+    return G4.createElement(responseWidget, { message: args.question })
+                                                            // +10713988
 ```
 
-Analysis basis: CC v2.1.144 bundle.js:+10084233
+### Sub-feature — Jitter helper (`H`)
 
-> **Note on `immediate` flag:** When `immediate` is `true` the command bypasses any pending-input queue and sends the payload in the same event loop tick as user submission.  
-> <!-- TODO: exact queue-bypass implementation not found in depth-2 traversal; needs --depth 4 -->
+Called by `qnL` at the start of dispatch. Adds a small random delay before sending, likely to avoid thundering-herd when multiple `/btw` calls arrive simultaneously.
 
-### JSX Component Rendering (`local-jsx`)
+Analysis basis: CC v2.1.157 bundle.js:+10713878
 
-The `type: "local-jsx"` registration means the command contributes a React component that is mounted into the CLI shell's input region. The component is responsible for:
+```
+function jitterDelay():
+    // range: Math.random() * 2 + 1  (approximately 1–3 units)
+    delay = Math.random() * 2 + 1                          // +13423029, +13423045
+    await setTimeout(delay)
+```
 
-1. Displaying the argument hint `<question>` when no inline argument is supplied.
-2. Capturing freeform text from the user.
-3. Forwarding the captured text to the dispatch path above.
+### Sub-feature — Config access (`z8` → `AY_`)
 
-<!-- TODO: component tree not found in depth-2 traversal; needs --depth 4 -->
+`qnL` calls the config-retrieval subsystem before dispatching, ensuring the current session credentials and settings are fresh. This path involves file-system locking, backup rotation, and stale-write detection.
+
+Analysis basis: CC v2.1.157 bundle.js:+10713942
+
+```
+async function getConfig(context):
+    sessionData = await readSessionToken(context)           // → qT
+    rawConfig   = await loadAndLockConfig()                 // → AY_
+
+    return mergedConfig(sessionData, rawConfig)
+
+async function loadAndLockConfig():
+    // Acquire file lock; warn if contention is detected
+    acquireLock()
+    if lockTookTooLong:
+        logError("Lock acquisition took longer than expected …")
+                                                            // +3207889
+        emit telemetry("tengu_config_lock_contention")      // +3207978
+
+    configData = readConfigFile("utf-8")                    // +3210005
+
+    try:
+        parsed = JSON.parse(configData)                     // via p6 → JSON.parse
+    catch parseError:
+        emit telemetry("tengu_config_parse_error")          // +3210553
+        raise
+
+    // Stale-write guard: refuse to overwrite if auth was lost
+    if cachedAuthPresent and re-readAuthMissing:
+        emit telemetry("tengu_config_auth_loss_prevented")  // +3208457
+        logWarning("saveConfigWithLock: re-read config is missing auth …")
+                                                            // +3208305
+        return cachedConfig
+
+    // Rotate backups (keep up to 5)                        // +3208908
+    rotateBackups(maxCount = 5)
+
+    releaseLock()
+    return parsed
+```
+
+### Sub-feature — Message formatter (`N`)
+
+Constructs the wire-format representation of the side-question before it is handed to the transport layer.
+
+Analysis basis: CC v2.1.157 bundle.js:+3205027
+
+```
+function formatMessage(role, content, sessionMeta):
+    // Normalise role to uppercase for protocol header
+    header = role.toUpperCase()                             // +204277
+
+    // Generate a unique message ID
+    msgId  = generateUUID()                                 // → v4
+
+    // Attach session metadata and trim whitespace
+    body   = content.trim()                                 // +204300
+
+    // Log at debug level before dispatch
+    log("debug", { id: msgId, role: header, body })        // +204151
+
+    return { id: msgId, role: header, body, meta: sessionMeta }
+```
+
+### Sub-feature — File writer (`lCK`)
+
+Used within the config-save path to persist updated configuration atomically.
+
+Analysis basis: CC v2.1.157 bundle.js:+204336
+
+```
+async function atomicConfigWrite(filePath, data):
+    dir      = path.dirname(filePath)                       // +203696
+    tempPath = joinPath(dir, tmpName())                     // → g6
+    byteLen  = Buffer.byteLength(data)                      // +203871
+
+    // Write to temp file, then rename into place
+    writeFileWithRetry(tempPath, data,
+        retryIntervalMs = 1000,                             // +203982
+        maxRetries      = 100)                              // +204001
+
+    await rename(tempPath, filePath)                        // → Gx6.then
+
+    // Bind close handler
+    registerCloseHandler(cleanup.bind(context))             // +203930
+```
 
 ---
 
@@ -117,14 +216,21 @@ The `type: "local-jsx"` registration means the command contributes a React compo
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at traversal depth ≤ 2 — `telemetry: []` |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry — `tengu_config_lock_contention` | Fired when config file lock takes longer than expected (bundle.js:+3207978) |
+| Telemetry — `tengu_config_stale_write` | Fired when a stale config write is detected (bundle.js:+3208114) |
+| Telemetry — `tengu_config_parse_error` | Fired when the config JSON fails to parse (bundle.js:+3210553) |
+| Telemetry — `tengu_config_auth_loss_prevented` | Fired when a write would have silently dropped auth credentials (bundle.js:+3208457) |
+| Telemetry — `tengu_bg_dispatch_sigkill_escalate` | Fired by the background-session manager during SIGKILL escalation (bundle.js:+15466951) |
+| Telemetry — `tengu_bg_dispatch_low_mem` | Fired when available free memory falls below threshold (bundle.js:+15467530) |
+| Telemetry — `tengu_bg_spare_enable` | Fired when a spare background session slot is enabled (bundle.js:+15468225) |
+| Telemetry — `tengu_bg_spare_claim` | Fired when a spare session is successfully claimed (bundle.js:+15468346) |
+| Telemetry — `tengu_bg_spare_claim_fail` | Fired when spare-session claim fails (bundle.js:+15468609) |
+| thinClientDispatch | Sends the side-question envelope via the `control-request` channel, bypassing the normal conversation turn queue |
+| immediate | Set to `true`; the command response is rendered without waiting for any running tool to complete |
+| Config file lock | Acquired and released during config read; contention is logged and telemetry-reported |
+| Config backup rotation | Up to 5 `.backup.*` files retained alongside the main config (bundle.js:+3208908, +3208775) |
+| JSX render | A response widget element is created via `G4.createElement` and returned to the UI layer (bundle.js:+10713988) |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Thin-client dispatch | Emits a `control-request` event to the thin-client layer upon submission |
-| Conversation context | Existing conversation turn is not interrupted or replaced |
-
-Analysis basis: CC v2.1.144 bundle.js:+10084233
 
 ---
 
@@ -132,16 +238,16 @@ Analysis basis: CC v2.1.144 bundle.js:+10084233
 
 | Version | Change |
 |---|---|
-| v2.1.144 | Initial analysis — registration fields confirmed; internal call graph not recoverable at depth ≤ 2 |
+| v2.1.157 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Treating `/btw` as a conversation reset.** The command is explicitly designed to *not* interrupt the main conversation. The side question is dispatched as a `control-request`, keeping the current context intact. Expecting the model to abandon the ongoing task after a `/btw` question is incorrect.
-2. **Omitting the question argument and expecting silence.** When no inline argument is provided, the `local-jsx` component renders an input prompt. Pressing Enter on an empty prompt results in a no-op; no request is sent.
-3. **Assuming deferred delivery.** Because `immediate: true` is set, the payload is dispatched synchronously on submission. Queueing or batching `/btw` questions with other pending input is not supported.
-4. **Expecting full context injection.** The `thinClientDispatch: "control-request"` path is a lightweight channel. Whether the full conversation history accompanies the side question depends on the thin-client implementation — <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->.
+1. **Omitting the question argument.** Running `/btw` with no text returns a usage hint (`"Usage: /btw <your question>"`) and sends nothing to the model.
+2. **Expecting it to pause an active tool.** Because `immediate: true` and `thinClientDispatch: "control-request"` are set, the side-question is injected through a separate control channel — it does not pause or cancel a running tool invocation.
+3. **Confusing `/btw` with a normal turn.** The command wraps the question in a `system`-role envelope before dispatch, so the model may perceive it differently from a standard `user`-role message.
+4. **Assuming instant config freshness.** The handler reads and locks the config file on every invocation; in environments where another Claude instance is concurrently writing, brief lock-contention delays are possible and are surfaced as `tengu_config_lock_contention` telemetry events.
 
 ---
 
@@ -151,5 +257,47 @@ Analysis basis: CC v2.1.144 bundle.js:+10084233
 
 | Identifier | Role |
 |---|---|
-| *(none)* | The depth-2 AST traversal of module `PKq` returned an empty identifier list. No obfuscated names were recovered. |
-```
+| `qnL` | Main handler — async side-question dispatcher (`/btw` entry point) |
+| `H` | Jitter delay helper (uses `Math.random` + `setTimeout`) |
+| `z8` | Config retrieval orchestrator (calls `qT`, `AY_`, session helpers) |
+| `AY_` | Config load-and-lock implementation (file lock, backup rotation, stale-write guard) |
+| `_` | Filesystem abstraction (primary FS layer used inside config path) |
+| `g6` | Temporary filename generator / path helper |
+| `L` | Secondary filesystem/lock layer (statSync, copyFileSync, unlinkSync, etc.) |
+| `q` | Tertiary filesystem layer (unlinkSync, readFileSync, mkdirSync, readdirStringSync) |
+| `f` | File-handle finaliser (close handlers, `finally` chain) |
+| `dOq` | Config object merger (`Object.assign` wrapper) |
+| `qK_` | Config sub-key resolver (calls `QOq`) |
+| `N` | Message formatter (role normalisation, UUID generation, debug logging) |
+| `QCK` | Protocol header builder (calls `QI`, `gCK`, `qOA`) |
+| `RH` | JSON serialiser wrapper (`JSON.stringify`) |
+| `v4` | UUID / message-ID generator |
+| `EuH` | Encoding utility (calls `VYA`) |
+| `lCK` | Atomic config file writer (temp-file + rename pattern) |
+| `d` | General-purpose data container / intermediate state holder |
+| `j8` | Error classifier / branch dispatcher |
+| `szH` | Config file reader and backup manager (readFileSync, mkdirSync, copyFileSync) |
+| `p6` | JSON parse wrapper (`JSON.parse`) |
+| `gb` | String prefix stripper (startsWith + slice) |
+| `yFq` | Directory scanner / backup file enumerator |
+| `qY_` | Backup path joiner (`MD.join` + `F8`) |
+| `w` | Background-session process manager (spawn, kill, SIGKILL escalation) |
+| `AY6` | Config cache accessor |
+| `A` | Lowercase normaliser / map of active processes |
+| `V` | Versioned path or config-version string checker |
+| `P` | MCP/SDK connection manager (Promise.all, SH, F_) |
+| `Lx8` | SDK transport initialiser |
+| `SH` | MCP server session handler (logError, push) |
+| `F_` | Error factory (wraps native `Error` + `String`) |
+| `E` | Slice buffer / intermediate byte array |
+| `yL6` | Atomic symlink-safe file writer (randomBytes temp name, fchmod, fsync, rename) |
+| `O` | Stat result wrapper (isSymbolicLink) |
+| `P8` | Error re-throw helper (calls `j8`) |
+| `pQH` | Pre-dispatch validation / pre-flight check |
+| `IFq` | Entry iterator (`Object.entries` wrapper) |
+| `UQH` | Timestamp recorder (`Date.now` wrapper) |
+| `_Y_` | Symlink-aware path resolver (dirname + `yL6`) |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

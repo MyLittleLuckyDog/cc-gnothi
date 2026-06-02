@@ -1,13 +1,12 @@
 ---
 type: feature-spec
 feature: "resume"
-cc_version: 2.1.154
-updated: "2026-05-26"
+cc_version: "2.1.154"
+updated: "2026-06-02"
 tags: ["resume", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.150
-analysis_basis: "CC v2.1.150 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.154 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +14,14 @@ license: "AGPL-3.0-only"
 
 # `/resume`
 
-> Analysis basis: CC v2.1.150 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.150
+> Analysis basis: CC v2.1.154 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.154
 
 ---
 
 ## Overview
 
-The `/resume` command (also aliased as `/continue`) allows a user to reattach to a previous Claude Code conversation by supplying either a specific session ID or a free-text search term. The command resolves the target session through a multi-stage lookup pipeline — worktree detection, live-session filtering, and conversation-list search — then initialises all required application state before handing control back to the interactive REPL. If the target session is currently running as a background agent, the command refuses to resume it and instead instructs the user to use `claude agents`.
+`/resume` (alias: `/continue`) allows the user to pick up a previously saved conversation by supplying an optional conversation ID or search term. The command queries the live-session registry and the on-disk transcript store, presents a filterable list of past conversations, and — after the user selects one — rehydrates the full session context so the existing thread continues seamlessly. If the target session is currently running as a background agent the command blocks the resume and directs the user to `/agents` instead.
 
 ---
 
@@ -35,228 +34,187 @@ The `/resume` command (also aliased as `/continue`) allows a user to reattach to
 | description | `Resume a previous conversation` |
 | argumentHint | `[conversation id or search term]` |
 | aliases | `["continue"]` |
-| module_id | `MC1` |
+| module_id | `wB1` |
+| load_inline | `true` |
+| loc_byte | `11897294` |
+| loc_byte_end | `11897491` |
+| loc_line | `8681` |
+| arbor_handler.name | `F15` |
+| arbor_handler.fqn | `claude-2.1.154::F15` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.150 bundle.js:+11809417
+Analysis basis: CC v2.1.154 bundle.js:+11897294
 
 ---
 
 ## Input Branching
 
-The command entry point (`commandEntryPoint`) accepts a single optional argument string. The high-level branching is as follows:
+Six or more distinct behavioral paths exist depending on session state, search results, and whether the matched session is actively running. A Mermaid flowchart is used below.
 
 ```mermaid
 flowchart TD
-    A([User invokes /resume]) --> B{Argument provided?}
-    B -- No --> C[List all conversations\nvia listAllLiveSessions]
-    B -- Yes --> D{Argument matches\na live background session?}
-    D -- Yes --> E[Emit blocked message:\n'That session is still running\nas a background agent...']
-    D -- No --> F{Argument looks like\nan exact session ID?}
-    F -- Yes --> G[Direct session load\nvia session ID]
-    F -- No --> H[Fuzzy search across\nconversation store]
-    C --> I{Conversations found?}
-    H --> I
-    I -- None --> J[Render: 'No conversations\nfound to resume.']
-    I -- One --> K[Resume that session]
-    I -- Multiple --> L{Interactive picker\nor first match?}
-    L -- Single unambiguous match --> K
-    L -- Multiple candidates --> M[Present selection UI\nto user]
-    G --> K
-    K --> N[Restore state via\nsessionStateLoader]
-    N --> O([Interactive session active])
+    A(["/resume [arg]"]) --> B[List live sessions via oLH\nFilter with DB1]
+    B --> C[Load transcript store via tT6 / tLH]
+    C --> D{Argument provided?}
+    D -- No arg --> E[Show full conversation picker\nSorted by recency via BRH]
+    D -- Arg present --> F[Match arg against session IDs\nand title search via BRH]
+    F --> G{Match count}
+    G -- Zero matches --> H["Display: 'No conversations found to resume.'\nbundle.js:+11896331"]
+    G -- Exactly one --> I{Is session a live\nbackground agent?}
+    G -- Multiple matches --> J["Render disambiguation list\n(multipleMatches path)\nbundle.js:+11893611"]
+    J --> I
+    E --> I
+    I -- Yes, background agent --> K["Block resume\nDisplay background-agent warning\nbundle.js:+11895896"]
+    I -- No, stopped/idle --> L[Build resume context\nDate.now timestamp\nNw.createElement JSX tree]
+    L --> M[Render session chooser UI\nwith bold title via zB1]
+    M --> N{User selects conversation}
+    N -- Confirmed --> O[Rehydrate session\nvia tT6 state reload]
+    N -- Cancelled --> P([Exit without change])
+    O --> Q([Conversation resumed])
+    K --> R(["Prompt user to open /agents"])
 ```
-
-Analysis basis: CC v2.1.150 bundle.js:+11807905, +11808009, +11808019, +11808454, +11808555
 
 ---
 
 ## Behavioral Spec
 
-### 1. Conversation List Retrieval
+### Handler Entry Point (`F15`)
 
-The command first obtains the full set of resumable sessions. It calls `listAllLiveSessions`, which resolves through `Promise.resolve` and then delegates to the session enumeration subsystem. Sessions are filtered to retain only those whose mode field equals `"interactive"`.
+`F15` is the `AsyncFunction` resolved by Arbor via `module_id → wB1`. It is the primary handler for `/resume`.
 
-```
-async function retrieveResumableSessions():
-    rawSessions = await listAllLiveSessions()
-    interactiveSessions = rawSessions.filter(
-        session => session.mode == "interactive"
-    )
-    return interactiveSessions
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+8656437, +8656467, +8656489, +8656580
-
----
-
-### 2. Background-Agent Guard
-
-Before attempting to load a matched session, the command checks whether that session is currently active as a background agent. If the session is live and running in background mode, resumption is blocked and a fixed error message is emitted to the user.
+Analysis basis: CC v2.1.154 bundle.js:+11895886
 
 ```
-function checkNotBackgroundAgent(session):
-    if session.isLiveBackgroundSession:
-        emit("That session is still running as a background agent. " +
-             "Open `claude agents` to attach to it, " +
-             "or stop it there first to resume here.")
-        return BLOCKED
-    return ALLOWED
+async function resumeCommandHandler(args, appContext):
+
+    # 1. Collect live sessions
+    liveSessions = await listLiveSessions()          # oLH → A.listAllLiveSessions
+    filtered     = filterSessionList(liveSessions)   # DB1 → H.filter
+
+    # 2. Load persisted transcript index
+    transcriptIndex = await loadTranscriptStore()    # tT6 → x6K → d_H
+
+    # 3. Determine candidate sessions
+    if args is empty:
+        candidates = allSessions(transcriptIndex)
+    else:
+        candidates = matchSessions(transcriptIndex, args)   # BRH search
+
+    # 4. Handle zero results
+    if candidates is empty:
+        display("No conversations found to resume.")        # bundle.js:+11896331
+        return
+
+    # 5. Check background-agent guard
+    for each candidate in candidates:
+        if isLiveBackgroundSession(candidate, liveSessions):
+            display(BACKGROUND_AGENT_WARNING)               # bundle.js:+11895896
+            return
+
+    # 6. Render picker UI
+    timestamp = Date.now()                                  # bundle.js:+11896208
+    element   = createElement(SessionPickerComponent, ...)  # bundle.js:+11896182
+    renderJSX(element)
+
+    # 7. User selection → session rehydration
+    selectedId = await awaitUserSelection()
+    if selectedId is null:
+        return   # cancelled
+
+    reloadSession(selectedId, transcriptIndex)              # tT6 state reload
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+11808019, +11808240
+### Session List Retrieval (`oLH`)
 
----
+Calls `A.listAllLiveSessions` (bundle.js:+8787691) and resolves via `Promise.resolve` to collect the current daemon-managed sessions. Sessions marked `"interactive"` (bundle.js:+8787782) are treated as live foreground sessions.
 
-### 3. Worktree Detection
-
-When computing session metadata (title, last-prompt display, directory information), the command invokes the worktree detection helper. This helper runs `git worktree list --porcelain` to enumerate Git worktrees associated with the current repository and then normalises the result to Unicode NFC form. The worktree path is extracted by stripping the leading `"worktree "` prefix (9 characters).
+Analysis basis: CC v2.1.154 bundle.js:+8787639
 
 ```
-function detectWorktree(sessionPath):
-    rawOutput = exec("git", ["worktree", "list", "--porcelain"])
-    lines = rawOutput.split(newline)
-    for each line in lines:
-        if line.startsWith("worktree "):
-            path = line.slice(9).normalize("NFC")
-            worktrees.push(path)
-    match = worktrees.find(wt => sessionPath.startsWith(wt))
-    emit telemetry("tengu_worktree_detection")
-    return match or null
+async function listLiveSessionsForResume():
+    resolved = await Promise.resolve()
+    sessions = A.listAllLiveSessions()
+    return sessions
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+11804846, +11804881, +11804890, +11804901, +11804908, +11805071, +11805096, +11805109, +11805132, +11804990
+### Background-Agent Guard
 
----
+When a candidate session is found in the live-session registry with status `"background session"` (bundle.js:+15514318) or state `"resuming"` (bundle.js:+15485582), the handler emits a hard-stop message:
 
-### 4. Session Search and Filtering
+> "That session is still running as a background agent. Open `claude agents` to attach to it, or stop it there first to resume here."
 
-When the user supplies a search term that does not map directly to an exact session ID, the command performs a case-insensitive substring search across the conversation store. Results are sorted by `localeCompare` for deterministic ordering. An additional regex guard (`regexValidator`) is applied to the argument before it is used as a filter predicate.
+Analysis basis: CC v2.1.154 bundle.js:+11895896
 
-```
-function searchSessions(sessions, term):
-    termLower = term.toLowerCase()
-    candidates = sessions.filter(s =>
-        s.title.toLowerCase().includes(termLower) OR
-        s.id.startsWith(term)
-    )
-    candidates.sort((a, b) => a.title.localeCompare(b.title))
-    return candidates
-```
+### Worktree Detection (`BRH`)
 
-Analysis basis: CC v2.1.150 bundle.js:+11808555, +11808573, +11808587, +12789581, +12789606, +11805267, +11805294, +11805327
+`BRH` enriches each session record with git-worktree metadata by running `git worktree list --porcelain` (literals `"worktree"`, `"list"`, `"--porcelain"` at bundle.js:+11892907 / +11892914). The NFC-normalized worktree path (bundle.js:+11893159) is compared against the current working directory to determine the active worktree. Results are locale-sorted (`$.localeCompare`, bundle.js:+11893333) so the most-relevant conversation appears first.
 
----
-
-### 5. Zero-Results Path
-
-If the search or listing step produces an empty array, the command renders the fixed message `"No conversations found to resume."` and exits without modifying application state.
+Analysis basis: CC v2.1.154 bundle.js:+11892852
 
 ```
-function handleEmptyResults():
-    render("No conversations found to resume.")
-    return
+function enrichWithWorktreeInfo(sessions):
+    result = exec("git", ["worktree", "list", "--porcelain"])
+    lines  = result.split("\n")
+    for line in lines:
+        if line.startsWith("worktree "):               # bundle.js:+11893115
+            path = line.slice(9).normalize("NFC")      # bundle.js:+11893146,+11893159
+    return sessions
+        .find(match by startsWith)                     # bundle.js:+11893273
+        .filter(activeWorktree)                        # bundle.js:+11893300
+        .sort(localeCompare)                           # bundle.js:+11893333
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+11808454
+Telemetry: `tengu_worktree_detection` (bundle.js:+11892996)
 
----
+### Transcript Store Loader (`tT6` / `x6K` / `d_H`)
 
-### 6. Result Disambiguation (Multiple Matches)
+`tT6` is the top-level transcript-store accessor. It delegates to `x6K` which initialises the store via `d_H` (the main store-initialiser). `d_H` deserialises transcript segments keyed by message type (`"assistant"`, `"user"`, `"system"`, `"attachment"`, `"progress"`, `"summary"`, `"last-prompt"`, etc.) from on-disk JSONL files via `_7.readFile`, `uj5` (binary JSONL parser), and `mj5` (sync-read helper).
 
-When more than one conversation matches, the command presents an interactive selection component rendered via `createElement`. The component uses bold formatting (via `boldTextRenderer`) for session titles. The user's selection is recorded and passed on to the session state loader.
-
-```
-function renderPicker(candidates):
-    element = Mw.createElement(SelectionComponent, {
-        items: candidates,
-        renderItem: item => boldTextRenderer(item.title)
-    })
-    return element
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+11808305, +11805569, +11805605
-
----
-
-### 7. Session State Restoration
-
-Once a session is identified, `sessionStateLoader` (calling `stateRestorationOrchestrator`) reads and reconstitutes the full application state from disk. This involves:
-
-1. Reading the JSONL transcript file from disk (`readFile`).
-2. Rehydrating all named state stores (summary, last-prompt, custom-title, ai-title, tag, agent-name, agent-color, agent-setting, mode, permission-mode, isolation-latch, worktree-state, pr-link, bridge-session, file-history-snapshot, attribution-snapshot, content-replacement, fork-context-ref, marble-origami-commit, marble-origami-snapshot).
-3. Verifying there are no parent-cycle anomalies in the transcript chain; emitting `tengu_transcript_parent_cycle` if a cycle is detected.
-4. Computing conversation summary display metadata via `messageDisplayFormatter`.
-5. Firing the `slash_command_session_id` telemetry property with the resolved session ID.
+Analysis basis: CC v2.1.154 bundle.js:+11896637
 
 ```
-async function sessionStateLoader(sessionId):
-    raw = await fs.readFile(sessionPath, "utf8")
-    state = parseJSONL(raw)
-    detectAndReportCycles(state.messages)   // emits tengu_transcript_parent_cycle if needed
-    restoreAllNamedStores(state.metadata)
-    emitProperty("slash_command_session_id", sessionId)
-    return state
+function loadTranscriptStore(sessionId):
+    raw    = fs.readFile(transcriptPath(sessionId))    # _7.readFile
+    parsed = parseBinaryJSONL(raw)                     # uj5
+    store  = buildStoreObject(parsed)                  # d_H, keyed maps
+    return store
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+12797327, +12795293, +12795405, +12795472, +12795568, +12795646, +12795716, +12795777, +12795851, +12795927, +12796007, +12796070, +12796154, +12796228, +12796312, +12796443, +12796564, +12796626, +12796697, +12796903, +12796958, +12797009, +12797808, +11808715
+### Session Search / Matching (`BRH` search path)
 
----
+When an argument is provided, `BRH` is invoked as a search function. It:
 
-### 8. Session Title Telemetry
+1. Splits the argument string (`A.split`, bundle.js:+11893077).
+2. Attempts a direct UUID prefix match (`H.startsWith`, bundle.js:+11893273).
+3. Falls back to a case-insensitive title search (`H.toLowerCase`, via `Sl`, bundle.js:+12898138).
+4. If zero results: displays `"No conversations found to resume."` (bundle.js:+11896331).
+5. If multiple results: triggers the `"multipleMatches"` disambiguation path (bundle.js:+11893611).
+6. If session not found by any route: emits the `"sessionNotFound"` signal (bundle.js:+11893540).
 
-After the session is loaded, the command emits an additional property `slash_command_title` containing the display title resolved for the resumed session (custom title if set, otherwise AI-generated title, otherwise last-prompt snippet). The last-prompt snippet is truncated to 200 characters.
+Analysis basis: CC v2.1.154 bundle.js:+11893254
 
-```
-function resolveDisplayTitle(session):
-    if session.metadata["custom-title"]:
-        return session.metadata["custom-title"]
-    if session.metadata["ai-title"]:
-        return session.metadata["ai-title"]
-    lastPrompt = session.metadata["last-prompt"] or "No prompt"
-    return lastPrompt.slice(0, 200)
-```
+### Title Rendering (`zB1`)
 
-Analysis basis: CC v2.1.150 bundle.js:+11808939, +12773483, +12773535, +12773442
+The selected session title is rendered in bold using `j6.bold` (bundle.js:+11893575) within the JSX picker component.
 
----
+Analysis basis: CC v2.1.154 bundle.js:+11896866
 
-### 9. Message Display Formatting
+### Away-Summary Integration (`k` / `h`)
 
-Each restored message is passed through `messageDisplayFormatter`, which categorises message roles and omits messages of type `"attachment"`, `"system"`, and `"progress"` from the rendered summary. Only `"user"` and `"assistant"` roles are surfaced in the resume preview.
+When a session is resumed after a period of inactivity, the away-summary subsystem (`k`, bundle.js:+14922444) evaluates whether a background catch-up summary should be generated. The subsystem skips generation when:
 
-```
-function messageDisplayFormatter(messages):
-    visible = messages.filter(m =>
-        m.type NOT IN ["attachment", "system", "progress"]
-    )
-    return visible.map(m => formatForDisplay(m))
-```
+- Cache age is unknown: `"[awaySummary] skipped: cache age unknown"` (bundle.js:+14922446)
+- Cache is stale (staleness threshold: 0.9, bundle.js:+14922515)
+- Rate-limit proximity detected: `"[awaySummary] skipped: at or near rate limit"` (bundle.js:+14922610)
+- A draft input is present: `"[awaySummary] skipped: draft input present"` (bundle.js:+14922693)
 
-Analysis basis: CC v2.1.150 bundle.js:+12780917, +12780953, +12780974, +12780991, +12781004, +11808160
+When generation proceeds, telemetry event `away_summary_generate` is emitted (bundle.js:+14922924). Failures are recorded as `generate_failed` (bundle.js:+14922948) with a retry cap of 3 (bundle.js:+14922999).
 
----
+The "blurred" vs "focused" window state (bundle.js:+14923236, +14923386) determines the inactivity window: a 3 600 000 ms (1-hour) cap is applied (bundle.js:+14923297) with an 80% utilisation threshold (bundle.js:+14923353).
 
-### 10. Chain / Conversation Graph Construction
-
-The full conversation dependency graph is built by `chainBuilder`. It uses a queue-based traversal that detects and logs timestamp fallbacks and parent-cycle anomalies.
-
-```
-function chainBuilder(sessions):
-    visited = new Set()
-    queue = []
-    for each session in sessions:
-        if visited.has(session.id): continue
-        try:
-            chain = buildChain(session, visited, queue)
-            chains.push(chain)
-        catch CycleError:
-            emit telemetry("tengu_chain_parent_cycle")
-        if usedTimestampFallback:
-            emit telemetry("tengu_chain_timestamp_fallback")
-    return chains
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+12776170, +12776185, +12776287, +12776421, +12776436, +12776477, +12776495, +12776513
+Analysis basis: CC v2.1.154 bundle.js:+14922444
 
 ---
 
@@ -264,16 +222,19 @@ Analysis basis: CC v2.1.150 bundle.js:+12776170, +12776185, +12776287, +12776421
 
 | Item | Detail |
 |---|---|
-| Telemetry events | `tengu_worktree_detection` (bundle.js:+11804990), `tengu_transcript_parent_cycle` (bundle.js:+12797808), `tengu_chain_parent_cycle` (bundle.js:+12776287), `tengu_chain_timestamp_fallback` (bundle.js:+12776436), `tengu_daemon_control` (bundle.js:+15296981), `tengu_daemon_config_reload` (bundle.js:+15275657), `tengu_bg_spare_enable` (bundle.js:+15260204), `tengu_bg_spare_spawn` (bundle.js:+15260564), `tengu_bg_dispatch_sigkill_escalate` (bundle.js:+15260871), `tengu_bg_dispatch_low_mem` (bundle.js:+15261450), `tengu_bg_spare_claim` (bundle.js:+15262266), `tengu_bg_spare_claim_fail` (bundle.js:+15262529) |
-| Telemetry properties | `slash_command_session_id` (bundle.js:+11808715), `slash_command_title` (bundle.js:+11808939) |
-| Named store writes | All 20 metadata stores rehydrated: `summary`, `last-prompt`, `custom-title`, `ai-title`, `tag`, `agent-name`, `agent-color`, `agent-setting`, `mode`, `permission-mode`, `isolation-latch`, `worktree-state`, `pr-link`, `bridge-session`, `file-history-snapshot`, `attribution-snapshot`, `content-replacement`, `fork-context-ref`, `marble-origami-commit`, `marble-origami-snapshot` (bundle.js:+12795293–+12797009) |
-| File system reads | JSONL transcript file read via `fs.readFile` (bundle.js:+12797327); Git worktree enumeration via `git worktree list --porcelain` (bundle.js:+11804901) |
-| Background agent guard | Session blocked if live background agent; no state mutation occurs (bundle.js:+11808019) |
-| Error logging | Errors during chain build are passed to `errorLogger.logError` (bundle.js:+968915) |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | Full session state restored to interactive REPL; `mode` store set to `"interactive"` (bundle.js:+8656580) |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Daemon interactions | May trigger background-session spare-pool operations (`bB.spawn`, `C.kill`) if background daemon is involved (bundle.js:+15262588, +15260912) |
+| Telemetry | `tengu_worktree_detection` (bundle.js:+11892996) — git worktree detection on session list build |
+| Telemetry | `tengu_bg_spare_enable`, `tengu_bg_spare_spawn`, `tengu_bg_spare_claim`, `tengu_bg_spare_claim_fail` — background daemon spare-pool events touched indirectly |
+| Telemetry | `tengu_transcript_phantom_parent` (bundle.js:+12902836) — orphaned parent link in transcript |
+| Telemetry | `tengu_transcript_parent_cycle` (bundle.js:+12906415) — cycle detected in transcript chain |
+| Telemetry | `tengu_chain_parent_cycle` (bundle.js:+12884313), `tengu_chain_timestamp_fallback` (bundle.js:+12884462), `tengu_chain_parallel_tr_recovered` (bundle.js:+12886328) — chain ordering anomalies |
+| Telemetry | `tengu_relink_walk_broken` (bundle.js:+12883823) — broken relink walk during store build |
+| Telemetry | `away_summary_generate`, `away_summary` (bundle.js:+14922924, +14921555) — resumption summary generation |
+| Telemetry | `tengu_daemon_control` (bundle.js:+15514441) — daemon lifecycle events |
+| appState changes | Active session ID updated to the chosen conversation; full transcript map loaded into in-memory store via `d_H` |
+| Hook registration | JSX component rendered into the CLI render tree via `Nw.createElement` (bundle.js:+11896182) |
+| Side effects | Reads on-disk JSONL transcript files; may exec `git worktree list --porcelain` |
+| Sound | None detected in depth-2 traversal |
+| Slash-command telemetry literals | `"slash_command_session_id"` (bundle.js:+11896592), `"slash_command_title"` (bundle.js:+11896816) — emitted on successful selection |
 
 ---
 
@@ -281,18 +242,17 @@ Analysis basis: CC v2.1.150 bundle.js:+12776170, +12776185, +12776287, +12776421
 
 | Version | Change |
 |---|---|
-| v2.1.150 | Initial analysis |
+| v2.1.154 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Trying to resume a running background agent session.** If the session is currently active as a background agent, `/resume` will refuse and emit a guidance message. Use `claude agents` to attach to or stop the session first.
-2. **Supplying an ambiguous search term.** If the term matches multiple conversation titles, an interactive picker is displayed. Providing a more specific term or the exact session ID skips the picker entirely.
-3. **Expecting `/resume` to work outside a Git repository for worktree matching.** Worktree detection runs `git worktree list`; in a non-Git directory this step produces no matches and path-based filtering falls back gracefully, but worktree-scoped sessions may not be found.
-4. **Assuming `/continue` behaves differently.** The alias `continue` is registered identically to `resume` and follows exactly the same code path.
-5. **Searching by partial session ID prefix with a very short string.** Short prefixes may match multiple sessions and trigger the disambiguation picker unexpectedly. Use at least 8 characters of the session ID for reliable direct lookup.
-6. **Expecting the full message history to render immediately.** The restore pipeline reads the JSONL transcript asynchronously; rendering is gated on the completion of `sessionStateLoader` and may appear to pause briefly for large transcripts.
+1. **Trying to resume a running background session** — `/resume` will refuse with the background-agent warning (bundle.js:+11895896). Use `/agents` to attach or stop the session first.
+2. **Providing a partial search term that matches multiple sessions** — the command enters a disambiguation list (`multipleMatches`, bundle.js:+11893611). Provide a more specific term or the full UUID prefix to avoid this.
+3. **Expecting the alias `/continue` to differ in behaviour** — it is a pure alias; the registration's `aliases` array (`["continue"]`) maps directly to the same handler `F15`.
+4. **Assuming away-summary always runs on resume** — the away-summary subsystem applies multiple skip conditions (stale cache, rate-limit proximity, draft input present); a summary is not guaranteed.
+5. **Running `/resume` outside a git repository** — worktree detection (`BRH`) calls `git worktree list`; in non-git directories this subprocess will fail silently, falling back to the unfiltered session list.
 
 ---
 
@@ -302,61 +262,162 @@ Analysis basis: CC v2.1.150 bundle.js:+12776170, +12776185, +12776287, +12776421
 
 | Identifier | Role |
 |---|---|
-| `LC1` | Pre-filter helper: filters conversation list before passing to command entry point |
-| `Cf` | Shared utility called during filtering and session search steps |
-| `qsL` | Command entry point / main render function for `/resume` |
-| `S7H` | Live session enumerator; wraps `listAllLiveSessions` |
-| `RH` | Session restore orchestrator; coordinates state loading from disk |
-| `c_` | Error construction helper used inside session restore |
-| `mH` | String coercion utility used during restore |
-| `G1` | Sub-step within session restore pipeline (calls `Z2A`) |
-| `xiK` | Queue rotation helper: shifts and pushes to a bounded queue (`Hm6`) |
-| `EH` | String formatting helper for display output |
-| `shH` | Worktree detection helper (runs `git worktree list --porcelain`) |
-| `G_` | Worktree-aware session initialiser (calls multiple subsystems) |
-| `c` | Generic async utility / context helper used in multiple places |
-| `$` | Session path / string context object (uses `startsWith`, `slice`, `localeCompare`) |
-| `L` | Pending-operation tracker (uses `add`, `finally`, `delete` pattern) |
-| `j_` | Text rendering / formatting utility (calls `Dv`) |
-| `Dv` | Low-level text primitive used by `j_` |
-| `iE8` | Summary line builder (calls `KN6`) |
-| `KN6` | Conversation summary formatter (joins parts with `", "`) |
-| `kr` | Regex validator applied to user argument before search |
-| `M` | Session closer / cleanup helper (calls `A.close`, `q.close`) |
-| `q` | File-handle or socket resource (calls `hJK.unlinkSync` on close) |
-| `wo` | Shared context / application state accessor used in rendering |
-| `b7H` | Full session state loader; reads all named stores from transcript |
-| `b8H` | Named-store hydration engine; writes all 20 metadata stores |
-| `Rv8` | Date parser used during session sorting (calls `Date.parse`) |
-| `h` | Focus/blur timer manager (tracks `blurred`/`focused` state with 3 600 000 ms window) |
-| `C7H` | Conversation chain builder (cycle detection, timestamp fallback) |
-| `ZaH` | Message mapping helper (produces display records via `H.map`) |
-| `Ge_` | Title normaliser (calls `replaceAll`, slices to 200 characters) |
-| `Ee_` | Message type classifier (identifies `attachment`, `system`, `progress`) |
-| `K` | Column layout formatter (pads entries to fixed width of 40 characters) |
-| `f` | Conversation store accessor (reads from multiple sub-stores) |
-| `O` | Sub-store accessor keyed by `k8` |
-| `J` | Sub-store accessor using `w` helper |
-| `X` | Binary/stream buffer handler (handles `ETOOLARGE`, `EUNKNOWN` error codes) |
-| `P` | SDK connection manager (states: `connected`, `failed`; calls `Promise.all`) |
-| `T` | Session presence tracker (uses `has`/`get` pattern) |
-| `z` | Daemon control accessor (calls `bH`, `uH`, `Rk`, `pu`) |
-| `Y` | Supervisor/config update manager (calls `Z.start`, `Z.stop`, `Z.updateConfig`) |
-| `D` | Background spare-pool manager (emits `tengu_bg_spare_enable`, monitors free memory) |
-| `w` | Background process dispatcher (spawns via `bB.spawn`, kills via `C.kill`) |
-| `j` | Background process registry (kills via `y.kill`) |
-| `Cv8` | Cache lookup helper for session chain graph |
-| `bv8` | Session value enumerator (uses `Array.from(H.values())`) |
-| `Z` | Filtered session result set |
-| `V` | Filter predicate result set |
-| `sW6` | Full application state snapshot builder; aggregates all sub-store getters |
-| `_r1` | State initialiser called before snapshot (calls `b8H`, `Object.assign`) |
-| `_` | Conversation record object (used for `replaceAll`, `keys`, `values`) |
-| `I` | Away-summary generator (emits `away_summary_generate`, `generate_failed`) |
-| `$e_` | Full message display record builder (calls `Ge_`, `ZaH`, `Ee_`) |
-| `G` | Input event interceptor (calls `preventDefault`, `FW`, `Y`, `H`) |
-| `dLH` | Display layout helper called during result rendering |
-| `Zc` | Conversation picker / search-and-sort function (calls `shH`, `Ar1`, `GSH`) |
-| `Ar1` | File-system completion / path resolver used for session directory lookup |
-| `GSH` | Binary buffer builder used during session data serialisation |
-| `qC1` | Title bold-render component (calls `j6.bold`) |
+| `DB1` | Session list pre-filter (filter live sessions before display) |
+| `F15` | Main handler `AsyncFunction` for `/resume` (Arbor-resolved entry point) |
+| `oLH` | Live-session fetcher; calls `A.listAllLiveSessions` |
+| `hH` | Error/warning logger utility |
+| `F_` | Error constructor wrapper |
+| `xH` | String coercion utility |
+| `q1` | Telemetry-mode resolver |
+| `zEA` | Telemetry string helper (calls `xH`) |
+| `D84` | Telemetry queue manager (shift/push) |
+| `ZH` | String-to-display formatter |
+| `BRH` | Worktree-detection and session-search enricher |
+| `W_` | Daemon/process spawner orchestrator |
+| `ZGH` | Child-process manager factory |
+| `WNA` | Process argument builder (win32 / .exe / cmd handling) |
+| `li8` | Process stdio setup helper |
+| `ni8` | Process stdio binder |
+| `ri8` | Process pipe configurator |
+| `kvA` | Numeric-finite validator |
+| `zL6` | Async process runner with timeout |
+| `ci8` | Reflect.apply / defineProperty wrapper |
+| `ANA` | Event-emitter hook registrar (on "exit") |
+| `NvA` | Timeout-race promise helper |
+| `IvA` | Kill-signal sender |
+| `VvA` | stdout/stderr data handler |
+| `vvA` | SIGKILL escalation handler |
+| `HNA` | Parallel-process awaiter |
+| `jL6` | Process result collector |
+| `tvA` | Pipe configurator (A.pipe) |
+| `evA` | Abort-signal adder |
+| `RvA` | Output stream binder |
+| `D` | Session dispatch / daemon manager |
+| `E6` | Daemon registration / feature-flag checker |
+| `$` | Disposable resource wrapper |
+| `eI8` | macOS memory monitor |
+| `P5A` | Background PTY host spawner |
+| `c` | Generic async continuation / callback |
+| `Wz` | Warning logger |
+| `N` | Platform/OS string classifier |
+| `J8` | JSON serialiser/logger |
+| `gA4` | String-padding utility (padEnd 10) |
+| `$_` | Working-directory resolver |
+| `ov` | CWD getter |
+| `dN8` | Project-path builder |
+| `Ly6` | File-list builder (joins paths, calls u6K) |
+| `u6K` | Recursive directory walker / file collector |
+| `Gc` | Projects-directory path joiner |
+| `W` | OL-based string replacer |
+| `K` | Column-width formatter (padEnd 40) |
+| `aA` | Async file accumulator |
+| `k2H` | Transcript-slice collector |
+| `lAA` | Directory reader for transcript files |
+| `sI6` | Index get/set/values utility |
+| `Zz` | Path-segment slicer/normaliser |
+| `T` | Input-event dispatcher (keyboard/remote-control) |
+| `Y` | Supervisor session writer/updater |
+| `E` | Session store map |
+| `j` | Active-session registry (values/kill) |
+| `X` | IPC socket reader (Buffer concat/subarray) |
+| `P` | MCP connection handler |
+| `J` | Stream wrapper |
+| `G` | MCP tool-result collector |
+| `PCH` | Transcript binary record writer (Buffer.alloc) |
+| `lj5` | Transcript record assembler |
+| `ro` | Regex-test utility (`cn7.test`) |
+| `ma` | Message-array builder |
+| `tLH` | Transcript-state reader (gets maps for all slot types) |
+| `d_H` | Transcript store initialiser / main state-map builder |
+| `Oj5` | Transcript slot constructor |
+| `p` | Write-queue with clearTimeout |
+| `VC` | Validity checker |
+| `bzA` | JSONL entry array normaliser |
+| `RzA` | JSONL regex tester |
+| `CzA` | JSONL string replacer |
+| `Wj` | Walk-index updater |
+| `M` | MCP server manager (vSH + JGK) |
+| `vSH` | MCP server connection configurator |
+| `JGK` | MCP connection-result applier |
+| `Gm5` | MCP server reconciler (Object.entries + filter) |
+| `O` | k8-keyed output handler |
+| `z` | Daemon state controller (yH/uH/vy/km) |
+| `yH` | Daemon "stopped" state handler |
+| `uH` | Daemon "background session" state handler |
+| `vy` | Daemon "firstParty" push helper |
+| `km` | Daemon shutdown race (Promise.race / process.exit 500 ms) |
+| `w` | Daemon worker main loop |
+| `R` | Daemon I/O writer (lEK / z.write) |
+| `FD6` | Config-file reader (QP.readFile / JSON parse) |
+| `B` | Retired-session filter (pH.filter / cH.has) |
+| `W5A` | Background-session claim/connect helper |
+| `N5A` | Background-session lifecycle manager (spawn/kill/cleanup) |
+| `S` | Session-state snapshot |
+| `V` | Versioned-state slot |
+| `Q` | Persistent-file read/unlink queue (DN6 / rI1) |
+| `DN6` | File-read with EPH parse |
+| `rI1` | File-unlink with EPH parse |
+| `k` | Away-summary controller |
+| `VW8` | Away-summary cache-state getter |
+| `aC5` | Away-summary m7A invoker |
+| `zJK` | Away-summary job key |
+| `Q58` | Away-summary API call orchestrator |
+| `_` | Generic utility (identity / slot) |
+| `oG1` | UUID generator (Zv.randomUUID) |
+| `g` | B/$ composite object |
+| `h` | Away-summary inactivity window manager |
+| `_d` | Blurred/focused state setter |
+| `uj5` | Binary JSONL parser (Buffer-level reader) |
+| `o` | setTimeout-based ref holder |
+| `b6K` | Buffer.at byte accessor |
+| `wH` | Stream-chunk enqueuer |
+| `m6` | JSON.parse wrapper |
+| `C` | Seen-UUID set |
+| `y` | z.write / clearable writer |
+| `bj5` | Buffer comparator |
+| `l` | HH.filter wrapper |
+| `_H` | Ref/timeout holder (T.current) |
+| `a` | G.current ref holder |
+| `e` | Notification adder (H.addNotification) |
+| `LH` | Multi-stream listener combiner |
+| `HH` | Voice-session controller (recording/WebSocket) |
+| `mj5` | Sync JSONL file reader (KS.openSync/readSync) |
+| `x` | Timed writer with Math.round / b.unref |
+| `b` | Unref-able timer handle |
+| `w6K` | Walk-index map manager |
+| `Tj5` | Walk-index entry builder |
+| `H_` | Generic underscore identity |
+| `xj5` | JSONL index writer (Buffer encode) |
+| `hGH` | NDJSON stream parser (kq4/Iq4/hq4/yq4) |
+| `kq4` | NDJSON BOM detector |
+| `Iq4` | NDJSON line splitter |
+| `hq4` | NDJSON JSON.parse per line |
+| `yq4` | NDJSON toString/push |
+| `A9` | J8-based action dispatcher |
+| `d` | gh8-keyed permission holder |
+| `gh8` | Permission gate |
+| `r` | w/d composite (allow/deny) |
+| `Ny8` | Date.parse timestamp extractor |
+| `sLH` | Session-chain builder (sorts by timestamp) |
+| `Vj5` | Number.isNaN / H.values validator |
+| `vj5` | Session-slot map builder |
+| `Zj5` | Sorted-session list builder |
+| `S6K` | Session-slot value accumulator |
+| `ltH` | H.map transcript mapper |
+| `HqA` | replaceAll / slice title normaliser |
+| `kk6` | Markdown-block token parser |
+| `i1` | Regex-exec text parser (IS / H.trim) |
+| `AqA` | Nj5/kj5 content-type checker |
+| `Nj5` | Content array `.some` validator |
+| `kj5` | Array.isArray / .some type-guard |
+| `ky8` | H.get / q.get / q.set / A.push slot accessor |
+| `Iy8` | Array.from / H.values collector |
+| `tT6` | Transcript-store top-level accessor |
+| `x6K` | Transcript-store factory (pj5 + d_H + Object.assign) |
+| `pj5` | Project-path stat checker |
+| `WS` | ov-based working-directory snapshot |
+| `YZ` | Readdir recursive walker |
+| `dAA` | H.at / HqA / ltH / AqA message decorator |
+| `KfH` | Session-key formatter |
+| `Sl` | Composite session searcher (BRH + u6K + PCH + filter) |
+| `zB1` | Bold-title renderer (j6.bold) |

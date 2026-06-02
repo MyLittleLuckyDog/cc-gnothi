@@ -1,12 +1,12 @@
 ---
 type: feature-spec
 feature: "clear"
-cc_version: 2.1.156
+cc_version: "2.1.156"
+updated: "2026-06-02"
 tags: ["clear", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.150
-analysis_basis: "CC v2.1.150 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.156 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -14,14 +14,14 @@ license: "AGPL-3.0-only"
 
 # `/clear`
 
-> Analysis basis: CC v2.1.150 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.150
+> Analysis basis: CC v2.1.156 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.156
 
 ---
 
 ## Overview
 
-The `/clear` command terminates the current conversation session and starts a fresh one with an empty context window. The previous session is serialized to disk and remains fully resumable via `/resume`. Internally, the command triggers a complete session teardown sequence — flushing pending I/O, killing any background subprocesses, resetting application state — before constructing and activating a new session identified by a fresh UUID.
+The `/clear` command starts a completely fresh conversation session with an empty context window, discarding all messages in the current in-memory conversation. The previous session's data is preserved on disk and remains resumable via `/resume`. The command is also reachable under the aliases `/reset` and `/new`.
 
 ---
 
@@ -32,338 +32,216 @@ The `/clear` command terminates the current conversation session and starts a fr
 | type | `local` |
 | name | `clear` |
 | description | `Start a new session with empty context; previous session stays on disk (resumable with /resume)` |
+| aliases | `["reset", "new"]` |
 | argumentHint | `[name]` |
-| aliases | `reset`, `new` |
 | supportsNonInteractive | `true` |
 | thinClientDispatch | `post-text` |
-| module_id | `d21` |
+| module_id | `yV1` |
+| load_inline | `true` |
+| loc_byte | `10745850` |
+| loc_byte_end | `10746141` |
+| arbor_handler.name | `alL` |
+| arbor_handler.fqn | `claude-2.1.156::alL` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.150 bundle.js:+10665211
+Analysis basis: CC v2.1.156 bundle.js:+10745850
 
 ---
 
 ## Input Branching
 
-The entry point (function `commandHandler`) trims the raw argument string before passing it downstream. A zero-length argument after trimming is treated as "no name provided".
+The handler accepts an optional `[name]` argument and branches through several distinct state transitions: argument presence/absence, backgrounding detection, and the full session teardown/rebuild pipeline. Five or more distinct control paths exist, so a Mermaid flowchart is used.
 
 ```mermaid
 flowchart TD
-    A[User types /clear, /reset, or /new] --> B{Argument present?}
-    B -- "yes (trimmed != '')" --> C[Use trimmed string as new session name]
-    B -- "no / empty" --> D[Session created with auto-generated name]
-    C --> E[Invoke sessionReset with named session]
-    D --> E
-    E --> F{isBackgrounded flag set?}
-    F -- "yes" --> G[Skip foreground teardown steps]
-    F -- "no" --> H[Full teardown: flush, kill subprocesses, clear state]
-    H --> I[Abort pending requests via AbortSignal.timeout]
-    I --> J[Emit conversation_clear event]
-    J --> K[Generate new UUID for session]
-    K --> L[Emit conversation_reset event]
-    L --> M[Activate new session / emit SessionStart hook]
-    G --> M
-    M --> N[Return text node to UI]
+    A(["/clear [name] invoked"]) --> B["Trim optional name argument\n(alL → H.trim, bundle.js:+10745676)"]
+    B --> C{Argument present?}
+    C -- "yes (non-empty after trim)" --> D["Store as new session name"]
+    C -- "no" --> E["Name is undefined / auto-generated"]
+    D --> F["Call session teardown orchestrator\n(dv6, bundle.js:+10745712)"]
+    E --> F
+    F --> G["Parse & validate current session parameters\n(lv6, bundle.js:+10743755)"]
+    G --> H["Emit tengu_cache_eviction_hint telemetry\n(bundle.js:+10743859)"]
+    H --> I["Fire SessionEnd hook pipeline\n(sSH → D7/dW, bundle.js:+12981322)"]
+    I --> J["Clear in-memory conversation buffers\n(Xz: lR6.clear + Hu8.clear, bundle.js:+26612)"]
+    J --> K{Session is backgrounded?}
+    K -- "yes (isBackgrounded flag, bundle.js:+10743962)" --> L["Schedule AbortSignal.timeout\n(bundle.js:+10743815)\nDispatch bg teardown via daemon control"]
+    K -- "no" --> M["Synchronous in-process teardown"]
+    L --> N["Kill running processes\n(w → R.kill, bundle.js:+15478906)"]
+    M --> N
+    N --> O["Flush pending hook executor queues\n(kO → Qy8/Fy8.delete, bundle.js:+10744576)"]
+    O --> P["Reset all in-memory caches\n(sr_ bulk-clear, bundle.js:+10742720)"]
+    P --> Q["Generate new session UUID\n(NV1.randomUUID, bundle.js:+10745016)"]
+    Q --> R["Emit conversation_reset telemetry\n(bundle.js:+10744977)"]
+    R --> S["Re-register key bindings & UI state\n(V3, G_, T, bundle.js:+10744919)"]
+    S --> T(["Fresh session ready"])
 ```
-
-Analysis basis: CC v2.1.150 bundle.js:+10665037 (trim), +10665052 (zero literal), +10663421 (isBackgrounded key), +10663353 (conversation_clear), +10664436 (conversation_reset), +10664475 (randomUUID)
 
 ---
 
 ## Behavioral Spec
 
-### 1. Command Entry and Argument Parsing
+### Handler Entry Point (`alL`)
 
 ```
-function commandHandler(rawArgs, appContext):
-    trimmedName = rawArgs.trim()          // strips leading/trailing whitespace
-    if trimmedName == "":
-        sessionName = null
+async function clearCommandHandler(userInput, appContext):
+    rawName = userInput.trim()           // H.trim, bundle.js:+10745676
+    name    = rawName if rawName else undefined
+
+    await runSessionTeardownAndRebuild(appContext, name)
+```
+
+Analysis basis: CC v2.1.156 bundle.js:+10745676
+
+---
+
+### Session Teardown Orchestrator (`dv6`)
+
+```
+async function sessionTeardownAndRebuild(context, newName):
+    sessionParams = parseAndValidateSession(context)     // lv6
+    emit_telemetry("tengu_cache_eviction_hint")          // bundle.js:+10743859
+
+    await fireSessionEndHooks(context)                   // sSH
+    clearConversationBuffers()                           // Xz → lR6.clear + Hu8.clear
+
+    if context.flags["isBackgrounded"]:                  // bundle.js:+10743962
+        signal = AbortSignal.timeout(...)                // bundle.js:+10743815
+        await backgroundedTeardown(signal, context)      // w, R.kill
     else:
-        sessionName = trimmedName
-    return sessionReset(sessionName, appContext)
+        await inProcessTeardown(context)
+
+    flushHookExecutorQueues()                            // kO
+    bulkClearAllCaches()                                 // sr_
+
+    newSessionId = crypto.randomUUID()                   // NV1.randomUUID, bundle.js:+10745016
+    emit_telemetry("conversation_reset", newSessionId)   // bundle.js:+10744977
+
+    re_register_ui_and_bindings(context)                 // V3, G_, T
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+10665037
+Analysis basis: CC v2.1.156 bundle.js:+10743755
 
 ---
 
-### 2. Session Reset Orchestrator
-
-The core reset function (`sessionReset`) coordinates the full teardown-and-reinitialize sequence.
+### Session Parameter Validation (`lv6`)
 
 ```
-async function sessionReset(sessionName, appContext):
-    // Step 1: compute context window position (parseInt, base-10, clamped)
-    tokenCount = parseContextSize(appContext.contextSizeHint)
-
-    // Step 2: emit SessionEnd lifecycle event to hook system
-    emitSessionEndEvent()
-
-    // Step 3: create AbortSignal with timeout for pending operations
-    signal = AbortSignal.timeout(timeoutMs)
-
-    // Step 4: emit tengu_cache_eviction_hint telemetry
-    emitTelemetry("tengu_cache_eviction_hint", { event: "conversation_clear" })
-
-    // Step 5: check isBackgrounded flag in appState
-    backgrounded = appState.get("isBackgrounded")
-
-    // Step 6: iterate Object.values of active tool handlers; enqueue each for shutdown
-    for handler of Object.values(activeToolHandlers):
-        enqueueForShutdown(handler)    // calls pendingOpsTracker
-
-    // Step 7: kill or retire active subprocess pool entries
-    shutdownSubprocessPool()
-
-    // Step 8: add new session record to session registry
-    sessionRegistry.add(newSessionRecord)
-
-    // Step 9: push teardown record
-    teardownLog.push(teardownRecord)
-
-    // Step 10: clear the internal state map
-    internalStateMap.clear()
-
-    // Step 11: iterate Object.keys of stateCache; for each running entry, stop it
-    for key of Object.keys(stateCache):
-        if stateCache[key].status == "running":
-            stop(stateCache[key])
-
-    // Step 12: iterate Object.entries of timerMap; clearTimeout each
-    for [id, timer] of Object.entries(timerMap):
-        clearTimeout(timer)
-
-    // Step 13: flush the log writer, delete cached log entry
-    flushAndEvictLog()
-
-    // Step 14: resolve working directory (absolute path)
-    workDir = resolveWorkingDirectory(appContext.cwd)
-
-    // Step 15: generate new session UUID
-    newSessionId = crypto.randomUUID()
-
-    // Step 16: emit conversation_reset event with new session ID
-    emitEvent("conversation_reset", { sessionId: newSessionId })
-
-    // Step 17: initialize new session context (model, tokens, config)
-    newSession = buildSessionContext(newSessionId, sessionName, tokenCount)
-
-    // Step 18: update symlink pointing "latest" -> new session directory
-    updateLatestSymlink(newSession)
-
-    // Step 19: emit SessionStart hook event
-    emitHook("SessionStart", newSession)
-
-    // Step 20: initialize shell working directory
-    setShellCwd(workDir)
-
-    // Step 21: return text node for UI display
-    return { type: "text", content: sessionSummaryText(newSession) }
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+10663214 (sessionReset body), +10663274 (AbortSignal.timeout), +10663318 (tengu_cache_eviction_hint), +10663353 (conversation_clear), +10663421 (isBackgrounded), +10663484 (Object.values), +10663513 (subprocess pool), +10663536 (session registry), +10663553 (teardown log), +10663634 (internalStateMap.clear), +10663659 (Object.keys), +10663773 (Object.entries), +10663934 (clearTimeout), +10664035 (flushAndEvictLog), +10664475 (randomUUID), +10664436 (conversation_reset), +10665139 (text type literal)
-
----
-
-### 3. Context Size Parser
-
-```
-function parseContextSize(hint):
-    parsed   = parseInt(hint, 10)          // radix 10
-    if not Number.isFinite(parsed):
-        return defaultContextSize          // falls back via rY / Hm helpers
-    clamped  = Math.max(minTokens, Math.min(maxTokens, parsed * 1000))
+function parseAndValidateSession(context):
+    raw     = parseInt(context.token, 10)                // bundle.js:+12990689
+    if not Number.isFinite(raw):
+        raise validation error
+    clamped = Math.max(0, Math.min(raw, 1000))           // bundle.js:+12990876 / +12990907 / +12990920
+    applySettings(clamped)                               // MD, sm, YU
     return clamped
 ```
 
-Multiplier constant: **1000** (bundle.js:+12880389); radix: **10** (bundle.js:+12880213).
+Analysis basis: CC v2.1.156 bundle.js:+12990689
 
-Analysis basis: CC v2.1.150 bundle.js:+12880202 (parseInt), +12880224 (Number.isFinite), +12880389 (1000 multiplier), +12880420 (Math.max), +12880433 (Math.min)
-
----
-
-### 4. SessionEnd Hook Emission
-
-Before any state mutation the command emits a `"SessionEnd"` lifecycle event so registered hook plugins receive a graceful notification.
-
-```
-function emitSessionEndEvent():
-    hookPayload = buildPayload("SessionEnd")
-    broadcastToHooks(hookPayload)
-    sessionRegistry.get(currentSessionId).stop()
-    sessionRegistry.delete(currentSessionId)
-```
-
-Literal `"SessionEnd"` confirmed at bundle.js:+12870874.
-
-Analysis basis: CC v2.1.150 bundle.js:+12870847 (b7 helper), +12870905 (YW helper), +12871102 (S6), +12871107 (OkH)
+Numeric limits observed in literals:
+- Minimum clamp value: `0` (bundle.js:+10745691)
+- Token parse radix: `10` (bundle.js:+12990700)
+- Maximum clamp value: `1000` (bundle.js:+12990876)
 
 ---
 
-### 5. Subprocess Pool Shutdown
+### Session End Hook Pipeline (`sSH` → `dW`)
+
+The hook orchestration layer fires a `SessionEnd` lifecycle event (literal `"SessionEnd"`, bundle.js:+12981349) through the full hook executor (`dW`). The hook executor (`dW`) coordinates:
 
 ```
-function shutdownSubprocessPool():
-    for entry of processMap.values():
-        entry.retireIfSettled()         // graceful retire attempt
+async function fireSessionEndHooks(context):
+    hookType = "SessionEnd"                              // bundle.js:+12981349
+    buildHookEnvironment(context)                        // D7, Vv, C6
+    dispatch_to_executor(hookType, context)              // dW
 
-    // if process does not exit within grace period, escalate
-    if not exitedWithin(graceSeconds=30):
-        if still alive after seconds=15:
-            process.kill("SIGKILL")     // hard kill
-            emitTelemetry("tengu_bg_dispatch_sigkill_escalate")
-            setTimeout(100)             // brief delay post-kill
-
-    // low memory guard
-    freeBytes = os.freemem()
-    if freeBytes < threshold:
-        emitTelemetry("tengu_bg_dispatch_low_mem")
+    // Inside dW (hook executor):
+    //   resolveToolEnvironment()                        // xH, zU, N
+    //   loadHookDefinitions()                           // hfH → S_, IL
+    //   buildCommandContext()                           // SqA
+    //   filterHookMatches()                             // O.filter
+    //   assignNewConversationId()                       // GCH.randomUUID, bundle.js:+13030408
+    //   executeEachHook():                              // Kh8
+    //     - spawn process hooks                         // _h8.spawn, bundle.js:+13003082
+    //     - run http hooks                              // hP.post, bundle.js:+12973670
+    //     - run mcp_tool hooks                          // vqA
+    //     - run callback hooks                          // J.callback
+    //   collectResults()
+    //   emit tengu_run_hook                             // bundle.js:+13030042
 ```
 
-Grace period: **30 s** (bundle.js:+15260826); escalation threshold: **15 s** (bundle.js:+15260837); SIGKILL literal (bundle.js:+15260919); post-kill delay: **100 ms** (bundle.js:+15260943).
-
-Analysis basis: CC v2.1.150 bundle.js:+15261571 (A.values / processMap), +15261582 (retireIfSettled), +15260912 (C.kill), +15260930 (setTimeout), +15261280 (mqA.freemem)
+Analysis basis: CC v2.1.156 bundle.js:+12981322
 
 ---
 
-### 6. Log Flush and Cache Eviction
+### Conversation Buffer Clear (`Xz`)
 
 ```
-function flushAndEvictLog():
-    logWriter = logWriterFactory()          // nv8
-    cachedEntry = logCache.get(sessionKey)
-    if cachedEntry exists:
-        logWriter.flush(cachedEntry)
-    logCache.delete(sessionKey)
+function clearConversationBuffers():
+    lR6.clear()    // primary message store, bundle.js:+26612
+    Hu8.clear()    // secondary message/context store, bundle.js:+26624
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+12837860 (nv8), +12837881 (cv8.get), +12837903 (_.flush), +12837913 (cv8.delete)
+Analysis basis: CC v2.1.156 bundle.js:+26612
 
 ---
 
-### 7. Working Directory Resolution
+### Background Session Teardown (`w` / `R`)
+
+When the `isBackgrounded` flag is set (bundle.js:+10743962), the teardown delegates to the daemon control layer:
 
 ```
-function resolveWorkingDirectory(cwdInput):
-    if not path.isAbsolute(cwdInput):
-        cwdInput = path.resolve(cwdInput)
-    validated = validateDirectory(cwdInput)    // Q6 helper
-    if not validated:
-        throw Error("invalid cwd")
-    setShellCwd(validated)
-    emitTelemetry("tengu_shell_set_cwd")
-    return validated
+async function backgroundedTeardown(abortSignal, context):
+    for process in activeProcesses.values():
+        process.kill("SIGKILL")                          // R.kill, bundle.js:+15478906
+        await setTimeout(100)                            // bundle.js:+15478937
+    dispatch_to_daemon_control(context)                  // W5A → CF.spawn
+    emit_telemetry("tengu_daemon_control")               // bundle.js:+15514702
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+8007153 (UY8.isAbsolute), +8007173 (UY8.resolve), +8007188 (Q6), +8007255 (Error), +8007308 (tengu_shell_set_cwd)
+Analysis basis: CC v2.1.156 bundle.js:+10743815
 
 ---
 
-### 8. New Session Initialization
+### Bulk Cache Invalidation (`sr_`)
 
 ```
-function buildSessionContext(sessionId, sessionName, tokenCount):
-    session = {
-        id:        sessionId,             // crypto.randomUUID()
-        name:      sessionName ?? autoName(),
-        tokenBudget: tokenCount,
-    }
-    emitEvent("conversation_reset", session)
-    return session
+function bulkClearAllCaches():
+    clearSkillIndex()            // $C → Xu → H.clearSkillIndexCache
+    clearPermissionCache()       // NV9 → qB.clear
+    resetYkH()                   // YkH
+    clearPluginCaches()          // co → sf8 → R01.clear, Hv9 → DP6.clear + WN_.clear
+    clearSearchCaches()          // go → VG8.clear
+    clearAgentStatusCaches()     // G91 → tyH.clear + JU_.clear
+    clearCompactCaches()         // Ea9 → ksH.clear + ZG6.clear
+    clearMiscCaches()            // Jr8 → MpH.clear, OV9 → vf8.clear, qr8 → fpH.clear
+    clearRulesCache()            // Dt9 → ka.clear + RJH.clear
+    flushHookQueues()            // Bp_, n08, sO, CNH
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+10664475 (F21.randomUUID), +10664493 (QS8 / ay6.emit), +10664436 (conversation_reset)
+Analysis basis: CC v2.1.156 bundle.js:+10742720
 
 ---
 
-### 9. Spare Background Session Management
+### New Session Initialization
 
-After the new foreground session is established the daemon may opportunistically pre-spawn a spare background session.
-
-```
-function manageSpareSession():
-    if spareEnabled:
-        emitTelemetry("tengu_bg_spare_enable")
-        try:
-            claim = claimSpare()
-            if claim succeeded:
-                emitTelemetry("tengu_bg_spare_claim")
-                activateSpare(claim)
-                storeInProcessMap(claim)       // A.set
-                recordTimestamp(Date.now())
-            else:
-                emitTelemetry("tengu_bg_spare_claim_fail")
-        catch:
-            pass
-    if shouldSpawn:
-        emitTelemetry("tengu_bg_spare_spawn")
-        child = childProcess.spawn(...)
-        child.dispose on cleanup
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+15262145 (tengu_bg_spare_enable), +15262266 (tengu_bg_spare_claim), +15262529 (tengu_bg_spare_claim_fail), +15260564 (tengu_bg_spare_spawn), +15262228 (A.set), +15262297 (Date.now), +15262588 (bB.spawn)
-
----
-
-### 10. Session Rename Side-Effect
-
-When a non-empty name argument is provided the session rename path executes:
+After teardown, a new session UUID is issued and UI state is re-registered:
 
 ```
-function applySessionName(session, name):
-    session.customTitle = name             // "custom-title" key
-    session.role = "user"
-    broadcastStateUpdate(session)
-    emitEvent("AN6", "session_renamed")
-    emitTelemetry("tengu_session_renamed")
+function initializeNewSession(newName):
+    sessionId = crypto.randomUUID()                // NV1.randomUUID, bundle.js:+10745016
+    emit_event("conversation_reset", sessionId)    // literal "conversation_reset", bundle.js:+10744977
+    if newName:
+        apply_custom_title(newName)                // dh → yfH, "custom-title", bundle.js:+12891833
+    emit_event("session_renamed")                  // tengu_session_renamed, bundle.js:+12891925
+    re_register_key_bindings()                     // V3 → U4 → _9
+    re_register_ui_handlers()                      // G_, T
+    reload_coordinator_state()                     // W (OL), literal "coordinator", bundle.js:+10745369
 ```
 
-Literal `"custom-title"` (bundle.js:+12783269); literal `"user"` (bundle.js:+12783231).
-
-Analysis basis: CC v2.1.150 bundle.js:+12783248 (BV), +12783257 (w5H), +12783316 (S6), +12783348 (AN6.emit), +12783361 (tengu_session_renamed)
-
----
-
-### 11. Plugin Hook Loading (SessionStart)
-
-```
-function loadAndFireSessionStartHooks(session):
-    if allowManagedHooksOnly and no managed plugins:
-        log("Skipping plugin hooks - allowManagedHooksOnly is enabled and no managed plugins")
-        return
-
-    hooks = loadPluginHooks()             // emits tengu: "load_plugin_hooks"
-    for hook of hooks:
-        try:
-            cloneOrFetch(hook)
-            hook.run("SessionStart", session)
-        catch NetworkError (ETIMEDOUT, ENOTFOUND):
-            reportError("network", "Check your internet connection...")
-        catch PermissionError (EACCES, EPERM):
-            reportError("permission", "Check file permissions on ~/.claude/plugins/")
-        catch ConfigError (Invalid/parse/JSON/schema):
-            reportError("config", "Check your plugin settings in .claude/settings.json")
-```
-
-Literal `"SessionStart"` (bundle.js:+8648694); literal `"load_plugin_hooks"` (bundle.js:+8647438); literal `"hook_additional_context"` (bundle.js:+8648649).
-
-Analysis basis: CC v2.1.150 bundle.js:+8647279 (K4), +8647315 (rY), +8647321 (KEH), +8647334 (N / skip message), +8647438 (load_plugin_hooks), +8647531 (z.includes), +8647596 (ETIMEDOUT), +8647621 (ENOTFOUND), +8647772 (EACCES), +8647794 (EPERM)
-
----
-
-### 12. Daemon Config Reload
-
-On the supervisor side, after the session list changes, daemon configuration is reloaded:
-
-```
-function supervisorConfigReload():
-    supervisor.stop()
-    supervisor.updateConfig(newConfig)
-    supervisor.start()
-    emitTelemetry("tengu_daemon_config_reload")
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+15275132 (G.stop), +15275261 (Z.updateConfig), +15275279 (Z.start), +15275657 (tengu_daemon_config_reload)
+Analysis basis: CC v2.1.156 bundle.js:+10745016
 
 ---
 
@@ -371,24 +249,28 @@ Analysis basis: CC v2.1.150 bundle.js:+15275132 (G.stop), +15275261 (Z.updateCon
 
 | Item | Detail |
 |---|---|
-| **Telemetry: tengu_cache_eviction_hint** | Fired immediately on invocation with `event: "conversation_clear"` (bundle.js:+10663318) |
-| **Telemetry: tengu_bg_dispatch_sigkill_escalate** | Fired when a background process does not exit within 30 s grace and must be hard-killed (bundle.js:+15260871) |
-| **Telemetry: tengu_bg_dispatch_low_mem** | Fired when `os.freemem()` falls below threshold during subprocess teardown (bundle.js:+15261450) |
-| **Telemetry: tengu_bg_spare_enable** | Fired when the spare-session pre-spawn feature is active (bundle.js:+15262145) |
-| **Telemetry: tengu_bg_spare_claim** | Fired when a spare session is successfully claimed for the new session slot (bundle.js:+15262266) |
-| **Telemetry: tengu_bg_spare_claim_fail** | Fired when spare claim fails (bundle.js:+15262529) |
-| **Telemetry: tengu_bg_spare_spawn** | Fired when a new spare background session process is spawned (bundle.js:+15260564) |
-| **Telemetry: tengu_daemon_config_reload** | Fired after supervisor config is updated post-session-change (bundle.js:+15275657) |
-| **Telemetry: tengu_shell_set_cwd** | Fired after working directory is resolved and set (bundle.js:+8007308) |
-| **Telemetry: tengu_session_renamed** | Fired when a non-empty `[name]` argument was supplied (bundle.js:+12783361) |
-| **Hook: SessionEnd** | Broadcast to all registered plugins before teardown begins (bundle.js:+12870874) |
-| **Hook: SessionStart** | Broadcast to all registered plugins after new session is fully initialized (bundle.js:+8648694) |
-| **appState changes** | `isBackgrounded` key read (bundle.js:+10663421); `internalStateMap` cleared (bundle.js:+10663634); session UUID regenerated (bundle.js:+10664475); `conversation_reset` event emitted (bundle.js:+10664436) |
-| **Disk** | Previous session written/retained on disk; new session directory created; `latest` symlink updated via `fs.symlink` / `fs.unlink` (bundle.js:+12838665, +12838724) |
-| **Subprocess pool** | All active background subprocesses retired or SIGKILL-escalated; spare session may be pre-spawned via `childProcess.spawn` (bundle.js:+15262588) |
-| **Log writer** | Pending log buffer flushed and evicted from cache before session drop (bundle.js:+12837903) |
-| **Timers** | All active `setTimeout` handles cancelled via `clearTimeout` (bundle.js:+10663934) |
-| **Sound** | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry: `tengu_cache_eviction_hint` | Emitted before teardown begins (bundle.js:+10743859) |
+| Telemetry: `tengu_run_hook` | Emitted per hook execution inside `dW` (bundle.js:+13030042) |
+| Telemetry: `tengu_feature_ok` | Emitted on successful feature path (bundle.js:+965176) |
+| Telemetry: `tengu_feature_bad` | Emitted on failed feature path (bundle.js:+965234) |
+| Telemetry: `tengu_hook_plugin_metrics` | Plugin hook timing metrics (bundle.js:+13008470) |
+| Telemetry: `tengu_repl_hook_finished` | Per-hook completion event (bundle.js:+13013919) |
+| Telemetry: `tengu_hook_plugin_injected` | Plugin hook injection event (bundle.js:+13028382) |
+| Telemetry: `tengu_session_renamed` | Emitted when a new session name/title is applied (bundle.js:+12891925) |
+| Telemetry: `tengu_daemon_control` | Emitted when daemon teardown is invoked for backgrounded sessions (bundle.js:+15514702) |
+| Telemetry: `tengu_bg_dispatch_sigkill_escalate` | Emitted if SIGKILL escalation occurs during teardown (bundle.js:+15478865) |
+| Telemetry: `tengu_bg_spare_claim` | Spare background process claim attempt (bundle.js:+15480260) |
+| Telemetry: `tengu_bg_spare_claim_fail` | Spare claim failure (bundle.js:+15480523) |
+| Telemetry: `tengu_shell_set_cwd` | CWD reset telemetry (bundle.js:+8137230) |
+| Conversation buffers cleared | `lR6.clear()` + `Hu8.clear()` (bundle.js:+26612 / +26624) |
+| Hook lifecycle event | `SessionEnd` hook type fired before buffers are cleared (bundle.js:+12981349) |
+| Session UUID | New UUID generated via `NV1.randomUUID` (bundle.js:+10745016) |
+| `conversation_reset` event | Internal event broadcast with new session ID (bundle.js:+10744977) |
+| Bulk cache clear | ~15 internal caches reset via `sr_` (bundle.js:+10742720) |
+| Hook executor queues | Flushed via `kO` → `Fy8.delete` (bundle.js:+10744576) |
+| Sound | Not found in depth-2 traversal |
+| Previous session on disk | Preserved; not deleted |
+| appState changes | `isBackgrounded` flag checked; coordinator mode (`"coordinator"` / `"normal"`) re-established (bundle.js:+10745369) |
 
 ---
 
@@ -396,18 +278,17 @@ Analysis basis: CC v2.1.150 bundle.js:+15275132 (G.stop), +15275261 (Z.updateCon
 
 | Version | Change |
 |---|---|
-| v2.1.150 | Initial analysis |
+| v2.1.156 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting context to survive `/clear`** — The entire in-memory conversation context is discarded. Use `/resume` to return to a prior session; the on-disk record is preserved.
-2. **Confusing `/clear` with `/reset` or `/new`** — These are registered aliases for the exact same command handler; there is no behavioral difference between them (bundle.js:+10665211).
-3. **Passing an argument expecting it to set a permanent project name** — The `[name]` argument sets only the `custom-title` of the *new* session; it does not affect the previous session or any global project setting.
-4. **Assuming `/clear` in non-interactive mode is identical to interactive** — `supportsNonInteractive: true` means the command runs headlessly, but the `thinClientDispatch: "post-text"` value indicates the result is delivered as a text node rather than updating an interactive UI; callers should handle the text response accordingly (bundle.js:+10665211, +10665139).
-5. **Expecting background processes to terminate instantly** — The shutdown sequence allows a **30-second** grace window before escalating to SIGKILL with a further **15-second** wait, meaning the full teardown can take up to ~45 seconds in the worst case (bundle.js:+15260826, +15260837).
-6. **Assuming a spare session is always available immediately** — The spare pre-spawn is opportunistic; if `tengu_bg_spare_claim_fail` fires, the new session is created without a warm spare and may have a higher initialization latency.
+1. **Expecting previous context to still be available** — `/clear` discards all in-memory messages immediately. Use `/resume` to return to the previous session from disk.
+2. **Confusing `/clear` with `/compact`** — `/compact` summarizes and compresses context; `/clear` resets to an empty state entirely.
+3. **Assuming the session name argument is required** — `[name]` is optional. When omitted, the runtime generates an internal identifier automatically.
+4. **Using `/clear` when backgrounded and expecting instant teardown** — Backgrounded sessions go through a daemon control pathway involving SIGKILL escalation and timeout logic, which may take slightly longer than interactive teardown.
+5. **Expecting hooks not to run** — The `SessionEnd` hook lifecycle fires before the conversation buffers are cleared, so any configured `SessionEnd` hooks will execute even on `/clear`.
 
 ---
 
@@ -417,42 +298,190 @@ Analysis basis: CC v2.1.150 bundle.js:+15275132 (G.stop), +15275261 (Z.updateCon
 
 | Identifier | Role |
 |---|---|
-| `RuL` | Command handler entry point (argument trim + dispatch) |
-| `H` | Random delay / setTimeout utility (used in spare session timing) |
-| `oE6` | Session reset orchestrator (main teardown + reinitialize body) |
-| `sE6` | Context size parser (parseInt / clamp to token range) |
-| `YhH` | SessionEnd event emitter / hook broadcaster |
-| `t_6` | AbortSignal timeout wrapper |
-| `c` | Generic error/log sink (shared utility) |
-| `L` | Pending-operation tracker (q.add / M.finally / q.delete) |
-| `w` | Subprocess pool manager (kill, retire, spawn spare) |
-| `VX` | Session registry entry constructor |
-| `Y` | Session record lifecycle manager (start/stop/updateConfig) |
-| `D` | Teardown record builder / recursive teardown dispatcher |
-| `rw` | State cache runner / "running" status checker |
-| `bd_` | New session context builder (collects sub-feature constructors) |
-| `Hw` | Working directory resolver (isAbsolute / path.resolve) |
-| `j_` | Internal state store accessor (wraps Dv) |
-| `_` | Internal state map object (_.clear / _.flush) |
-| `VZH` | State key enumerator / Object.keys consumer |
-| `M` | Connection/channel closer (A.close / q.close) |
-| `xN` | Timer map iterator for clearTimeout sweep |
-| `RH` | Error reporter / logError dispatcher |
-| `fO` | Log flush and cache eviction function |
-| `GlH` | UI notification dispatcher (mOq helper) |
-| `Q21` | Session metadata writer (XMH helper) |
-| `gO` | Model/config initializer for new session |
-| `S6` | Shared state accessor (wraps Dv) |
-| `YI` | Session activation signal emitter |
-| `VM` | Path joiner / session directory path builder |
-| `aE6` | Session token-budget applicator |
-| `QS8` | UUID emitter (mAH.randomUUID + ay6.emit) |
-| `Vc` | Conversation history initializer |
-| `cy` | Session rename handler (custom-title + tengu_session_renamed) |
-| `fyH` | Latest-symlink updater (symlink / unlink) |
-| `kE` | Subagents directory path builder |
-| `tM` | Tool-state reset helper |
-| `yf` | Feature-flag reader for new session |
-| `Yu` | Worktree-state event emitter |
-| `G_H` | Isolation-latch initializer |
-| `xU` | Plugin hook loader (SessionStart, load_plugin_hooks) |
+| `alL` | Main async handler for `/clear` (Arbor-resolved entry point) |
+| `dv6` | Session teardown and rebuild orchestrator |
+| `lv6` | Session parameter parser and validator |
+| `MD` | Settings applicator (policy settings layer) |
+| `h8` | Policy settings reader |
+| `sm` | Secondary settings application helper |
+| `YU` | Cache/settings update coordinator |
+| `lz_` | Settings cache read/write (jFq Map) |
+| `Xz` | Conversation buffer clearer (lR6 + Hu8) |
+| `nz_` | Post-clear notification dispatcher |
+| `sSH` | SessionEnd hook pipeline entry |
+| `D7` | Hook environment builder |
+| `k6` | Shared utility (state accessor) |
+| `ES` | Secondary state accessor |
+| `$W` | Model-specific effort resolver |
+| `hV` | Effort-level evaluator |
+| `Vv` | Context-path builder |
+| `C6` | Context-string formatter |
+| `dW` | Hook executor (full lifecycle) |
+| `xH` | String coercion helper |
+| `zU` | Session state reader |
+| `N` | Log-level / debug utility |
+| `hfH` | Hook definition loader |
+| `SqA` | Hook command context builder |
+| `O` | Generic collection/filter utility |
+| `a8K` | Hook argument builder |
+| `hqA` | Third-party hook filter |
+| `t8K` | Hook timeout resolver |
+| `d` | Generic async utility / deferred |
+| `RH` | JSON serializer wrapper |
+| `hH` | Error logger |
+| `uH` | Generic state reader |
+| `MGH` | Output token accumulator |
+| `_v` | AbortController manager |
+| `J` | Callback registry |
+| `zqH` | Hook progress emitter |
+| `mv` | Message builder |
+| `Hh8` | Hook result handler |
+| `NqA` | MCP tool hook executor |
+| `qh8` | Hook output JSON parser |
+| `MAH` | Plugin metrics aggregator |
+| `vqA` | HTTP hook executor |
+| `o8K` | HTTP hook response parser |
+| `zfH` | Hook type classifier |
+| `Kh8` | Subprocess hook spawner |
+| `WyH` | Post-hook state reconciler |
+| `yH` | Session write helper |
+| `nyH` | Non-interactive output emitter |
+| `X96` | Background dispatch signal resolver |
+| `L` | Async task queue manager |
+| `q` | File-backed process tracker |
+| `f` | Async resource handle |
+| `A` | Process/map abstraction |
+| `w` | Background process dispatcher |
+| `R` | Daemon session record |
+| `lEK` | Filesystem realpath/stat helper |
+| `Wz` | Logging wrapper |
+| `$B5` | Build context helper |
+| `z` | IPC write stream |
+| `eI8` | Memory pressure checker |
+| `E6` | Background session state tracker |
+| `FD6` | Pinned-file loader |
+| `lX_` | Path joiner for pins.json |
+| `m6` | JSON parser wrapper |
+| `_` | Generic value/array reference |
+| `P8` | ENOENT-safe wrapper |
+| `yX7` | Directory-based skill loader |
+| `B` | Background session collection manager |
+| `pH` | Session state filter |
+| `cH` | Orphaned-permission checker |
+| `W5A` | Daemon claim sender |
+| `L9A` | Session metadata file writer |
+| `mU5` | Claim timeout manager |
+| `uU5` | Claim frame builder |
+| `bM` | Claim response validator |
+| `ZH` | String coercion utility |
+| `AF` | Binary protocol frame encoder |
+| `N5A` | Background session lifecycle manager |
+| `K` | Session slot formatter |
+| `mK` | Session directory path builder |
+| `a9` | Session state file reader/writer |
+| `Lj` | Session state activator |
+| `Af` | Session roster entry writer |
+| `Q66` | Background session health checker |
+| `d5H` | Session data path builder |
+| `lh` | Session log reader |
+| `OF` | Session output file builder |
+| `PN6` | Session persist helper |
+| `Y` | Active session map manager |
+| `D` | Daemon main loop |
+| `$` | Disposable resource wrapper |
+| `P5A` | Spare background process spawner |
+| `J8` | ENOENT/errno classifier |
+| `S` | Spare pool handle |
+| `QX` | Running-state marker |
+| `Pj` | Abort/cancel propagator |
+| `sr_` | Bulk cache invalidation coordinator |
+| `nr_` | Sub-invalidation step |
+| `$C` | Skill index cache invalidator |
+| `Xu` | Skill index clear dispatcher |
+| `SG8` | Secondary skill cache clear |
+| `QD1` | Tertiary skill cache clear |
+| `YSH` | Quaternary skill cache clear |
+| `NV9` | Permission cache clearer (qB) |
+| `YkH` | Permission index rebuilder |
+| `F96` | Fourth-level cache invalidation step |
+| `co` | Plugin and compact cache resetter |
+| `nvH` | Main-thread hook resetter |
+| `if8` | Subagent exit cleanup |
+| `oj6` | Session-start event emitter |
+| `W8H` | Compact state resetter |
+| `sf8` | Rule cache clearer (R01) |
+| `Hv9` | Diff/patch cache clearer (DP6 + WN_) |
+| `aV9` | Autonomous loop delivered flag resetter |
+| `HjH` | Hook state resetter |
+| `Fw` | Output-token accumulator resetter |
+| `xN_` | Extended cache clearer |
+| `go` | Search/vector cache clearer (VG6) |
+| `G91` | Agent status cache clearer (tyH + JU_) |
+| `Ea9` | Compact artifact cache clearer (ksH + ZG6) |
+| `Jr8` | Misc cache clearer (MpH) |
+| `G_9` | Additional cache step |
+| `OV9` | Version cache clearer (vf8) |
+| `cm8` | Feature-flag cache checker |
+| `qr8` | Fingerprint cache clearer (fpH) |
+| `Fj1` | Extra invalidation step |
+| `Dt9` | Rules/validation cache clearer (ka + RJH) |
+| `Ww` | Working-directory setter |
+| `B6` | Path resolver utility |
+| `Ki8` | CWD normalizer |
+| `eqH` | Path normalization helper |
+| `$_` | State accessor/shortcut |
+| `HvH` | Hook-variable expander |
+| `Wk` | Key-binding registrar |
+| `kO` | Hook executor queue flusher |
+| `Qy8` | Pending-hook set manager |
+| `NiH` | CLI registry step |
+| `KX9` | CLI registration handler |
+| `IV1` | In-memory state resetter (yMH) |
+| `yMH` | Internal state map resetter |
+| `V3` | Key-binding re-registration driver |
+| `U4` | Binding table updater |
+| `_9` | f$A.register wrapper |
+| `ak` | Additional binding step |
+| `rf` | Route/command path builder |
+| `WS` | Shared state accessor |
+| `cv6` | Secondary binding registration |
+| `Lu8` | Session event emitter (tR6) |
+| `Rl` | Supplementary binding handler |
+| `dh` | Session rename/title handler |
+| `yfH` | File-based title writer |
+| `ahH` | Worktree symlink manager |
+| `WqA` | Worktree directory creator |
+| `msH` | Worktree path builder |
+| `N3` | Worktree target path resolver |
+| `utH` | Worktree file opener |
+| `ME` | Subagent registry updater |
+| `EM` | Extended mode setter |
+| `G_` | Module system initializer |
+| `MR6` | Module bind helper |
+| `W` | Remote-control / OL dispatcher |
+| `OL` | Remote-control handler |
+| `T` | Key-event re-registrar |
+| `b` | Browser/input event source |
+| `Z0` | Input event dispatcher |
+| `U_` | Settings loader and applier |
+| `sM` | Secondary mode setter |
+| `_m` | Session metadata emitter |
+| `IAH` | Isolation latch writer |
+| `C6K` | Isolation latch file appender |
+| `KB` | Plugin hook loader and executor |
+| `lK` | Bare-mode checker |
+| `mEH` | Plugin policy accumulator |
+| `LpH` | Plugin hook logger |
+| `I8` | File-based hook logger |
+| `$P6` | Full agentic pipeline runner |
+| `kX` | Secondary pipeline step |
+| `gX` | Main agent execution loop |
+| `M` | MCP session manager |
+| `vSH` | MCP tool resolver |
+| `JGK` | MCP connection result applier |
+| `Gm5` | MCP client update orchestrator |
+| `Eq` | Event emitter with UUID (DD1.randomUUID) |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

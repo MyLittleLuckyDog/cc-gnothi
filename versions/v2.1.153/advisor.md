@@ -1,13 +1,12 @@
 ---
 type: feature-spec
 feature: "advisor"
-cc_version: 2.1.153
-updated: "2026-05-26"
+cc_version: "2.1.153"
+updated: "2026-06-02"
 tags: ["advisor", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.150
-analysis_basis: "CC v2.1.150 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.153 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +14,14 @@ license: "AGPL-3.0-only"
 
 # `/advisor`
 
-> Analysis basis: CC v2.1.150 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.150
+> Analysis basis: CC v2.1.153 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.153
 
 ---
 
 ## Overview
 
-The `/advisor` command configures the **Advisor Tool**, which causes Claude Code to consult a stronger or differently-configured model at key decision points during a task. It accepts a model shorthand or explicit model name, validates the target model against the API, and persists the selection (or clears it) into application state. When set, the advisor model is injected into long-running agentic workflows as a side-channel oracle.
+The `/advisor` command configures the **Advisor Tool**, a feature that allows Claude Code to consult a stronger model for guidance at key decision points during a task. When invoked, it renders a JSX-based configuration UI (type `local-jsx`) that lets the user select or validate the advisor model, validate the model name against the API, and persist the setting into session state. The command is the primary entry point for enabling, disabling, or switching the advisor model during an active Claude Code session.
 
 ---
 
@@ -32,231 +31,288 @@ The `/advisor` command configures the **Advisor Tool**, which causes Claude Code
 |---|---|
 | type | `local-jsx` |
 | name | `advisor` |
-| description | `Configure the Advisor Tool to consult a stronger model for guidance at key moments during a task` |
-| argumentHint | *(null — no argument hint displayed)* |
-| module\_id | `lB1` |
+| description | Configure the Advisor Tool to consult a stronger model for guidance at key moments during a task |
+| loc_byte | `12304971` |
+| loc_byte_end | `12305258` |
+| loc_line | `9228` |
+| argumentHint | `null` |
+| isHidden | `null` |
+| module_id | `Fl1` |
+| load_inline | `true` |
+| arbor_handler.name | `PL5` |
+| arbor_handler.fqn | `claude-2.1.153::PL5` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `1` |
 
-Analysis basis: CC v2.1.150 bundle.js:+12248553
+Analysis basis: CC v2.1.153 bundle.js:+12304971
 
 ---
 
 ## Input Branching
 
-The command handler (`advisorCommandHandler`) trims the raw argument string, normalises it to lowercase, and routes through several distinct paths depending on the value supplied.
+The command's handler `PL5` produces distinct behaviour along several axes: whether the user provides an argument (a model name string), whether the argument maps to a known alias, whether the name passes API validation, and whether the advisor is being disabled/unset. Four or more distinct paths exist, so a flowchart is used.
 
 ```mermaid
 flowchart TD
-    A([User types /advisor &lt;arg&gt;]) --> B[Trim whitespace]
-    B --> C{arg is empty\nor 'off'?}
-    C -- yes/off --> D[Clear advisor setting\nSet state to 'unset']
-    C -- no --> E[Normalise to lowercase]
-    E --> F{Matches a\nshorthand alias?}
-    F -- 'opusplan' --> G[Resolve to opus-plan\nmodel identifier]
-    F -- 'sonnet' --> H[Resolve to sonnet\nmodel identifier]
-    F -- 'haiku' --> I[Resolve to haiku\nmodel identifier]
-    F -- 'opus' --> J[Resolve to opus\nmodel identifier]
-    F -- 'best' --> K[Resolve to best-available\nmodel identifier]
-    F -- no match --> L[Treat arg as\nexplicit model name]
-    G & H & I & J & K & L --> M[Validate model name\nnot empty]
-    M -- empty --> N[Error: 'Model name cannot be empty']
-    M -- non-empty --> O[Check FB1 cache for\nprevious validation result]
-    O -- cache hit --> P[Skip live API call]
-    O -- cache miss --> Q[Call model-validation API\nwith message 'Hi' ephemeral]
-    Q -- auth error --> R[Error: Authentication failed.\nPlease check your API credentials.]
-    Q -- network error --> S[Error: Network error.\nPlease check your internet connection.]
-    Q -- not_found_error --> T[Error: model: &lt;name&gt; not found]
-    Q -- success --> U[Store result in FB1 cache\nFire tengu_api_success telemetry]
-    P & U --> V[Persist advisor model\nto app state]
-    D & V --> W([Return JSX confirmation element])
+    A(["/advisor invoked"]) --> B{Argument provided?}
+    B -- "No argument" --> C[Render current advisor config UI\nwith JSX component]
+    B -- "Argument present" --> D[Trim whitespace\nbundle.js:+12304427]
+    D --> E{Value is 'off' or 'unset'?\nbundle.js:+12304503/+12304514}
+    E -- "Yes" --> F[Disable advisor tool\nClear stored model setting]
+    E -- "No" --> G[Normalize: toLowerCase\nbundle.js:+12304427]
+    G --> H{Argument matches a known alias?\ne.g. 'opusplan','sonnet','haiku',\n'opus','best'\nbundle.js:+2187547–2187703}
+    H -- "Alias matched" --> I[Resolve alias → canonical model ID\nvia alias-resolution chain\nbundle.js:+2187480]
+    H -- "No alias match" --> J[Use argument as literal model name]
+    I --> K[Validate model name via\nmodelValidator LI8\nbundle.js:+12304595]
+    J --> K
+    K --> L{Name empty after trim?\nbundle.js:+12296754}
+    L -- "Yes" --> M[Return error: 'Model name cannot be empty']
+    L -- "No" --> N{Model in known-valid cache?\nbundle.js:+12296998}
+    N -- "Cached valid" --> O[Skip API round-trip\nProceed to persist]
+    N -- "Not cached" --> P[Normalize: toLowerCase\nbundle.js:+12296877]
+    P --> Q{Provider string in allowlist W1H?\nbundle.js:+12296896}
+    Q -- "Provider allowed" --> R[Make API validation call\nvia side-query handler ex\nbundle.js:+12297043]
+    Q -- "Provider not in allowlist" --> S[Return provider-specific error]
+    R --> T{API response OK?}
+    T -- "Auth failure" --> U[Return: 'Authentication failed…'\nbundle.js:+12297453]
+    T -- "Network error" --> V[Return: 'Network error…'\nbundle.js:+12297555]
+    T -- "not_found_error" --> W[Return: 'model: …not found'\nbundle.js:+12297756]
+    T -- "Success" --> X2[Cache result in ul1\nbundle.js:+12297206]
+    X2 --> O
+    O --> Y[Persist validated model via ML5/fL5\nbundle.js:+12297247]
+    Y --> Z{Model string contains known\nopus-4-x / sonnet-4-x variant?\nbundle.js:+12298023–12298331}
+    Z -- "Yes" --> AA[Apply variant-specific\nconfiguration path]
+    Z -- "No" --> AB[Apply default model config\nvia $3 / m3\nbundle.js:+12298066]
+    AA --> AC([Render confirmation UI\nwith updated advisor model])
+    AB --> AC
+    F --> AC
+    C --> AC
+    M --> AD([Render error message in UI])
+    S --> AD
+    U --> AD
+    V --> AD
+    W --> AD
 ```
-
-Analysis basis: CC v2.1.150 bundle.js:+12248009, +12248085, +12248096, +12240535, +12240554, +12240656, +12240751
 
 ---
 
 ## Behavioral Spec
 
-### 1. Argument Normalisation
+### Top-level handler — advisorHandler (PL5)
+
+`PL5` is an `AsyncFunction` resolved via `module_id` → `Fl1`.
+
+Analysis basis: CC v2.1.153 bundle.js:+12304427
 
 ```
-function normaliseAdvisorArgument(rawArg):
-    trimmed = rawArg.trim()                    // bundle.js:+12248009
-    if trimmed == "" or trimmed == "off":      // bundle.js:+12248085, +12248096
-        return CLEAR_SIGNAL
-    return trimmed.toLowerCase()               // bundle.js:+15286807
-```
+async function advisorHandler(input):
+    rawArg = input.args.trim()                  // bundle.js:+12304427
 
-- The sentinel value `"off"` explicitly disables the advisor and sets the stored state to `"unset"`.
-- An empty argument is treated identically to `"off"` — the advisor is cleared.
+    if rawArg is "off" or rawArg is "unset":    // bundle.js:+12304503, +12304514
+        disableAdvisorTool()
+        return renderAdvisorUI(state={disabled: true})
 
-Analysis basis: CC v2.1.150 bundle.js:+12248085, +12248096
+    normalizedArg = rawArg.toLowerCase()
 
-### 2. Shorthand Alias Resolution
+    resolvedModel = resolveModelAlias(normalizedArg)   // calls L1
+    if resolvedModel is null:
+        resolvedModel = normalizedArg
 
-```
-function resolveModelAlias(normalisedArg):
-    aliasMap = {
-        "opusplan" : resolveOpusPlanModel(),   // bundle.js:+2180463
-        "sonnet"   : resolveSonnetModel(),     // bundle.js:+2180504
-        "haiku"    : resolveHaikuModel(),      // bundle.js:+2180543
-        "opus"     : resolveOpusModel(),       // bundle.js:+2180582
-        "best"     : resolveBestModel(),       // bundle.js:+2180619
-    }
-    if normalisedArg in aliasMap:
-        return aliasMap[normalisedArg]
-    else:
-        return normalisedArg   // pass-through as explicit model name
-```
+    validationResult = await validateModelName(resolvedModel)  // calls LI8
+    if validationResult.error:
+        return renderErrorUI(validationResult.message)
 
-Known model strings surfaced in the implementation include `"opus-4-7"`, `"opus-4-6"`, and `"sonnet-4-6"`.
-Analysis basis: CC v2.1.150 bundle.js:+5277201, +5277225, +5277249
-
-### 3. Model Name Validation (Empty Guard)
-
-```
-function guardEmptyModelName(resolvedName):
-    if resolvedName == "" or resolvedName is null:
-        raise UserError("Model name cannot be empty")  // bundle.js:+12240412
-    return resolvedName
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+12240412
-
-### 4. Model Availability Check (Live Validation)
-
-The command sends a minimal probe message to the Anthropic API to confirm the resolved model name is accessible before committing the selection. Results are cached in a module-level `Map` (`validationCache`) so repeated `/advisor` calls for the same model name skip the network round-trip.
-
-```
-function validateModelWithAPI(modelName, validationCache):
-    if validationCache.has(modelName):         // bundle.js:+12240656
-        return CACHED_OK
-
-    payload = buildValidationRequest(
-        model    = modelName,
-        purpose  = "model_validation",         // bundle.js:+12240751
-        role     = "user",                     // bundle.js:+12240786
-        content  = "Hi",                       // bundle.js:+12240820
-        cacheControl = "ephemeral"             // bundle.js:+12240845
+    persistAdvisorModel(validationResult.canonicalId)  // calls ML5 → fL5
+    return renderAdvisorUI(
+        element = SJ.createElement(...),        // bundle.js:+12304463
+        joinedDisplay = DiH.join(...)           // bundle.js:+12304738
     )
-
-    response = callAdvisorQueryPath(payload)   // Gx → globalThis.fetch, bundle.js:+13038857
-
-    if response indicates auth failure:
-        raise UserError("Authentication failed. Please check your API credentials.")
-                                               // bundle.js:+12241111
-    if response indicates network failure:
-        raise UserError("Network error. Please check your internet connection.")
-                                               // bundle.js:+12241213
-    if response.error.type == "not_found_error":  // bundle.js:+12241332
-        raise UserError("model: " + modelName + " not found")  // bundle.js:+12241414
-
-    validationCache.set(modelName, true)       // bundle.js:+12240864
-    emitTelemetry("tengu_api_success")         // bundle.js:+13040255
-    return OK
 ```
 
-- Maximum response tokens for the probe request: **1024** (Analysis basis: CC v2.1.150 bundle.js:+13038620)
-- The probe is tagged internally as a `"side_query"` request type. (Analysis basis: CC v2.1.150 bundle.js:+13038804)
-- Performance timing is recorded with `performance.now()` and `Date.now()`. (Analysis basis: CC v2.1.150 bundle.js:+13039847, +13040227)
-- Timing arithmetic uses `Math.max` and `Math.round` to derive elapsed milliseconds. (Analysis basis: CC v2.1.150 bundle.js:+13040529, +13040540)
+---
 
-### 5. Provider Routing
+### Alias resolution — aliasResolver (L1)
 
-The model resolution layer recognises three first-party provider routing modes:
+Analysis basis: CC v2.1.153 bundle.js:+12304581
 
-| Routing mode | String constant |
+Known short-name aliases found in literals:
+
+| Alias | Notes |
 |---|---|
-| Direct Anthropic API | `"firstParty"` |
-| Anthropic via AWS Bedrock | `"anthropicAws"` |
-| API Gateway | `"gateway"` |
-
-Analysis basis: CC v2.1.150 bundle.js:+2036195, +2036213, +2036233
-
-### 6. Advisor-Model Inclusion Check
-
-Before inserting the advisor model into a task, the implementation checks whether the advisor model name starts with `"anthropic."` (Bedrock-style prefix) or is already included in the active model list, to avoid duplicate injection.
+| `opusplan` | bundle.js:+2187547 |
+| `[1m]` | bundle.js:+2187573 |
+| `sonnet` | bundle.js:+2187588 |
+| `haiku` | bundle.js:+2187627 |
+| `opus` | bundle.js:+2187666 |
+| `best` | bundle.js:+2187703 |
 
 ```
-function shouldIncludeAdvisorModel(modelName, activeModels):
-    if modelName.startsWith("anthropic."):    // bundle.js:+2174609
-        ...handle bedrock-prefixed name...
-    if activeModels.includes(modelName):      // bundle.js:+2174624
-        return false
-    return true
+function aliasResolver(normalizedInput):
+    // Normalize to lowercase
+    lower = normalizedInput.toLowerCase()       // bundle.js:+2187462
+
+    // Check provider prefix
+    if lower.startsWith("anthropic."):          // bundle.js:+2181693
+        strip prefix and continue
+
+    // Check model alias table via f0 → E1H → xH
+    canonicalId = lookupAliasTable(lower)       // bundle.js:+2187480
+
+    if canonicalId found:
+        // Apply provider-specific encoding via WN → m3/$3
+        return encodeForProvider(canonicalId)   // bundle.js:+2187565
+
+    // Check if input already looks like a versioned model string
+    // (contains "sonnet", "haiku", "opus", "best" as substrings)
+    if containsKnownFamily(lower):              // bundle.js:+2187588–2187703
+        // Map to canonical via SBH → $3       bundle.js:+2187642
+        return resolveByFamily(lower)
+
+    // Check via TZ / K3q for remaining patterns
+    // bundle.js:+2187680, +2187717
+    result = resolveViaTZ(lower)
+    if result: return result
+
+    // Apply replacement normalization pass
+    // bundle.js:+2187793
+    return applyReplacementNorm(lower)
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+2174596, +2174609, +2174624
+---
 
-### 7. Side-Query Dispatch (Advisor Invocation at Runtime)
+### Model name validation — modelValidator (LI8)
 
-When the advisor is triggered during a task, the runtime dispatcher (`advisorQueryDispatcher`) builds a context-aware payload and fires it as a side query. Key behaviours observed in the call graph:
-
-```
-function advisorQueryDispatcher(context):
-    prepareRequest(context)               // Kp, bundle.js:+13038772
-    headers = buildHeaders()              // X,  bundle.js:+13038853
-    rawResponse = globalThis.fetch(...)   // bundle.js:+13038857
-    parsedStream = parseResponseStream()  // Lp,  bundle.js:+13038889
-
-    if Array.isArray(rawResponse):        // bundle.js:+13039459
-        limit = Math.min(...)             // bundle.js:+13039612
-        ...truncate or sample response...
-
-    tokenUsage = {
-        cacheWindow: "1h",                // bundle.js:+13039654
-        status: "enabled" | "disabled"   // bundle.js:+13039549, +13039588
-    }
-
-    elapsed = Math.round(
-                Math.max(performance.now() - startTime, 0)
-              )                           // bundle.js:+13040529, +13040540
-
-    emitTelemetry("tengu_api_success", { elapsed })  // bundle.js:+13040255
-```
-
-- The response is mapped through a message-transformation step (`wa1`) before being returned to the primary task context. (Analysis basis: CC v2.1.150 bundle.js:+13039733)
-- A build-metadata object embedding version `"2.1.150"`, build timestamp `"2026-05-23T01:22:49Z"`, commit `"28d4819e0f0a51840356d175c2a710f0c83db5b4"`, docs URL `"https://code.claude.com/docs/en/overview"`, and issues URL `"https://github.com/anthropics/claude-code/issues"` is included in the request headers or user-agent payload. (Analysis basis: CC v2.1.150 bundle.js:+13039162, +13039251, +13039282, +13039111, +13039189)
-
-### 8. Random Jitter on Retry
-
-The retry helper used within the advisor path introduces jitter via `Math.random()` scaled to a `[1, 2]` range before applying `setTimeout`, consistent with exponential-backoff-with-jitter patterns.
+Analysis basis: CC v2.1.153 bundle.js:+12304595
 
 ```
-function retryWithJitter(attemptFn):
-    jitterFactor = 1 + Math.random()   // range [1,2], bundle.js:+13290153, +13290155
-    delay = baseDelay * jitterFactor
-    setTimeout(attemptFn, delay)       // bundle.js:+13290192
+async function modelValidator(candidateModel):
+    trimmed = candidateModel.trim()             // bundle.js:+12296717
+
+    if trimmed is empty:
+        return {error: true, message: "Model name cannot be empty"}
+                                                // bundle.js:+12296754
+
+    lower = trimmed.toLowerCase()               // bundle.js:+12296877
+
+    // Check provider allowlist W1H
+    if NOT W1H.includes(lower):                 // bundle.js:+12296896
+        return {error: true, message: providerError}
+
+    // Check in-memory validation cache ul1
+    if ul1.has(lower):                          // bundle.js:+12296998
+        return {ok: true, canonicalId: ul1.get(lower)}
+
+    // Perform live API probe via ex (side_query)
+    probeResult = await sideQueryProbe(lower)   // bundle.js:+12297043
+
+    match probeResult:
+        case AUTH_FAILURE:
+            return {error: true,
+                    message: "Authentication failed. Please check your API credentials."}
+                                                // bundle.js:+12297453
+        case NETWORK_ERROR:
+            return {error: true,
+                    message: "Network error. Please check your internet connection."}
+                                                // bundle.js:+12297555
+        case not_found_error:                   // bundle.js:+12297674
+            return {error: true,
+                    message: "model: " + lower} // bundle.js:+12297756
+        case SUCCESS:
+            ul1.set(lower, canonicalId)         // bundle.js:+12297206
+            return {ok: true, canonicalId}
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+13290153, +13290155, +13290192
+---
 
-### 9. JSX Output Construction
+### Advisor model persistence — modelPersister (ML5 → fL5)
 
-The command returns a JSX element built with `createElement`. The confirmation display joins resolved model identifiers with `", "` as a separator.
-
-```
-function buildConfirmationElement(resolvedModels):
-    label = resolvedModels.join(", ")  // bundle.js:+12248320, +12248329
-    return createElement(...)          // bundle.js:+12248045
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+12248045, +12248320, +12248329
-
-### 10. Advisor-Enabled Model List Filtering (`iw6`)
-
-A separate utility checks whether a given model name should be treated as advisor-capable. It normalises the name to lowercase, then tests for inclusion in a known list of advisor-eligible model identifiers containing at least `"opus-4-7"`, `"opus-4-6"`, and `"sonnet-4-6"`.
+Analysis basis: CC v2.1.153 bundle.js:+12297247
 
 ```
-function isAdvisorEligibleModel(modelName):
-    normalised = modelName.toLowerCase()    // bundle.js:+5277167
-    return eligibleList.includes(normalised) // bundle.js:+5277190
-    // eligibleList contains at minimum:
-    //   "opus-4-7"    (bundle.js:+5277201)
-    //   "opus-4-6"    (bundle.js:+5277225)
-    //   "sonnet-4-6"  (bundle.js:+5277249)
+function modelPersister(canonicalId):
+    // Delegate to fL5 for actual write
+    fL5(canonicalId)                            // bundle.js:+12297302
+
+function fL5(modelId):
+    // Resolve base model via m3
+    base = resolveBaseModel(modelId)            // bundle.js:+12297975
+
+    lowerModel = modelId.toLowerCase()          // bundle.js:+12297993
+
+    // Check for opus-4-x variant strings
+    // bundle.js:+12298023–12298185
+    if lowerModel.includes("opus-4-7") or lowerModel.includes("opus_4_7"):
+        applyVariantConfig("opus-4-7")
+    elif lowerModel.includes("opus-4-6") or ...:
+        applyVariantConfig("opus-4-6")
+    elif lowerModel.includes("opus-4-5") or ...:
+        applyVariantConfig("opus-4-5")
+    // Check for sonnet-4-x variants
+    // bundle.js:+12298230–12298331
+    elif lowerModel.includes("sonnet-4-6") or ...:
+        applyVariantConfig("sonnet-4-6")
+    elif lowerModel.includes("sonnet-4-5") or ...:
+        applyVariantConfig("sonnet-4-5")
+    else:
+        // Default path via $3
+        applyDefaultModelConfig(modelId)        // bundle.js:+12298066
+
+    // String-encode final config
+    ML5(String(finalConfig))                    // bundle.js:+12297943
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+5277167, +5277190, +5277201, +5277225, +5277249
+---
+
+### Side-query API probe — sideQueryProbe (ex)
+
+Analysis basis: CC v2.1.153 bundle.js:+12297043
+
+`ex` is the depth-2 entry for live model validation. It performs a lightweight API call (`side_query` — literal found at bundle.js:+13103592) to verify that a given model ID is accessible under the current authentication context.
+
+```
+async function sideQueryProbe(modelId):
+    // Build probe request body (1024-byte cap observed)
+    // bundle.js:+13103408
+    payload = buildSideQueryPayload(modelId, maxSize=1024)
+
+    // Check global fetch availability
+    // bundle.js:+13103645
+    if NOT globalThis.fetch available:
+        return NETWORK_ERROR
+
+    // Hash the model string for dedup cache
+    // via mAA → U6K.createHash("sha256")
+    // bundle.js:+13103753, +13058311, +13058326
+    hash = sha256(modelId).slice(0,4+7)
+
+    // Probe via Rp (API client)
+    // bundle.js:+13103560
+    response = await apiClient.request(payload)
+
+    // Parse response for auth / not_found / success
+    // bundle.js:+13104190 (I88), +13104247 (Array.isArray)
+    return classifyProbeResponse(response)
+```
+
+---
+
+### Provider/model normalization utilities
+
+Analysis basis: CC v2.1.153 bundle.js:+2181540 (ag), +2043067 (m3), +2044572 ($3)
+
+- **ag** — high-level model-string normalizer: trims, lowercases, validates `anthropic.` prefix (bundle.js:+2181693), checks `claude-` prefix (bundle.js:+2181314), delegates to `hBH`, `q3q`, `qb4`, `G1H`, `L1`, `Kb4`.
+- **m3** — resolves a model string to a canonical internal representation via `IA` → `xH` (bundle.js:+2043067).
+- **$3** — compound resolver that chains `$xH`, `Ih4`, `tqq`, `_i6`, `IA` to produce the final provider-annotated model descriptor (bundle.js:+2044572).
+- **DX6** — provider-aware model inclusion check: lowercases input and checks against an includes-list (bundle.js:+12304669, +5309884, +5309907). Called directly from `PL5` (bundle.js:+12304669).
+
+---
+
+### UI rendering
+
+Analysis basis: CC v2.1.153 bundle.js:+12304463
+
+`PL5` calls `SJ.createElement(...)` (bundle.js:+12304463) to produce the JSX tree returned as the command's output. The display string is composed by joining elements from `DiH` (bundle.js:+12304738). The exact component tree is not recoverable at depth 2 without further traversal.
 
 ---
 
@@ -264,13 +320,14 @@ Analysis basis: CC v2.1.150 bundle.js:+5277167, +5277190, +5277201, +5277225, +5
 
 | Item | Detail |
 |---|---|
-| Telemetry | `tengu_api_success` — fired after a successful model-validation probe (bundle.js:+13040255) |
-| Validation cache | Module-level `Map` (`FB1`) keyed by resolved model name; populated on first successful validation, read on subsequent calls (bundle.js:+12240656, +12240864) |
-| App state changes | Advisor model stored as a string in application state on success; set to `"unset"` when cleared (bundle.js:+12248096) |
-| Network I/O | One `globalThis.fetch` call to the Anthropic messages API per uncached model name, tagged `"side_query"` (bundle.js:+13038804, +13038857) |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | `tengu_bg_dispatch_sigkill_escalate` (bundle.js:+15386200); `tengu_bg_dispatch_low_mem` (+15386779); `tengu_bg_spare_enable` (+15387474); `tengu_bg_spare_claim` (+15387595); `tengu_bg_spare_claim_fail` (+15387858); `tengu_bg_proto_mismatch` (+15374533); `tengu_bg_dispatch_stale_drop` (+15375772); `tengu_bg_attach_legacy_autorespawn` (+15377848); `tengu_bg_attach` (+15378259); `tengu_bg_attach_stall_gave_up` (+15379176); `tengu_bg_attach_stall_respawn` (+15379445); `tengu_bg_attach_kick` (+15380362); `tengu_prompt_cache_1h_config` (+13064699); `tengu_api_success` (+13105043) |
+| Validation cache | Successful model validations are stored in `ul1` (a `Map`) keyed by lowercased model name; `ul1.has` / `ul1.set` at bundle.js:+12296998 / +12297206 |
+| Advisor state | Calling `/advisor off` or `/advisor unset` clears the advisor model; string literals `"off"` (+12304503) and `"unset"` (+12304514) are the recognized disable tokens |
+| API side effects | A lightweight `side_query` API call is issued for unknown models; uses `fetch` / `globalThis.fetch` (+13103645) with the current session auth headers via `Rp` |
+| Console logging | `console.error` used in auth-helper timeout path (+1775487) and SDK error path (+2913767) |
+| appState changes | Advisor model is persisted via `fL5` → `$3` / `m3` chains; changes are reflected in the active session model configuration |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Performance timing | `performance.now()` and `Date.now()` captured around the probe fetch; elapsed time included in telemetry payload (bundle.js:+13039847, +13040227) |
+| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 
 ---
 
@@ -278,19 +335,17 @@ Analysis basis: CC v2.1.150 bundle.js:+5277167, +5277190, +5277201, +5277225, +5
 
 | Version | Change |
 |---|---|
-| v2.1.150 | Initial analysis — command registered as `local-jsx`, model validation cache introduced, `tengu_api_success` telemetry confirmed, eligible model list includes `opus-4-7`, `opus-4-6`, `sonnet-4-6` |
+| v2.1.153 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Passing a raw Bedrock model ARN without the `anthropic.` prefix** — the provider-routing check uses `startsWith("anthropic.")` to detect Bedrock-style names; a malformed ARN will be sent to the direct Anthropic endpoint and fail with a `not_found_error`.
-2. **Expecting `/advisor` alone (no argument) to show current status** — an empty argument is treated the same as `/advisor off` and *clears* the advisor setting, not displays it.
-3. **Using `/advisor off` when the advisor was never set** — this is a no-op but sets state to `"unset"` regardless; no error is raised.
-4. **Assuming the validation probe is free** — every first-use of a new model name makes a live API call (tagged `"side_query"`, max 1024 tokens) and will consume quota and incur latency before the advisor is confirmed active.
-5. **Reusing a cached model name after an API key rotation** — the validation cache (`FB1`) persists for the process lifetime; if credentials change, the cache will return a stale success for a name that may now be inaccessible.
-6. **Supplying an alias in mixed case** — alias matching occurs after `toLowerCase()`; however, supplying a mixed-case explicit model name (not an alias) will be passed through as-is, and the API may reject it if it is case-sensitive.
-7. **Expecting shorthand `"best"` to be stable across versions** — `"best"` resolves via a runtime lookup; the underlying model it maps to can change without a version bump to the `/advisor` command itself.
+1. **Using `/advisor` without arguments to disable it.** The command without arguments opens the configuration UI — it does not disable the advisor. Use `/advisor off` or `/advisor unset` to turn it off (bundle.js:+12304503, +12304514).
+2. **Providing a partial model name without a recognized alias.** If the input does not match an alias (`opusplan`, `sonnet`, `haiku`, `opus`, `best`) and is not a complete API model ID, the validator will reject it with a "not_found_error" response. Always use a full model identifier or a recognized alias.
+3. **Expecting instant effect with an uncached model name.** When the model name has not been validated before, a live API round-trip (`side_query`) is performed. Network errors or credential issues will block the command from completing.
+4. **Case sensitivity confusion.** The handler normalizes input to lowercase internally (bundle.js:+12304427, +12296877), but the validated canonical ID stored in `ul1` is also lowercase. Providing a mixed-case model name is safe — it will be normalized — but the stored key will differ from a verbatim Anthropic model ID string.
+5. **Confusing `/advisor` with `/model`.** `/advisor` configures a secondary "consultant" model used at key moments during a task, not the primary model used for the session.
 
 ---
 
@@ -300,23 +355,114 @@ Analysis basis: CC v2.1.150 bundle.js:+5277167, +5277190, +5277201, +5277225, +5
 
 | Identifier | Role |
 |---|---|
-| `t85` | Top-level advisor command handler (entry point for `/advisor`) |
-| `A` | Normalised argument string variable / general-purpose intermediate value |
-| `M` | Dialog/state manager that handles close operations for advisor UI |
-| `nq` | Model alias resolver — maps shorthand names to canonical model identifiers |
-| `H` | Raw argument or model name string variable; also used as retry-attempt context |
-| `_` | Secondary string variable used for lowercase normalisation and includes checks |
-| `bW` | Model registry lookup helper |
-| `GqH` | Availability/inclusion guard — checks whether a model name is already in the active set |
-| `cv` | Model configuration builder (composes provider routing + model fields) |
-| `UpH` | Haiku model configuration constructor |
-| `GZ` | Opus model configuration constructor |
-| `D79` | Wrapper that delegates to `GZ` (opus configuration) |
-| `Z3` | Provider-routing resolver — selects `firstParty`, `anthropicAws`, or `gateway` |
-| `Fl6` | Eligible-model inclusion checker (tests against a known list) |
-| `BpH` | Model-metadata helper |
-| `rZ8` | Model validation orchestrator — cache check, API probe, error handling |
-| `Xg` | Full advisor model pipeline (normalise → alias → validate → include check) |
-| `Gx` | Side-query dispatcher — builds and fires the advisor fetch request |
-| `F85` | Response parser / error classifier for validation API response |
-| `iw6` | Advisor-eligibility filter — checks if a model name is in the advisor-capable list |
+| `PL5` | Top-level advisor command handler (AsyncFunction) |
+| `L1` | Model alias resolver |
+| `LI8` | Model name validator (API + cache) |
+| `ML5` | Model persistence outer wrapper |
+| `fL5` | Model persistence inner worker (variant dispatch) |
+| `DX6` | Provider-aware model inclusion checker |
+| `ag` | High-level model-string normalizer |
+| `m3` | Canonical model-ID resolver |
+| `$3` | Provider-annotated model descriptor composer |
+| `$xH` | Sub-resolver used by `$3` |
+| `Ih4` | Chained resolver inside `$3` |
+| `tqq` | Object.entries-based resolver used by `$3` |
+| `_i6` | Candidate-find resolver (uses `b__.find`) |
+| `WN` | Model-normalization wrapper calling `m3` / `$3` |
+| `SBH` | Family-based model resolver (calls `$3`) |
+| `TZ` | Fallback model resolver (calls `m3` / `$3`) |
+| `K3q` | Secondary resolver wrapping `TZ` |
+| `Cr6` | `Mb4.includes` model-check utility |
+| `RBH` | Replacement-normalization helper |
+| `G1H` | Provider-allowlist checker (`W1H.includes`) |
+| `hBH` | Prefix-allowlist checker (`Ab4.includes`) |
+| `q3q` | indexOf-based model-position resolver |
+| `qb4` | Includes + G1H + L1 combined resolver |
+| `Kb4` | G1H / L1 / A3q / startsWith compound resolver |
+| `A3q` | `startsWith`-based candidate filter |
+| `ex` | Side-query API probe (live model validation) |
+| `Rp` | Core API client |
+| `sD` | Store-access helper (`M3q.getStore`) |
+| `Lt4` | String split/trim/slice utility |
+| `N9` | Background context helper |
+| `ci` | Error-formatting helper (calls `br6`) |
+| `y6` | Flag-check helper |
+| `M9_` | URI encoding helper |
+| `JO` | Response classifier (calls `cf_`) |
+| `z3q` | Boolean coercion helper |
+| `Hw` | Auth header builder |
+| `qt4` | Auth token packager |
+| `S_` | Session state reader |
+| `ad6` | Proxy-auth helper with trust check |
+| `$t4` | Request state tracker (UUID, Map) |
+| `oD` | Object-descriptor helper |
+| `Nz` | Token / credential normalizer |
+| `Kt4` | Request retry / backoff logic |
+| `XOH` | Timestamp / promise cache handler |
+| `ku8` | `Date.now` timestamp wrapper |
+| `MO6` | Authorization header normalizer |
+| `LzH` | SDK error logger |
+| `le6` | Promise resolution chain helper |
+| `h` | Blur/focus timing tracker |
+| `I` | Away-summary logic controller |
+| `E` | Request skip/default controller |
+| `lWH` | Agent-type prefix finder |
+| `l2` | `m$` wrapper |
+| `RP` | OAuth-aware request handler |
+| `cBH` | Provider-type dispatcher |
+| `Yo6` | WIF/fetch credential resolver |
+| `G` | Token retrieval handler |
+| `X` | IPC buffer/stream processor |
+| `J` | Stream-line parser |
+| `w` | Daemon process manager |
+| `NM` | Stream end/error handler |
+| `jm5` | IPC message dispatcher (ping/nudge/yield/lease/kill/resize/attach) |
+| `EH` | String coercion utility |
+| `eZH` | Provider-detection + oD wrapper |
+| `B9` | Provider-flag resolver |
+| `cS` | `IA` gateway wrapper |
+| `T` | MCP server type list |
+| `yV6` | MCP server type validator |
+| `mC8` | MCP type helper |
+| `uj5` | H/A `.find` search utility |
+| `mAA` | SHA-256 hash helper |
+| `ur6` | Context header builder (`c1`, `IA`, `br6`) |
+| `c1` | String constructor wrapper |
+| `br6` | AsyncLocalStorage store getter |
+| `I88` | `IA` wrapper |
+| `WIH` | Prompt-cache / token-window builder |
+| `GA` | `Hw` / `yb` / `dq` composite |
+| `Lm8` | Memory metrics helper |
+| `T6` | Token-budget tracker |
+| `Mm8` | Message-metadata helper |
+| `gG` | `uf_` / `tZH` composition helper |
+| `uf_` | `IA` normalizer |
+| `tZH` | `xH` + `Ffq` formatter |
+| `w8K` | Request encoding helper |
+| `VP` | Model-string replacer |
+| `_H8` | `ae` / `B9` includes composite |
+| `TP` | Content-map helper |
+| `RYH` | Response array parser |
+| `RH` | JSON.stringify wrapper |
+| `up` | Random-bytes ID generator |
+| `d7` | `Hw` / `b6` composite |
+| `XfH` | Response timestamp helper |
+| `c` | General context accumulator |
+| `cj6` | Cache-control wrapper (`cL9` / `dj6`) |
+| `cL9` | `iv7` / `yH` cache helper |
+| `dj6` | Cache-control variant helper |
+| `Ud` | Agent-ID resolver |
+| `nv7` | Built-in agent-prefix handler |
+| `N6H` | `startsWith`-based agent type checker |
+| `yH` | Error-logging model helper |
+| `_96` | Tail helper |
+| `xH` | Low-level string builder |
+| `IA` | Internal API helper |
+| `o_` | `Ap` object helper |
+| `Ai6` | Object.entries model-map builder |
+| `E1H` | `xH` wrapper |
+| `f0` | Alias-table lookup via `E1H` |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

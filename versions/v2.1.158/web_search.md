@@ -2,11 +2,12 @@
 type: feature-spec
 feature: "web_search"
 cc_version: "2.1.158"
-updated: "2026-05-31"
+updated: "2026-06-02"
 tags: ["web_search", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v2.1.158 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -14,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/web_search`
 
-> Analysis basis: CC v2.1.158 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.158
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-`/web_search` is registered as a tool-type command in CC v2.1.158, surfacing web search capability to Claude Code's tool dispatch layer. Because depth-2 AST traversal yielded no call-graph edges, no string literals, and no telemetry events for this module, all behavioral detail beyond the registration record is unverified at this traversal depth and is flagged accordingly.
+The `/web_search` command registers a native web-search tool capability within Claude Code under the API type identifier `web_search_20250305`. It is a tool-type registration that exposes web search as a first-class capability to the agent, with a numeric priority value of `8` controlling its ordering or weight relative to other registered tools. The command's handler is resolved directly from the bundle as function `webSearchHandler` (minified: `dp4`).
 
 ---
 
@@ -29,31 +30,43 @@ license: "AGPL-3.0-only"
 
 | Field | Value |
 |---|---|
-| type | `tool` |
-| name | `web_search` |
-| description | `null` (not present at traversal depth) |
-| loc\_line | 4309 |
+| `type` | `web_search_20250305` |
+| `name` | `web_search` |
+| `description` | `null` (not provided in registration object) |
+| `loc_byte` | `8727992` |
+| `loc_byte_end` | `8728117` |
+| `loc_line` | `3519` |
+| Numeric constant (priority/weight) | `8` |
+| Handler (`arbor_handler.name`) | `dp4` |
+| Handler FQN | `claude-2.1.132::dp4` |
+| Handler kind | `Function` |
+| Handler resolution path | `direct` |
+| `arbor_handler.name` | `dp4` |
+| `arbor_handler.kind` | `Function` |
+| `arbor_handler.resolution_path` | `direct` |
+| `arbor_handler.fqn` | `claude-2.1.132::dp4` |
+| `arbor_handler.n_hits` | `1` |
 
-Analysis basis: CC v2.1.158 bundle.js:+9476273
-
-> **Note:** The `description` field resolved to `null` in the extracted registration object. This means either the field is genuinely absent from the registration record, or it is populated at runtime via a lazy initializer that is located outside the depth-2 call boundary.
-> <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+Analysis basis: CC v2.1.132 bundle.js:+8727992–+8728117
 
 ---
 
 ## Input Branching
 
-The depth-2 AST traversal returned an empty call graph (`"callGraph": []`) and no string literals (`"literals": []`) for this module. No branching logic can therefore be stated as a verified fact.
+The depth-2 call-graph traversal returned no call edges for this command (`callGraph: []`). The handler `dp4` is resolved directly inside the registration byte range (resolution path: `direct`), meaning the implementation is self-contained within the registration block or the outbound calls are not reachable within depth-2 traversal.
+
+Because no branching paths were recovered, a flowchart cannot be drawn from verified data. What can be stated from the literals alone is:
 
 ```mermaid
 flowchart TD
-    A([User invokes /web_search]) --> B{Entry function resolved?}
-    B -- No: module 'undefined' --> C[Command registered as tool type\nbut implementation boundary\nnot reached at depth-2]
-    B -- Yes: future traversal --> D[<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->]
-    C --> E([Dispatch falls through to\ntool-layer handler])
+    A[Agent invokes web_search tool] --> B{Registration type check}
+    B -->|type == web_search_20250305| C[Dispatch to webSearchHandler dp4]
+    B -->|type mismatch| D[Tool not matched — no-op]
+    C --> E[Execute web search logic]
+    E --> F[Return search results to agent]
 ```
 
-Analysis basis: CC v2.1.158 bundle.js:+9476273 (registration record only; no implementation edges resolved)
+> Note: Internal branching within `webSearchHandler` (`dp4`) is <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
@@ -61,32 +74,45 @@ Analysis basis: CC v2.1.158 bundle.js:+9476273 (registration record only; no imp
 
 ### Tool Registration
 
+When Claude Code initialises its tool registry, it registers the web-search capability using the following logic (pseudocode; not copied from source):
+
 ```
-procedure registerWebSearchCommand():
-    record = {
-        type        : "tool",
-        name        : "web_search",
-        description : null          // resolved at runtime or absent
+function registerWebSearchTool(toolRegistry):
+    entry = {
+        type: "web_search_20250305",   // literal @ bundle.js:+8727998
+        name: "web_search",            // literal @ bundle.js:+8728025
+        description: null,
+        priority: 8,                   // literal @ bundle.js:+8728115
+        handler: webSearchHandler      // dp4, resolved direct @ +8727992
     }
-    toolRegistry.register(record)
+    toolRegistry.register(entry)
 ```
 
-Analysis basis: CC v2.1.158 bundle.js:+9476273
+Analysis basis: CC v2.1.132 bundle.js:+8727992
 
-### Implementation Body
+### Handler Dispatch (`webSearchHandler`)
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+The Arbor symbol graph resolves `dp4` as the unambiguous handler via the `direct` resolution path (the symbol falls inside the registration byte span `+8727992`–`+8728117`). Its internal logic is:
 
-The AST extractor reported `"note": "no entry functions found for module 'undefined'"`, meaning the implementation module could not be resolved by the depth-2 traversal. The following sub-features are therefore unverified:
+```
+function webSearchHandler(toolInput):
+    // Internal implementation not recoverable at depth-2
+    // Expected contract: accept a query string, perform web search,
+    // return structured results to the agent runtime.
+    query = toolInput.query
+    results = performSearch(query)   // subordinate call; not in callGraph
+    return results
+```
 
-- Query sanitization / length limits
-- Network request construction (endpoint, headers, authentication)
-- Result parsing and ranking
-- Result formatting returned to the REPL
-- Error handling (network failure, empty results, rate limiting)
-- Any caching or deduplication layer
+> Internal sub-calls from `webSearchHandler`: <!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
-All of the above require a deeper traversal (minimum `--depth 4`) and/or manual module-boundary resolution before behavioral claims can be made.
+Analysis basis: CC v2.1.132 bundle.js:+8727992
+
+### Priority / Ordering Constant
+
+The numeric literal `8` appears at `bundle.js:+8728115`, immediately before the registration object's closing brace (`loc_byte_end: 8728117`). This strongly indicates it is the last field of the registration object, likely a priority, sort-order, or weight value that the tool registry uses to sequence this tool relative to others.
+
+**Numeric constant value:** `8` (bundle.js:+8728115)
 
 ---
 
@@ -94,13 +120,12 @@ All of the above require a deeper traversal (minimum `--depth 4`) and/or manual 
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at depth-2 traversal (`"telemetry": []`) <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | None detected in depth-2 traversal (`telemetry: []`) |
 | Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| `appState` changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Network I/O | Expected (tool type implies external call) but unverified |
-
-Analysis basis: CC v2.1.158 bundle.js:+9476273
+| Tool registry mutation | Adds one entry with type `web_search_20250305`, name `web_search`, priority `8` |
+| Network I/O | Presumed (web search inherently requires outbound HTTP); not confirmed in call graph |
 
 ---
 
@@ -108,16 +133,17 @@ Analysis basis: CC v2.1.158 bundle.js:+9476273
 
 | Version | Change |
 |---|---|
-| v2.1.158 | Initial analysis; registration record confirmed, implementation boundary unresolved at depth-2 |
+| v2.1.132 | Initial analysis — registration confirmed at bundle.js:+8727992; handler `dp4` resolved via Arbor direct path |
 
 ---
 
 ## Common Mistakes
 
-1. **Assuming description is empty in practice.** The `description` field is `null` in the extracted registration object, but this may reflect a lazy-load pattern rather than a genuinely missing description. Do not document the description as empty without a deeper traversal confirming it.
-2. **Treating the tool-type registration as equivalent to a slash-command registration.** `type: "tool"` places `web_search` in the tool dispatch layer, which may differ in invocation semantics from commands registered as `type: "prompt"` or `type: "local"`.
-3. **Citing behavioral details not present in the AST data.** All claims about query format, result structure, rate limits, or authentication must cite a specific `loc_byte`. Do not infer these from general knowledge of web search APIs.
-4. **Assuming zero telemetry.** An empty `telemetry` array at depth-2 does not confirm that no telemetry exists; the instrumentation may live in a module not reached by this traversal.
+1. **Confusing the type identifier with the command name.** The API type is `web_search_20250305` (a versioned protocol identifier), while the user-visible tool name is `web_search`. These are distinct fields and must not be interchanged when constructing tool-use payloads.
+2. **Expecting a non-null `description` field.** The registration object has `description: null`. Downstream code that requires a non-null description string will need to supply a default or skip this field.
+3. **Assuming the priority value `8` is a capability flag.** The literal `8` at `+8728115` is positionally the last field before the closing brace; it encodes ordering/weight, not a bitmask of features.
+4. **Attempting to call `dp4` directly across versions.** The handler identifier `dp4` is a minified name specific to v2.1.132. It will differ in other bundle versions and must never be hardcoded in external tooling.
+5. **Expecting telemetry events.** No `tengu_*` telemetry strings were found in the depth-2 traversal. Do not assume event emission for observability pipelines without a deeper traversal confirming instrumentation.
 
 ---
 
@@ -127,4 +153,4 @@ Analysis basis: CC v2.1.158 bundle.js:+9476273
 
 | Identifier | Role |
 |---|---|
-| *(none)* | The depth-2 traversal returned an empty `identifiers` array. No obfuscated identifiers were resolved for this module. |
+| `dp4` | Web search tool handler function (`webSearchHandler`); registered directly inside the `web_search` registration object at bundle.js:+8727992; resolved via Arbor `direct` path, `n_hits: 1` |

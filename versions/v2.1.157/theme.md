@@ -1,13 +1,13 @@
 ---
 type: feature-spec
 feature: "theme"
-cc_version: 2.1.157
-updated: "2026-05-18"
+cc_version: "2.1.157"
+updated: "2026-06-02"
 tags: ["theme", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.143
-analysis_basis: "CC v2.1.143 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: 2.1.132
+analysis_basis: "CC v2.1.132 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/theme`
 
-> Analysis basis: CC v2.1.143 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.143
+> Analysis basis: CC v2.1.132 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.132
 
 ---
 
 ## Overview
 
-The `/theme` command allows the user to change the visual theme of the Claude Code CLI interface. It is implemented as a `local-jsx` command, meaning its output is rendered as a JSX component directly within the terminal UI rather than producing plain text output. The command delegates its entire presentation and interaction logic to a dedicated React-style component tree.
+The `/theme` command allows the user to change the visual theme of the Claude Code CLI interface. It is registered as a `local-jsx` command, meaning its output is rendered as a JSX component directly in the terminal UI rather than producing plain-text output or invoking the agent. The handler constructs and returns a React element tree that presents theme selection to the user.
 
 ---
 
@@ -33,57 +33,71 @@ The `/theme` command allows the user to change the visual theme of the Claude Co
 | type | `local-jsx` |
 | name | `theme` |
 | description | `Change the theme` |
-| module\_id | `EXq` |
-| loc\_line | `6978` |
+| module_id | `A5q` |
+| load_inline | `true` |
+| handler | `f$7` (resolved via `module_id` path) |
+| loc_byte span | `11072126` – `11072257` |
+| `loc_byte_end` | `11072257` |
+| `arbor_handler.name` | `f$7` |
+| `arbor_handler.kind` | `AsyncFunction` |
+| `arbor_handler.resolution_path` | `module_id` |
+| `arbor_handler.fqn` | `claude-2.1.132::f$7` |
+| `arbor_handler.n_hits` | `0` |
 
-Analysis basis: CC v2.1.143 bundle.js:+11384642
+Analysis basis: CC v2.1.132 bundle.js:+11072126
+
+**Resolution note:** The handler `f$7` was resolved by Arbor via the `module_id` path (`A5q` → module exports → `f$7`). The `load_inline: true` flag indicates the module is loaded as an inline `load: () => Promise.resolve(...)` shape rather than a lazily-fetched separate chunk.
 
 ---
 
 ## Input Branching
 
-The depth-2 call graph for this command contains a single call edge: the command's render function invoking `xLH.createElement` (i.e., React's `createElement`). No argument-conditional branching was detected at depth ≤ 2. The command appears to unconditionally mount a JSX component when invoked, regardless of any user-supplied arguments.
+The depth-2 call graph for this command reveals a single outbound call edge from the handler to a JSX element-creation function. No argument-dependent branching was detected within the traversal depth.
 
 ```mermaid
 flowchart TD
-    A([User types /theme]) --> B{Command dispatch}
-    B -->|Matched 'theme'| C[Invoke render function]
-    C --> D[createElement — mount theme selector component]
-    D --> E([Theme UI rendered in terminal])
-    B -->|No match| F([Ignored / fallthrough])
+    A["/theme invoked"] --> B["handler: renderThemeSelector()"]
+    B --> C["createElement() — build JSX UI component"]
+    C --> D["Return rendered JSX element to CLI shell"]
 ```
 
-Analysis basis: CC v2.1.143 bundle.js:+11384489
+Because no conditional literals or branching identifiers were found in the depth-2 traversal, additional branching logic (e.g., handling a theme name argument vs. showing an interactive picker) cannot be confirmed from available data.
+
+<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
 
 ---
 
 ## Behavioral Spec
 
-### Theme Selector Component Mount
+### Theme UI Rendering
 
-When `/theme` is dispatched, the command's render function is called by the CLI's slash-command runner. It produces a React element via `createElement`, mounting a theme-selection UI component into the active terminal pane.
+The handler is an `AsyncFunction` (`f$7`) that, when invoked by the CLI shell in response to `/theme`, constructs a JSX component tree via the framework's element-creation primitive (aliased here as `createElement`). The resulting element is handed back to the shell's local-jsx renderer, which mounts it inside the terminal UI.
 
 ```
-function renderThemeCommand(props):
-    element = createElement(ThemeSelectorComponent, props)
-    return element
+async function renderThemeSelector(commandContext):
+    uiElement = createElement(ThemeSelectorComponent, props)
+    return uiElement
 ```
 
-The returned element is handed back to the CLI rendering layer, which is responsible for displaying it inline within the conversation or command output area.
+Because the command type is `local-jsx`, the shell does **not** forward input to the language model. The entire interaction is handled client-side within the CLI process.
 
-Analysis basis: CC v2.1.143 bundle.js:+11384489
+Analysis basis: CC v2.1.132 bundle.js:+11071973
 
-### Argument Handling
+### Command Type Implications (`local-jsx`)
 
-No string or numeric literals were extracted from the implementation at depth ≤ 2, and no conditional branches on user-supplied arguments were observed. The command does not appear to accept sub-commands or named flags at this traversal depth.
+A `local-jsx` command bypasses the agent pipeline entirely:
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+```
+on slashCommand("/theme"):
+    if command.type == "local-jsx":
+        element = await handler(context)
+        mount(element, terminalUILayer)
+        // No LLM call is made
+    else:
+        // would route to agent — not applicable here
+```
 
-### Theme Application Logic
-
-The internal logic that reads, validates, and applies a selected theme value — including persistence to disk or in-memory state, available theme names/identifiers, and any default fallback — was not reachable within the depth-2 call graph.
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+This means `/theme` produces no assistant message, incurs no token usage, and does not appear in the conversation transcript as an agent turn.
 
 ---
 
@@ -91,12 +105,12 @@ The internal logic that reads, validates, and applies a selected theme value —
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected at depth ≤ 2 traversal |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-
-> **Note on telemetry:** No `tengu_*` event strings were found in the extracted implementation data. It is possible that telemetry is emitted from a child component mounted by `createElement` that was not reached in this traversal. A deeper analysis pass is recommended before concluding that the command is fully telemetry-free.
+| Telemetry | None detected in depth-2 traversal |
+| Hook registration | None detected in depth-2 traversal |
+| appState changes | Expected: theme preference persisted to CLI config; not confirmed at depth ≤ 2 <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| LLM invocation | None — `local-jsx` type routes away from agent pipeline |
+| Sound | None detected |
+| Conversation transcript | No assistant turn produced |
 
 ---
 
@@ -104,16 +118,16 @@ The internal logic that reads, validates, and applies a selected theme value —
 
 | Version | Change |
 |---|---|
-| v2.1.143 | Initial analysis — `local-jsx` render pattern confirmed; full theme logic pending deeper traversal |
+| v2.1.132 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Expecting plain-text output:** Because this command's `type` is `local-jsx`, it does not print a text response to stdout. Automation or scripting that captures stdout after invoking `/theme` will receive no output; the result is rendered only inside the interactive terminal UI.
-2. **Assuming argument-driven selection:** No evidence was found at this traversal depth that passing a theme name as a direct argument (e.g., `/theme dark`) is supported. Users should interact with the mounted UI component to make a selection rather than assuming CLI-flag-style input works.
-3. **Expecting immediate persistence without interaction:** The command mounts a selector component; the theme change most likely takes effect only after the user completes an interaction within that component, not at the moment `/theme` is typed.
-4. **Version-pinning the module ID:** The module identifier `EXq` is a bundle-level obfuscated ID that will change across build versions. Do not reference it in any external tooling or tests.
+1. **Expecting an agent response**: Because `/theme` is `local-jsx`, it never produces an AI-generated reply. If the theme picker does not appear, the issue lies in the JSX renderer layer, not the model pipeline.
+2. **Passing a theme name as a text argument**: Whether `/theme <name>` is accepted as a direct argument (bypassing the interactive picker) cannot be confirmed from the available call graph depth. Treat argument-based invocation as unverified until a deeper traversal is available.
+3. **Assuming telemetry fires on theme change**: No `tengu_*` telemetry events were found at depth ≤ 2. Do not rely on telemetry hooks to observe theme-change events without further analysis.
+4. **Conflating `load_inline` with lazy-loading**: The `load_inline: true` flag means the module resolves synchronously via `Promise.resolve()`; there is no network fetch or dynamic import delay before the command becomes available.
 
 ---
 
@@ -123,4 +137,5 @@ The internal logic that reads, validates, and applies a selected theme value —
 
 | Identifier | Role |
 |---|---|
-| `tI7` | Theme command render function — produces the JSX element returned to the CLI rendering layer |
+| `f$7` | Primary async handler for `/theme`; constructs and returns the JSX theme-selector element (resolved via `module_id` path from module `A5q`) |
+| `TqH` | JSX runtime namespace; `TqH.createElement` is the element-creation primitive called by the handler |

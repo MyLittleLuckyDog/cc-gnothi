@@ -1,13 +1,12 @@
 ---
 type: feature-spec
 feature: "context"
-cc_version: 2.1.158
-updated: "2026-05-26"
+cc_version: "2.1.158"
+updated: "2026-06-02"
 tags: ["context", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.150
-analysis_basis: "CC v2.1.150 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.158 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +14,14 @@ license: "AGPL-3.0-only"
 
 # `/context`
 
-> Analysis basis: CC v2.1.150 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.150
+> Analysis basis: CC v2.1.158 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.158
 
 ---
 
 ## Overview
 
-The `/context` command visualizes the current context window usage as a colored grid, broken down by token-consuming category (system prompt, tools, messages, memory files, skills, etc.). It dispatches a `get_context_usage` control request to the local agent and renders the resulting data as a JSX component in the terminal. Passing the optional `all` argument expands the display to include all sub-categories, including deferred and subagent-only entries.
+`/context` is a local-JSX slash command that visualizes the current conversation's context window usage as a colored grid. It dispatches a `get_context_usage` control request to gather token-consumption data, then renders a React component showing categorized context segments (system prompt, memory files, tools, messages, etc.) each colored according to fill level, with a numeric usage percentage and optional `[all]` argument to show full details.
 
 ---
 
@@ -32,295 +31,252 @@ The `/context` command visualizes the current context window usage as a colored 
 |---|---|
 | type | `local-jsx` |
 | name | `context` |
-| description | Visualize current context usage as a colored grid |
+| description | `Visualize current context usage as a colored grid` |
 | argumentHint | `[all]` |
 | thinClientDispatch | `control-request` |
-| module_id | `XT1` |
+| module_id | `Ey1` |
+| load_inline | `true` |
+| loc_byte | `11190590` |
+| loc_byte_end | `11190816` |
+| loc_line | `6812` |
+| arbor_handler.name | `VsL` |
+| arbor_handler.fqn | `claude-2.1.158::VsL` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.150 bundle.js:+11096957
+Analysis basis: CC v2.1.158 bundle.js:+11190590
 
 ---
 
 ## Input Branching
 
-The command entry point (identified as `commandHandler`) trims the raw argument string, then branches on whether the normalized value equals `"all"`.
+The command has four distinct branches based on argument value and data availability, so a flowchart is used.
 
 ```mermaid
 flowchart TD
-    A([User types /context]) --> B[Trim argument string]
-    B --> C{Normalized arg == 'all'?}
-    C -- yes --> D[showAll = true]
-    C -- no --> E[showAll = false]
-    D --> F[Send control request: get_context_usage]
-    E --> F
-    F --> G{Response received?}
-    G -- success --> H[Build category list with all entries if showAll,\notherwise filter to visible entries]
-    G -- error --> I[Render error state]
-    H --> J[Compute token counts per category]
-    J --> K[Calculate percentage of context window used]
-    K --> L{Fullscreen mode available?}
-    L -- fullscreen --> M[Render fullscreen colored grid view]
-    L -- fallback --> N[Render inline colored grid view]
-    M --> O([Display with category legend])
+    A([User types /context {arg}]) --> B{arg present?}
+    B -- "No arg" --> C[arg = '' trimmed]
+    B -- "arg provided" --> D{arg == 'all'?}
+    D -- "Yes" --> E[showAll = true]
+    D -- "No" --> F[showAll = false]
+    C --> G[showAll = false]
+    E --> H[Send control-request: get_context_usage]
+    F --> H
+    G --> H
+    H --> I{Response received?}
+    I -- "No / error" --> J[Render empty / error state via JSX]
+    I -- "Yes" --> K[Parse context-usage payload]
+    K --> L{showAll?}
+    L -- "false" --> M[Render compact colored grid\n≥80% threshold highlighted]
+    L -- "true" --> N[Render full grid with all segment labels\nProject/User/Local/Flag/Policy/Plugin/Built-in rows]
+    M --> O([Return JSX element to shell])
     N --> O
+    J --> O
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+11095651, +11095657, +11095682, +11095690, +11095717
+Analysis basis: CC v2.1.158 bundle.js:+11189290 (argument trim), +11189315 (`"all"` literal), +11189726 (`80` threshold literal)
 
 ---
 
 ## Behavioral Spec
 
-### 1. Argument Normalization
+### Handler Entry Point (`VsL`)
+
+The Arbor-resolved handler is `VsL` (AsyncFunction, resolution via `module_id → Ey1`).
 
 ```
-function normalizeArgument(rawArg):
-    trimmed = rawArg.trim()                        // strip leading/trailing whitespace
-    lower   = trimmed.toLowerCase()
-    if lower == "all":
-        return { showAll: true }
-    else:
-        return { showAll: false }
+async function contextCommandHandler(args, appContext):
+    trimmedArg = args.trim()                          // +11189290
+    showAll    = (trimmedArg == "all")                // +11189315
+
+    // 1. Retrieve context-usage data via thin-client dispatch
+    usageResponse = await sendControlRequest(
+        kind   = "get_context_usage",                 // +11189380
+        target = appContext.sessionTransport
+    )
+
+    // 2. Build grid data from usage response
+    gridData = buildContextGrid(usageResponse, showAll)
+
+    // 3. Render JSX
+    return createElement(ContextGridComponent, { gridData, showAll })
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+11095657, +11095682
+Analysis basis: CC v2.1.158 bundle.js:+11189350 (`sendControlRequest`), +11189380 (`"get_context_usage"`)
 
 ---
 
-### 2. Control Request Dispatch
+### Control Request Dispatch (`sendControlRequest`)
 
-The command sends a control request with the method identifier `"get_context_usage"` to the local agent. The request is dispatched via `sendControlRequest`, which pads the method name to a fixed width of 40 characters using space (`"  "` padding unit) before transmission.
+The command uses `thinClientDispatch: "control-request"` which routes through the bridge-repl layer.
 
 ```
-function dispatchContextRequest(session):
-    method  = "get_context_usage"
-    paddedMethod = method.padEnd(40, " ")          // pad to 40 chars
-    response = session.sendControlRequest(paddedMethod)
+function sendControlRequest(kind, transport):
+    requestId = generateUUID()
+    message   = { type: "control_request", kind, uuid: requestId }
+    transport.sendControlRequest(message)        // +11189350
+    response  = await waitForControlResponse(requestId)
     return response
 ```
 
-Maximum padded method name width: 40 characters (bundle.js:+15286881)
+The bridge-repl handler for `get_context_usage` is present: if no `onGetContextUsage` callback is registered the bridge logs `"get_context_usage is not supported in this context"` and returns an error response.
 
-Analysis basis: CC v2.1.150 bundle.js:+11095717, +11095747, +15284889, +15286881
-
----
-
-### 3. Context Window Computation
-
-Token counts and percentage calculations are performed using standard math operations. The window size is compared against a baseline of 1,000,000 tokens. The computed percentage is clamped between 0 and 100, and `Math.round` / `Math.floor` are applied for display rounding.
-
-```
-function computeWindowStats(usageData):
-    totalTokens   = usageData.totalTokens
-    windowSize    = max(usageData.contextWindow, 1000000)    // floor at 1 000 000
-    usedPercent   = clamp(round(totalTokens / windowSize * 100), 0, 100)
-    freePercent   = 100 - usedPercent
-    return { totalTokens, windowSize, usedPercent, freePercent }
-```
-
-Token baseline constant: 1,000,000 (bundle.js:+9887037)
-
-Percentage ceiling constant: 100 (bundle.js:+11094005)
-
-Analysis basis: CC v2.1.150 bundle.js:+9887037, +11094005, +9909534, +9909545, +9910129, +9910291
+Analysis basis: CC v2.1.158 bundle.js:+12380399
 
 ---
 
-### 4. Category Classification
+### Context Grid Builder (`xN6`)
 
-Usage data is broken into named display categories. Each category carries a label string, an internal key, and a color hint. The full ordered list of categories extracted from literals is:
-
-| Display Label | Internal Key | Color Hint |
-|---|---|---|
-| System prompt | `promptBorder` | standard |
-| System tools | `inactive` | standard |
-| MCP tools | `cyan_FOR_SUBAGENTS_ONLY` | cyan (subagents only) |
-| MCP tools (deferred) | *(deferred)* | standard |
-| System tools (deferred) | *(deferred)* | standard |
-| Custom agents | `permission` | standard |
-| Memory files | `claude` | standard |
-| Skills | `warning` | yellow/warning |
-| Messages | `purple_FOR_SUBAGENTS_ONLY` | purple (subagents only) |
-| Autocompact buffer | *(derived)* | standard |
-| Free space | *(derived)* | standard |
-
-When `showAll` is `false`, entries whose color hints include `_FOR_SUBAGENTS_ONLY` or whose state is `deferred` are filtered out of the grid display.
+`xN6` is the component/function that transforms the raw usage payload into renderable grid segments.
 
 ```
-function buildCategoryList(usageData, showAll):
-    categories = []
-    for each entry in ALL_CATEGORIES:
-        if showAll == false:
-            if entry.isSubagentOnly or entry.isDeferred:
-                continue
-        tokenCount = usageData[entry.key] ?? 0
-        categories.push({ label: entry.label, tokens: tokenCount, color: entry.color })
-    categories.push({ label: "Free space",         tokens: freeTokens,      color: "default" })
-    categories.push({ label: "Autocompact buffer", tokens: compactBuffer,   color: "default" })
-    return categories
-```
+function buildContextGrid(usagePayload, showAll):
+    segments = []
 
-Analysis basis: CC v2.1.150 bundle.js:+9908686, +9908717, +9908765, +9908795, +9908829, +9908856, +9908905, +9908991, +9909080, +9909111, +9909147, +9909177, +9909209, +9909233, +9909709, +9909735, +11093790, +11093813
+    // Filter to visible segment types
+    allSegments = usagePayload.filter(...)           // +11187388
+    targetSeg   = allSegments.find(...)              // +11187706
 
----
+    // Named segment categories (literals found in implementation):
+    categories = [
+        { key: "projectSettings", label: "Project"   },   // +11188372/+11188392
+        { key: "userSettings",    label: "User"       },   // +11188412/+11188429
+        { key: "localSettings",   label: "Local"      },   // +11188446/+11188464
+        { key: "flagSettings",    label: "Flag"       },   // +11188499
+        { key: "policySettings",  label: "Policy"     },   // +11188535
+        { key: "plugin",          label: "Plugin"     },   // +11188554/+11188565
+        { key: "built-in",        label: "Built-in"   },   // +11188584/+11188597
+    ]
 
-### 5. Fullscreen Mode Detection
-
-Before rendering, the command checks for conditions that disable fullscreen. Two known blocking conditions exist: tmux `-CC` mode (iTerm2 integration) and Windows over SSH (ConPTY). If neither is detected, a `"fullscreen"` render mode is selected; otherwise the render mode falls back to `"default"`.
-
-```
-function resolveRenderMode(environment):
-    if environment.isTmuxCC:
-        warn("fullscreen disabled: tmux -CC (iTerm2 integration mode) detected · set CLAUDE_CODE_NO_FLICKER=1 to override")
-        return "default"
-    if environment.isWindowsOverSSH:
-        warn("fullscreen disabled: Windows over SSH (ConPTY re-rendering) detected · set CLAUDE_CODE_NO_FLICKER=1 to override")
-        return "default"
-    return "fullscreen"
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+3360074, +3360260, +3360408, +3360434
-
----
-
-### 6. Grid Rendering
-
-The grid renderer maps each category to a proportional block of colored cells. Percentages below 20 display as `"< 20"` in the legend annotation. The percentage label is formatted with one decimal place (suffix `".0"` appended for whole numbers).
-
-```
-function renderGrid(categories, renderMode):
     for each category in categories:
-        pct = round(category.tokens / totalTokens * 100, 1)
-        if pct < 20:
-            label = "< 20"
-        else:
-            label = formatOneDecimal(pct)         // e.g. "42.0"
-        cellCount = floor(pct / 100 * GRID_WIDTH)
-        renderColoredCells(category.color, cellCount, label)
-    if renderMode == "fullscreen":
-        useFullscreenContainer()
+        if showAll OR category.visible:
+            segments.push(buildSegment(category, usagePayload))
+
+    // Special named bands always shown:
+    //   "Free space"          (+11187423)
+    //   "Autocompact buffer"  (+11187446)
+    //   "Messages"            (+9982493)
+    //   "System prompt"       (+9981468)
+    //   "Memory files"        (+9981929)
+    //   "MCP tools"           (+9981611)
+    //   "System tools"        (+9981547)
+    //   "Skills"              (+9981991)
+    //   "Custom agents"       (+9981862)
+
+    return segments
+```
+
+Analysis basis: CC v2.1.158 bundle.js:+11187347 (`HK`/`wK` context-window helpers), +11187388, +11187706
+
+---
+
+### Percentage Formatter (`st`)
+
+A small helper rounds and formats the usage percentage for display.
+
+```
+function formatUsagePercent(rawFraction):
+    pct = Math.round(rawFraction * 100)    // +210034
+    if pct < 20:
+        label = "< 20"                     // +210014
     else:
-        useInlineContainer()
+        label = String(pct) + ".0"         // +209976
+    return label
 ```
 
-Percentage threshold for abbreviated label: 20 (bundle.js:+208219, +208228)
+Threshold for highlighting: **80%** (bundle.js:+11189726). Segments at or above this threshold receive an alert color in the grid.
 
-Percentage threshold for legend annotation step: 10 (bundle.js:+208261)
-
-Decimal format suffix: `".0"` (bundle.js:+208190)
-
-Analysis basis: CC v2.1.150 bundle.js:+208190, +208219, +208228, +208248, +208261
+Analysis basis: CC v2.1.158 bundle.js:+210034, +210005, +210014, +11189726
 
 ---
 
-### 7. System Prompt Token Analysis
+### JSX Renderer (`qsH` / `bU`)
 
-The system prompt token budget is further decomposed by configuration source. Sources are resolved in the following priority order and each contributes independently to the displayed system prompt block:
+The React element tree is constructed via two helpers:
 
-| Source Label | Config Key |
+- **`qsH`** — subscribes to the `"data"` event on the control-response stream (`+7832300`), converts the binary/string payload to a React-renderable form via `toString()` (`+7832332`), then delegates to `bU`.
+- **`bU`** — calls `NJ_` which wraps `qsq.createElement` (`+3773499`) and `v4H` for color/style application, passing `showAll` and the formatted segment list.
+
+```
+function renderContextGrid(stream, showAll):
+    stream.on("data", (chunk) => {                   // +7832295
+        text = chunk.toString()                      // +7832332
+        element = createElement(ContextGrid, {
+            segments : parseSegments(text),
+            showAll  : showAll,
+            threshold: 80,                           // +11189726
+        })
+        return element
+    })
+```
+
+Analysis basis: CC v2.1.158 bundle.js:+11189410, +7832295, +7832332, +7832362
+
+---
+
+### Auto-compact Boundary Marker (`HO` / `RE8`)
+
+The grid annotates the position of the auto-compact boundary using the `"compact_boundary"` sentinel.
+
+```
+function locateCompactBoundary(messageList):
+    boundary = messageList.find(
+        msg => msg.type == "compact_boundary"        // +10494110
+    )
+    if boundary:
+        return boundary.slice(...)                   // +10494263
+    return null
+```
+
+Analysis basis: CC v2.1.158 bundle.js:+11189246 (`EsL`/`HO`), +10494110 (`"compact_boundary"`)
+
+---
+
+### Context Window Size Resolver (`xl` / `BX1` / `rc_`)
+
+`xl` determines the effective context-window size for the current model:
+
+```
+function resolveContextWindow(modelId, settings):
+    // Check env override first
+    envVal = process.env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]  // +9968050
+    if envVal is set and valid integer:
+        return clamp(envVal, minWindow, maxWindow)
+
+    // Otherwise select by model limits (literals):
+    //   1 000 000 tokens  (+2927540)
+    //   128 000 tokens    (+2928191)
+    //    64 000 tokens    (+2928183)
+    //    32 000 tokens    (+2928279)
+
+    window = lookupModelContextWindow(modelId)
+    return Math.max(minAllowed, Math.min(maxAllowed, window))  // +9968168/+9968208
+```
+
+Analysis basis: CC v2.1.158 bundle.js:+9968050, +9967973 (`xl`), +9967793 (`BX1`)
+
+---
+
+### Full Context Assembly (`MZ8`)
+
+`MZ8` is the top-level async function that assembles every numbered segment fed into the grid. Its call graph reaches:
+
+| Sub-function | Role |
 |---|---|
-| Project | `projectSettings` |
-| User | `userSettings` |
-| Local | `localSettings` |
-| Flag | `flagSettings` |
-| Policy | `policySettings` |
-| Plugin | `plugin` |
-| Built-in | `built-in` |
+| `RZ` / `se` / `bQ` | System-prompt assembly |
+| `xT` + sub-functions (`jP5`, `WY6`, `TP5`, etc.) | Per-segment context assemblers (environment, memory, tools, instructions) |
+| `$uL` | Built-in system-prompt segment collector |
+| `OuL` | MCP-tool segment collector |
+| `zuL` | Background-session / daemon segment collector |
+| `wuL` | Message-history segment collector |
+| `juL` | Per-message token analyzer |
+| `YuL` | Active-context window calculator |
+| `WuL` | Token-count aggregator producing final grid data |
+| `DuL` | Deferred-tool segment collector |
+| `hAH` | Auto-compact window size helper |
 
-Analysis basis: CC v2.1.150 bundle.js:+11094739, +11094759, +11094779, +11094796, +11094813, +11094831, +11094849, +11094866, +11094883, +11094902, +11094921, +11094932, +11094951, +11094964
-
----
-
-### 8. Tool Usage Analysis (Built-in and MCP)
-
-Built-in tool analysis (`analyzeBuiltIn`) and MCP tool analysis (`analyzeMcp`) iterate over conversation history messages of role `"assistant"` that contain content blocks of type `"tool_use"`. Results are accumulated per tool name into a token-count map.
-
-```
-function analyzeToolUsage(messages, toolType):
-    seen    = new Set()
-    results = []
-    for each message in messages where message.role == "assistant":
-        for each block in message.content where block.type == "tool_use":
-            if toolType == "builtin" or toolType == "bundled":
-                if not seen.has(block.name):
-                    seen.add(block.name)
-                    results.push(countTokens(block))
-            elif toolType == "mcp":
-                serverPrefix = block.name.split("__")[0]  // "__" delimiter
-                if serverPrefix != "unknown":
-                    accumulate(results, serverPrefix, countTokens(block))
-    return results
-```
-
-MCP name separator: `"__"` (bundle.js:+9905591)
-
-Fallback server label: `"unknown"` (bundle.js:+9905601)
-
-Analysis basis: CC v2.1.150 bundle.js:+9903031, +9903245, +9903292, +9903313, +9903325, +9904339, +9904372, +9904387, +9905279, +9905591, +9905601
-
----
-
-### 9. Auto-compact Window Configuration
-
-The auto-compact buffer size is resolved from multiple configuration layers in priority order: environment variable `CLAUDE_CODE_AUTO_COMPACT_WINDOW` → settings file → experiment flag → `"auto"` default. If the environment variable contains a non-numeric value, it is treated as `"invalid"` and skipped.
-
-```
-function resolveAutoCompactWindow(env, settings, experiments):
-    raw = env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]
-    if raw is set:
-        parsed = parseInt(raw)
-        if isNaN(parsed):
-            log("invalid")
-        else:
-            return { source: "env", value: parsed }
-    if settings.autoCompactEnabled is set:
-        return { source: "settings", value: settings.autoCompactEnabled }
-    if experiments.autoCompact is set:
-        return { source: "experiment", value: experiments.autoCompact }
-    return { source: "auto", value: "auto" }
-```
-
-Environment variable name: `"CLAUDE_CODE_AUTO_COMPACT_WINDOW"` (bundle.js:+9895305)
-
-Source labels: `"env"`, `"settings"`, `"experiment"`, `"auto"` (bundle.js:+9895497, +9895567, +9895654, +9895746)
-
-Analysis basis: CC v2.1.150 bundle.js:+9895228, +9895236, +9895241, +9895301, +9895305, +9895406, +9895497, +9895567, +9895654, +9895746
-
----
-
-### 10. Random Delay on Render
-
-After rendering, a random delay jitter is applied via `setTimeout` before the display finalizes. The random factor is drawn from `Math.random()` and multiplied by a constant of `2`.
-
-```
-function scheduleRenderFinalize(renderFn):
-    jitter = Math.random() * 2
-    setTimeout(renderFn, jitter)
-```
-
-Jitter multiplier constant: 2 (bundle.js:+13290153)
-
-Analysis basis: CC v2.1.150 bundle.js:+13290155, +13290192, +13290153
-
----
-
-### 11. Agent Memory Loading
-
-When memory files are present, they are loaded and their token usage attributed to the `"Memory files"` category. A telemetry event is fired upon successful load.
-
-```
-function loadAgentMemory(session):
-    systemPrompt = session.getSystemPrompt()
-    if systemPrompt is array:
-        for each entry in systemPrompt:
-            if entry.threadType == "main-thread":
-                recordMemoryTokens(entry)
-    emit("tengu_agent_memory_loaded")
-```
-
-Thread type constant: `"main-thread"` (bundle.js:+9136079)
-
-Analysis basis: CC v2.1.150 bundle.js:+9135902, +9135918, +9135924, +9136020, +9136079
+Analysis basis: CC v2.1.158 bundle.js:+9980510 (`MZ8`), call graph entries throughout
 
 ---
 
@@ -328,18 +284,12 @@ Analysis basis: CC v2.1.150 bundle.js:+9135902, +9135918, +9135924, +9136020, +9
 
 | Item | Detail |
 |---|---|
-| Telemetry — `tengu_amber_creek` | Fired when the fullscreen grid render path (`A67` → `V6`) is executed (bundle.js:+3360591) |
-| Telemetry — `tengu_pewter_brook` | Fired on the standard (non-fullscreen) grid render path (`Y9` → `V6`) (bundle.js:+3360499) |
-| Telemetry — `tengu_agent_memory_loaded` | Fired after agent memory files are successfully loaded into the token map (bundle.js:+9136022) |
-| Telemetry — `tengu_bridge_repl_ws_connected` | Fired when the remote bridge WebSocket transport connects (bundle.js:+13315068) |
-| Telemetry — `tengu_bridge_repl_ws_closed` | Fired when the remote bridge WebSocket transport closes (bundle.js:+13315801) |
-| Control request | Dispatches `"get_context_usage"` via `thinClientDispatch: "control-request"` — no conversational message is added to history |
-| Hook registration | `$rH` registers a listener on the `"data"` event of the control channel; listener converts the response to string and passes it to the render pipeline (bundle.js:+7595569, +7595574) |
-| Write side effect | The `Np` render helper uses a `"write"` channel operation to emit terminal output (bundle.js:+3750615) |
-| appState changes | No persistent appState mutation observed within depth-2 traversal |
-| Sound | No audio events observed within depth-2 traversal |
-| Background session flag | Category list logic checks for `"bg"` and `"local-agent"` session type flags to determine subagent context (bundle.js:+3359863, +3359928) |
-| Auto-compact setting key | Reads `autoCompactEnabled` from settings to compute the compaction buffer segment (bundle.js:+9896908) |
+| Telemetry | `tengu_amber_creek` (+3377806); `tengu_pewter_brook` (+3377714); `tengu_marlin_porch` (+3744418); `tengu_amber_redwood2` (+9967861); `tengu_amber_redwood3` (+9967746); `tengu_sparrow_ledger` (+13098417); `tengu_chair_sermon` (+10457605); `tengu_agent_memory_loaded` (+9354593); `tengu_memdir_loaded` (+3293542); `tengu_moth_copse` (+3297778); `tengu_scratch` (+12945747) |
+| Control request | Emits `get_context_usage` control-request over the thin-client bridge transport; no side-effects on session state |
+| appState changes | None — read-only inspection of current context state |
+| Sound | None detected in depth-2 traversal |
+| Hook registration | `q9` calls `qOA.register` (+58858) for a progress/timeout hook inside the file-write subsystem; unrelated to `/context` display path |
+| React rendering | Returns a JSX element; rendered inline in the Claude Code terminal UI |
 
 ---
 
@@ -347,23 +297,17 @@ Analysis basis: CC v2.1.150 bundle.js:+9135902, +9135918, +9135924, +9136020, +9
 
 | Version | Change |
 |---|---|
-| v2.1.150 | Initial analysis — colored grid display, `[all]` argument, 11 named categories, fullscreen/default render modes, auto-compact buffer segment, MCP `"__"` prefix grouping |
+| v2.1.158 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Omitting the `all` argument when debugging subagent context** — without `all`, entries color-tagged `_FOR_SUBAGENTS_ONLY` (MCP tools in cyan, Messages in purple) and all deferred tool categories are silently hidden from the grid. Run `/context all` to see the complete breakdown.
-
-2. **Misreading the `< 20` label as zero** — any category whose share of the total is below 20% is annotated `"< 20"` rather than its exact value. This is a display threshold, not an absence of tokens (bundle.js:+208228).
-
-3. **Expecting `/context` to affect the conversation** — the command dispatches a `control-request` outside the normal message pipeline; it never inserts a user or assistant turn and does not consume context tokens of its own.
-
-4. **Assuming fullscreen mode is always available** — iTerm2 tmux `-CC` integration and Windows-over-SSH (ConPTY) environments both suppress fullscreen rendering and fall back to inline mode. Set `CLAUDE_CODE_NO_FLICKER=1` to override (bundle.js:+3360074, +3360260).
-
-5. **Interpreting the percentage as out of the active model context limit** — the window size used for percentage calculations is floored at 1,000,000 tokens; if the actual model limit is smaller, the displayed percentage will be lower than the real utilization (bundle.js:+9887037).
-
-6. **Expecting `CLAUDE_CODE_AUTO_COMPACT_WINDOW` to accept string values** — a non-numeric value in this environment variable is logged as `"invalid"` and ignored; the resolver falls through to settings, then experiment, then `"auto"` (bundle.js:+9895406).
+1. **Forgetting the `[all]` argument**: Without `all`, only the top-level summary grid is shown. Pass `/context all` to see every labeled segment (Project, User, Local, Flag, Policy, Plugin, Built-in, Skills, Custom agents).
+2. **Expecting live-update**: `/context` is a one-shot snapshot; it does not subscribe to ongoing context changes. Re-run the command to refresh.
+3. **Misreading the 80% highlight**: The red/alert color fires at ≥ 80% fill, not at 100%. Segments above this threshold warrant immediate attention to avoid triggering auto-compact.
+4. **Running in a context where `onGetContextUsage` is not registered**: In headless or SDK-embedded contexts the bridge will respond with an error (`"get_context_usage is not supported in this context"`); the grid will render empty.
+5. **Confusing token counts with message counts**: The grid shows *token* consumption per band, not the number of messages. The "Messages" band can be small even when many messages are present if they are short.
 
 ---
 
@@ -373,52 +317,343 @@ Analysis basis: CC v2.1.150 bundle.js:+9135902, +9135918, +9135924, +9136020, +9
 
 | Identifier | Role |
 |---|---|
-| `OFL` | Top-level command handler for `/context` |
-| `Y9` | Fullscreen / render-mode resolver |
-| `WxH` | Feature-flag set membership check |
-| `I3_` | Session type classifier (local-agent / bg detection) |
-| `mH` | String coercion utility |
-| `fi` | Platform / OS detection helper |
-| `N` | Terminal environment inspector (tmux, SSH, Windows detection) |
-| `N3_` | Boolean flag normalizer for session options |
-| `HA` | Async render coordinator |
-| `A67` | Fullscreen grid render path entry |
-| `V6` | Colored grid cell emitter (shared by both render paths) |
-| `H$` | Control-channel factory |
-| `Z2H` | Control-channel constructor |
-| `K` | Control request sender / padEnd formatter |
-| `L` | Pending-request queue manager |
-| `$rH` | Data-event listener registrar on control channel |
-| `Np` | Terminal write helper |
-| `H` | Jitter / random-delay scheduler |
-| `JZ6` | Category list builder and token formatter |
-| `v1` | Token count accessor |
-| `XuH` | Category color resolver |
-| `Ws` | Percentage formatter (one-decimal, `< 20` threshold) |
-| `EH` | String-based token label formatter |
-| `$FL` | Free-space / autocompact segment calculator |
-| `XO` | Buffer slice helper for free-space computation |
-| `k28` | Full context-usage data aggregator (orchestrates all sub-analyzers) |
-| `sT` | Model / plan type resolver (opusplan, haiku, plan) |
-| `AT` | Auto-compact enabled flag reader |
-| `zc` | Auto-compact window size resolver (env → settings → experiment → auto) |
-| `tG` | System prompt builder and environment info collector |
-| `$u` | Agent memory loader and main-thread system prompt extractor |
-| `XvL` | User-message token analyzer |
-| `PvL` | System prompt token analyzer per config source |
-| `WvL` | Built-in tool usage analyzer (`analyzeBuiltIn`) |
-| `EvL` | MCP tool usage analyzer (`analyzeMcp`) |
-| `ZvL` | Attachment / file token analyzer |
-| `GvL` | Custom-agent / subagent token analyzer |
-| `IvL` | Attachment metadata token accumulator |
-| `TvL` | Prompt-block token analyzer (builtin/bundled prompt sources) |
-| `e8H` | Token count clamper (Math.min based) |
-| `HH` | Recording / voice session state array |
-| `oq8` | Queue helper for pending control requests |
-| `KLH` | Context window size resolver from model metadata |
-| `lH` | Remote bridge WebSocket transport handler |
-| `wH` | WebSocket connection state tracker |
-| `GH` | Grid cell group renderer |
-| `SH` | Category segment accumulator array |
-| `f6` | Plugin / MCP reconciliation and managed-settings loader |
-| `gH` | Token-count cache map (get/set/entries) |
+| `VsL` | Main handler (AsyncFunction) for `/context` command |
+| `Aq` | Context-window state reader / feature-flag accessor |
+| `B$H` | Feature-set membership check |
+| `ND_` | Terminal color-support probe |
+| `y1` | Color capability string normalizer ("no"/"off") |
+| `CH` | Color capability string normalizer ("yes"/"on") |
+| `mr` | Fullscreen-mode detector |
+| `W77` | iTerm/tmux control-mode detector |
+| `P77` | Terminal prefix checker (`screen`, `tmux`) |
+| `N` | Logger / shell-command executor |
+| `lCK` | Debug-level logger |
+| `LOA` | Log-level helpers |
+| `RH` | JSON serializer wrapper |
+| `v4` | Path basename extractor |
+| `pYA` | Character map builder |
+| `EuH` | Output writer helper |
+| `NYA` | Stream write wrapper |
+| `rCK` | File-write / conversation-log manager |
+| `rxH` | Async queue / throttle utility |
+| `M$H` | Log-file path builder |
+| `KK6` | File I/O utility |
+| `lYA` | Log-path joiner |
+| `cYA` | Log-file rotation helper |
+| `iCK` | Log-append writer |
+| `q9` | Hook/progress registrar |
+| `vD_` | Platform/OS detector (windows check) |
+| `B_` | Settings loader |
+| `Cp` | Settings orchestrator |
+| `DZ` | Settings de-serializer |
+| `Z9` | Memory-usage sampler |
+| `va8` | Settings load executor |
+| `$Q` | Settings sub-field extractor |
+| `G77` | Fullscreen mode initializer |
+| `G6` | App-state getter |
+| `sz6` | State subscription helper |
+| `tz6` | State change notifier |
+| `Ex` | State equality checker |
+| `q_8` | Deduplicated state-update emitter |
+| `S6` | App-state setter |
+| `V$` | Session-ID / context-key builder |
+| `f0H` | Context-key formatter |
+| `qsH` | Control-response stream subscriber |
+| `bU` | JSX element factory for context grid |
+| `NJ_` | React createElement wrapper |
+| `v4H` | Grid color/style applicator |
+| `AcH` | Segment style resolver |
+| `xN6` | Context-grid data builder (filter/find segments) |
+| `HK` | Context-window size helper |
+| `wK` | Token-count formatter |
+| `sCK` | Locale number formatter (en-US compact) |
+| `ppH` | Grid row renderer |
+| `st` | Percentage formatter (Math.round + "< 20" label) |
+| `EH` | String coercion helper |
+| `EsL` | Compact-boundary locator |
+| `HO` | Message-list boundary finder |
+| `RE8` | Boundary type extractor |
+| `Vj` | Boundary position calculator |
+| `MZ8` | Full context-assembly top-level async function |
+| `RZ` | System-prompt assembler |
+| `se` | Prompt section builder |
+| `KN` | Prompt key normalizer |
+| `G9H` | Prompt section header builder |
+| `bQ` | System-prompt text parser |
+| `cG` | Provider-type resolver |
+| `iM` | First-party provider checker |
+| `w5` | Provider-variant resolver |
+| `WA` | Provider string normalizer |
+| `UN` | Provider display-name builder |
+| `VT` | Auto-compact enabled checker |
+| `Q4` | Legacy global config reader |
+| `qV` | Config set membership helper |
+| `y8` | Settings + config aggregator |
+| `xl` | Context-window size resolver |
+| `f9` | Model-ID normalizer / alias expander |
+| `Hr6` | Object-entries iterator helper |
+| `fw` | Model-ID lowercase normalizer |
+| `mp8` | Model metadata accessor |
+| `tw` | Model-name replacer |
+| `XV` | Context-window lookup by model |
+| `V0` | Default context-window size provider |
+| `ap` | Claude-3 family context-window selector |
+| `te` | Claude-3 family limit helper |
+| `BH8` | Extended context-window selector |
+| `M0` | Minimum context-window constant |
+| `J8H` | Env-var integer parser |
+| `BX1` | Context-window clamp/selector |
+| `R_` | Settings value reader |
+| `rc_` | Auto-compact window string parser |
+| `xT` | Per-segment context assembler orchestrator |
+| `m9A` | Model display-name builder |
+| `h6` | Async-storage context accessor |
+| `iB6` | Async-local-storage getter |
+| `O_` | Null-coalescing helper |
+| `GT8` | Tool-list flattener |
+| `qv` | Conversation-ID accessor |
+| `_P5` | Code-style instruction injector |
+| `AP5` | Code-style prompt builder |
+| `Ya6` | Task-continuity segment builder |
+| `qP5` | Task-continuity prompt accessor |
+| `F9A` | Instruction block assembler |
+| `SP5` | Secondary instruction assembler |
+| `jP5` | SDK/tool-type segment builder |
+| `Ng` | Tool-availability checker |
+| `uX` | SDK-type identifier |
+| `wP5` | SDK-specific prompt builder |
+| `vV_` | Feature-flag segment injector |
+| `KE` | Experiment/feature flag reader |
+| `DL` | Deferred-tool listing helper |
+| `CF` | Session-specific guidance builder |
+| `$F` | Flat-map content helper |
+| `WY6` | Memory-file segment loader |
+| `Y4` | Memory-file parser |
+| `f4H` | Memory directory creator |
+| `kr` | Memory-file stat checker |
+| `hH` | Memory-file read helper |
+| `zw` | Memory-dir state setter |
+| `Egq` | Memory-path joiner |
+| `Zgq` | Memory auto-loader |
+| `Tgq` | Team-memory auto-loader |
+| `uY_` | Memory-prompt builder |
+| `d` | Filesystem stat/read helper |
+| `ZP5` | Environment-info (simple) assembler |
+| `sw` | Shell/OS environment probe |
+| `p9A` | Shell display-name builder |
+| `TP5` | Environment-info (static) assembler |
+| `B9A` | OS version/type collector |
+| `HM` | Home-directory accessor |
+| `U9A` | Shell detection logic |
+| `fP5` | Language-locale segment builder |
+| `MP5` | Output-style segment builder |
+| `VP5` | Background-session segment builder |
+| `Jm_` | Worktree detector |
+| `vP5` | Scratchpad segment builder |
+| `RqH` | Scratchpad state reader |
+| `Q2H` | Scratchpad path joiner |
+| `IP5` | Brief-mode segment builder |
+| `hP5` | Focus segment builder |
+| `PP5` | Reproduce-verify-workflow segment builder |
+| `LP5` | Heron-brook segment builder |
+| `EI9` | MCP-instruction segment builder |
+| `nMH` | MCP server config reader |
+| `hp8` | MCP instruction cache |
+| `XP5` | Context-management segment builder |
+| `$P5` | Thinking-reminder segment builder |
+| `OP5` | System section builder |
+| `KP5` | Auto-compact system prompt injector |
+| `zP5` | Verified-vs-assumed segment builder |
+| `YP5` | Doing-tasks segment builder |
+| `DP5` | Using-tools segment builder |
+| `x0` | CLI/remote context injector |
+| `JP5` | Session-guidance segment builder |
+| `Rgq` | Memory-prompt loader (combined) |
+| `Sgq` | Team-memory enablement checker |
+| `UzH` | Permissions segment builder |
+| `PV` | Permission-mode resolver |
+| `u5` | Permission label helper |
+| `zm` | Agent-memory loader |
+| `EK` | Memory-dir existence checker |
+| `KC` | Memory-file metadata extractor |
+| `JZ` | Memory JSON parser |
+| `d_` | Memory content cleaner |
+| `Z_` | Module initializer / ESM interop |
+| `cR6` | CommonJS require binding |
+| `M` | Plugin path resolver |
+| `nS6` | Plugin staging-path resolver |
+| `XD` | System-prompt override accessor |
+| `$uL` | Built-in system-prompt segment collector |
+| `MuL` | Prompt-section splitter |
+| `OZ8` | Parallel segment assembler |
+| `EP5` | Environment + MCP combined segment builder |
+| `Cgq` | Combined memory segment builder |
+| `gAK` | Segment prefix stripper |
+| `A66` | Token-count accumulator |
+| `bSH` | Token-usage breakdown builder |
+| `SH` | Segment error logger |
+| `QX1` | Token-count request builder |
+| `OuL` | MCP-tool token-usage collector |
+| `TJ6` | Tool-list filter |
+| `zuL` | Background/daemon segment collector |
+| `$PH` | Per-session token aggregator |
+| `zZ8` | Tool-definition token builder |
+| `z` | Daemon-session list accessor |
+| `bH` | Session-type checker |
+| `Sy` | Session-segment builder |
+| `Fm` | Daemon process race helper |
+| `T` | Active-transport accessor |
+| `Xv6` | Transport type checker |
+| `Ox8` | Transport state accessor |
+| `X` | Socket/pipe message handler |
+| `J` | Message queue |
+| `w` | Daemon worker manager |
+| `Qf` | Socket end-handler |
+| `FB5` | Full daemon frame-buffer supervisor |
+| `wuL` | Message-history token collector |
+| `Rf` | Token-count rounding helper |
+| `O` | Output stream manager |
+| `I8` | Output stream type checker |
+| `D` | Daemon session disposer |
+| `$` | Session store |
+| `By8` | Low-memory event emitter |
+| `wfA` | Spare-worker spawner |
+| `Iz` | Session-ID validator |
+| `J8` | File-write sync helper |
+| `juL` | Per-message token analyzer |
+| `YuL` | Active context-window calculator |
+| `RV_` | Active-context tool checker |
+| `b8H` | Tool-availability filter |
+| `gX1` | Context-window entry accessor |
+| `ZK` | Context-window cache getter/setter |
+| `WuL` | Token-count final aggregator |
+| `JuL` | Tool-use token accumulator |
+| `XuL` | Tool-result token accumulator |
+| `PuL` | Attachment token accumulator |
+| `ET` | Message-history assembler / system-reminder injector |
+| `XQL` | Message reorder helper |
+| `ni_` | Non-injection message filter |
+| `EQL` | Empty-message pruner |
+| `ZQL` | Typed-content block builder |
+| `VQL` | Content-type presence checker |
+| `h` | Rate-limit / blur-focus tracker |
+| `kE8` | Tool-use presence checker |
+| `uQL` | UUID generator for tool uses |
+| `E8` | Tool-use block builder |
+| `BT` | Tool-result block builder |
+| `dg_` | Deferred-tool delta injector |
+| `yE8` | Tool-use/result pair linker |
+| `yI` | Standard output-style injector |
+| `si_` | Tool-references remover (search not enabled) |
+| `PQL` | Tool-reference pruner |
+| `E` | Event emitter / content accumulator |
+| `V` | Version/variant accessor |
+| `WQL` | Whitespace-only assistant message detector |
+| `xQL` | MCP-tool prefix checker |
+| `y4` | Message metadata accessor |
+| `EZ1` | Empty-content fixer |
+| `NQL` | Non-text-block filter |
+| `qZ1` | Message content partitioner |
+| `Dl_` | Full message-list assembler / diagnostics injector |
+| `mQL` | Tool-reference text builder |
+| `G` | Keyboard-event handler (remote control) |
+| `vQL` | Version-qualified message linker |
+| `EZ6` | Orphaned-thinking-block filter |
+| `cQL` | Trailing-thinking-block filter |
+| `ZZ6` | Whitespace-only assistant filter |
+| `lQL` | Empty-content assistant filter |
+| `IQL` | Tool-result sequence validator |
+| `AZ1` | Assistant-message aggregator |
+| `KZ1` | Tool-use tail appender |
+| `TQL` | System-reminder injector |
+| `DuL` | Deferred-tool segment collector |
+| `CV_` | Deferred-tool availability checker |
+| `lG` | Language/locale segment builder |
+| `_1` | Locale string normalizer |
+| `RV6` | Token-count rate tracker |
+| `Rc_` | Token-count rate calculator |
+| `F_` | Error string coercion helper |
+| `hAH` | Auto-compact window size helper |
+| `a7H` | Model max-output-tokens resolver |
+| `mzH` | Context-window capper |
+| `HH` | Voice/recording session manager |
+| `Q` | Remote-file I/O handler |
+| `UN6` | Remote readFile helper |
+| `wh1` | Remote unlink helper |
+| `a` | Permission-gate wrapper |
+| `c` | Permission-state checker |
+| `s78` | Usage/quota checker |
+| `X8H` | Quota-flag reader |
+| `pc` | Context-percentage calculator |
+| `nH` | MCP bridge-repl v2 session manager |
+| `LH` | MCP connection handler |
+| `AH` | MCP active-request tracker |
+| `L8` | MCP debug logger |
+| `oV6` | MCP tool-call dispatcher |
+| `TEK` | MCP elicitation title extractor |
+| `aV6` | MCP elicitation response sender |
+| `jl` | MCP notification sender |
+| `y` | MCP transient-message queue |
+| `I6` | Async-queue promise builder |
+| `w8` | Structured file logger |
+| `sq4` | Log-file path builder |
+| `B` | MCP server filter |
+| `VH` | Plugin manifest reader |
+| `dH` | Orphaned-permission tracker |
+| `k6` | MCP batch writer |
+| `b6` | MCP message renderer |
+| `u6` | MCP message ring buffer |
+| `uH` | MCP write-messages helper |
+| `O6` | MCP session-close handler |
+| `zH` | MCP stream ender |
+| `_H` | MCP server state manager |
+| `Go1` | Bridge-repl message ingress handler |
+| `IM8` | Bridge message type checker |
+| `p6` | JSON.parse wrapper |
+| `w$5` | Bridge message type map |
+| `j$5` | Bridge control-response router |
+| `a8A` | Bridge UUID validator |
+| `To1` | Bridge control-request processor |
+| `Y` | MCP server config updater |
+| `j` | Worker kill helper |
+| `I` | Away-summary generator |
+| `E6` | Plugin-server bridge handler |
+| `mq` | Plugin stream descriptor |
+| `J4` | Server-stream descriptor |
+| `n9` | Named-server stream list |
+| `Nq` | Anonymous-server stream list |
+| `BA` | Fatal CLI error reporter |
+| `wH` | Active-worker list |
+| `WH` | Worker-state notifier |
+| `IH` | MCP message store |
+| `rH` | Headless managed-settings waiter |
+| `kpH` | Structured log writer |
+| `Q38` | Settings-ready checker |
+| `Qc` | MCP server reconciler |
+| `A26` | MCP server activator |
+| `r8H` | MCP server config processor |
+| `gc` | MCP config entry iterator |
+| `y$8` | MCP color/health indicator builder |
+| `_26` | MCP server state tracker |
+| `zEK` | Headless plugin installer |
+| `fB` | Color formatter |
+| `yT8` | Marketplace reconciler |
+| `eXH` | Install-cache clearer |
+| `F0` | Plugin feature-flag checker |
+| `tw9` | Plugin zip-cache validator |
+| `ew9` | Plugin zip-cache error builder |
+| `Xm` | Plugin manifest parser |
+| `Cb8` | Plugin install tracker |
+| `Aj9` | Marketplace seed registrar |
+| `$EK` | Plugin diff applier |
+| `WS8` | Plugin install/update executor |
+| `v6` | MCP server-list builder |
+| `$$H` | Object.assign shim |
+| `mH` | MCP server-map merger |
+| `aT` | Round-trip-time calculator |
+| `BH` | Token-count cache |
+| `mU_` | Token-count cache value builder |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

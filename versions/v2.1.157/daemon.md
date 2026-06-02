@@ -1,13 +1,12 @@
 ---
 type: feature-spec
 feature: "daemon"
-cc_version: 2.1.157
+cc_version: "2.1.157"
+updated: "2026-06-02"
 tags: ["daemon", "commands", "slash-commands"]
-updated: "2026-05-26"
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.150
-analysis_basis: "CC v2.1.150 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.157 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -15,14 +14,14 @@ license: "AGPL-3.0-only"
 
 # `/daemon`
 
-> Analysis basis: CC v2.1.150 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.150
+> Analysis basis: CC v2.1.157 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.157
 
 ---
 
 ## Overview
 
-The `/daemon` command manages Claude Code's background service layer, providing a unified control surface for three categories of persistent services: AI assistant sessions, scheduled tasks, and remote-control endpoints. It executes immediately on invocation (`immediate: true`) and renders an interactive JSX-based UI that reflects live service state, allows lifecycle operations (start, stop, restart, kill), and surfaces telemetry for each service class.
+The `/daemon` command provides a full-screen interactive management interface for Claude Code's background service layer. It surfaces three subsystems — **assistant sessions**, **scheduled tasks**, and **remote control** — letting the user inspect status, start/stop services, adjust the model, and tail log output from a single TUI panel. The command is of type `local-jsx`, meaning it renders a React/Ink component tree rather than producing a prompt for the agent.
 
 ---
 
@@ -34,518 +33,349 @@ The `/daemon` command manages Claude Code's background service layer, providing 
 | name | `daemon` |
 | description | `Manage background services: assistants, scheduled tasks, and remote control` |
 | immediate | `true` |
-| module_id | `qt_` |
+| module_id | `kAA` |
+| load_inline | `true` |
+| loc_byte | `12661705` |
+| loc_byte_end | `12661909` |
+| loc_line | `8787` |
+| arbor_handler.name | `yY5` |
+| arbor_handler.fqn | `claude-2.1.157::yY5` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.150 bundle.js:+12543547
+Analysis basis: CC v2.1.157 bundle.js:+12661705
 
 ---
 
 ## Input Branching
 
-The command's top-level dispatcher (`F15`) resolves its initial state by running several parallel async operations, then mounts a live JSX interface. Branching at the UI level is driven by a view-state string that selects among a hub overview and three detail views.
+The command presents a multi-tab navigation UI with at least five distinct top-level display states (hub, detail-scheduled, detail-assistant, detail-remoteControl, and a "new" sub-view within assistant detail), plus transient modal states for permission prompts. A Mermaid flowchart is used.
 
 ```mermaid
 flowchart TD
-    A["/daemon invoked"] --> B[Parallel initialisation via Promise.all]
-    B --> C[Load background-process roster]
-    B --> D[Resolve assistant socket paths]
-    B --> E[Load scheduled-task config]
-    B --> F[Detect MCP server entries]
-    B --> G[Locate launchctl service on macOS]
+    INVOKE["/daemon invoked"] --> INIT["initialise: load daemon status\n(vAA, ZAA, oe1 in parallel)"]
+    INIT --> HUB["Render hub view\n(tab = 'hub')"]
 
-    C --> H{Roster parse OK?}
-    H -- Yes --> I[Populate service map]
-    H -- No --> J[Emit tengu_bg_roster_parse_failed\nContinue with empty roster]
+    HUB --> TAB_SCH["User selects Scheduled tab"]
+    HUB --> TAB_AST["User selects Assistant tab"]
+    HUB --> TAB_RC["User selects Remote Control tab"]
 
-    I --> K{Current view-state}
-    J --> K
+    TAB_SCH --> DETAIL_SCH["tab = 'detail-scheduled'\nShow scheduled-task status\n(bt1 / daemon.scheduled.status.json)"]
+    DETAIL_SCH --> SCH_ACT{"Action?"}
+    SCH_ACT --> SCH_START["start / stop via process.kill + RP"]
+    SCH_ACT --> SCH_BACK["Back → hub"]
 
-    K -- hub --> L[Render hub overview\nall service classes]
-    K -- detail-scheduled --> M[Render scheduled-task detail]
-    K -- detail-assistant --> N[Render assistant detail]
-    K -- detail-remoteControl --> O[Render remote-control detail]
-    K -- new --> P[Render new-service creation form]
+    TAB_AST --> DETAIL_AST["tab = 'detail-assistant'\nShow assistant-session list\n(me1, daemon.json roster)"]
+    DETAIL_AST --> AST_ACT{"Action?"}
+    AST_ACT --> AST_NEW["tab = 'new'\nModel picker → spawn session"]
+    AST_ACT --> AST_STOP["Stop selected session\n(nW → process.kill)"]
+    AST_ACT --> AST_BACK["Back → hub"]
 
-    L --> Q{User action}
-    Q -- start --> R[Call service start]
-    Q -- stop --> S[Call service stop / SIGTERM]
-    Q -- restart --> T[Stop then kickstart]
-    Q -- kill --> U[SIGKILL escalation]
-    Q -- uninstall --> V[macOS bootout / launchctl remove]
-    Q -- navigate --> K
+    TAB_RC --> DETAIL_RC["tab = 'detail-remoteControl'\nShow remote-control status\n(v8 / launchctl print)"]
+    DETAIL_RC --> RC_ACT{"Action?"}
+    RC_ACT --> RC_PERM["Permission prompt (O_)\nif not yet enabled"]
+    RC_ACT --> RC_INSTALL["Install/uninstall launchd agent\n(J86 / _s_ / FN6)"]
+    RC_ACT --> RC_BACK["Back → hub"]
+
+    AST_NEW --> MODEL_PICK["Model picker\n(q86 / WrL)\nSelect model tier"]
+    MODEL_PICK --> SPAWN["Spawn new background session\n(GfA / YfA / Bun.spawn)"]
+    SPAWN --> DETAIL_AST
+
+    DETAIL_AST --> PERM_MODAL{"remoteControlAtStartup\npermission needed?"}
+    PERM_MODAL --> PERM_YES["Grant → set remoteControl flag"]
+    PERM_MODAL --> PERM_NO["Deny"]
 ```
-
-Analysis basis: CC v2.1.150 bundle.js:+12542503, +12542835, +12533128, +12533286, +12533407, +12533226
 
 ---
 
 ## Behavioral Spec
 
-### Top-level Initialisation
+### 1. Top-level async initialisation (`yY5`)
+
+The Arbor-resolved main handler (`yY5`) is an `AsyncFunction` reached via `module_id` → `kAA`.
 
 ```
-async function daemonCommandEntry(context):
-    results = await Promise.all([
-        loadBackgroundRoster(),           // _t_
-        resolveSocketDirectory(),         // es_
-        loadScheduledConfig(context),     // nc1 → YeH
+async function daemonCommandHandler(context):
+    [daemonData, assistantDir, sessionList] = await Promise.all([
+        loadDaemonStatusData(),    // vAA
+        resolveAssistantDir(),     // ZAA
+        buildSessionOverview()     // oe1
     ])
-    
-    renderInterface = mountJsxUI(results) // f.render
-    await renderInterface.unmount()       // f.unmount on exit
+    renderDaemonUI(daemonData, assistantDir, sessionList)
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+12542503, +12542841, +12543070, +12542920, +12543134
+Analysis basis: CC v2.1.157 bundle.js:+12650455
 
 ---
 
-### Background Roster Loading
+### 2. Daemon status aggregation (`vAA`)
+
+Collects status from three independent service files concurrently.
 
 ```
-async function loadBackgroundRoster():
-    sessionList = await listActiveSessions()    // Bc1
-    pidEntries  = await readPidFiles()          // Rc1
-    processMap  = buildProcessMap(sessionList, pidEntries)  // T0
-    assistants  = await loadAssistantEntries()  // AQ1
-    scheduledEntries = await loadScheduledFile() // yd1
-    rosterData  = await parseRosterFile()        // jB
-    serviceIndex = buildServiceIndex(rosterData) // kc
-    return Object.keys(serviceIndex)
+async function loadDaemonStatusData():
+    rawConfig = await readScheduledConfig()           // de1
+    assistantStatus = await readAssistantStatus()     // me1
+    scheduledStatus = await readScheduledStatus()     // bt1 → "daemon.scheduled.status.json"
+    mainDaemonStatus = await readMainDaemonStatus()   // Ms1 → "daemon.status.json"
+    rosterData = await readRosterFile()               // TF  → "roster.json"
+    serviceInfo = await queryLaunchdService()         // sl  → launchctl print
+    return aggregate(rawConfig, assistantStatus, scheduledStatus,
+                     mainDaemonStatus, rosterData, serviceInfo)
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+12531818, +12531848, +12531861, +12531887, +12531914, +12531936, +12531958, +12531976, +12532089
+Analysis basis: CC v2.1.157 bundle.js:+12649976
 
 ---
 
-### Roster File Parsing
+### 3. Scheduled-task configuration reader (`de1`)
 
 ```
-async function parseRosterFile(path):
-    raw = await filesystem.readFile(path)        // IeH.readFile
-    try:
-        parsed = JSON.parse(raw)
-        validate schema fields
-        return parsed
-    catch ParseError:
-        emit telemetry("tengu_bg_roster_parse_failed")
-        logError(error)
-        return []
-    
-    // Additional validation: test against expected format regex
-    // ELH.test applied to string-coerced content
+async function readScheduledConfig():
+    [configEntries, processStatus, pidInfo] = await Promise.all([
+        loadScheduledEntries(),    // r_6  (reads files tagged "scheduled")
+        queryServiceStatus(),      // SH
+        readPidInfo()              // nW
+    ])
+    return { configEntries, processStatus, pidInfo }
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+11144810, +11144891, +11145305, +11145321
+`r_6` iterates task definitions, calling `loadTaskFile()` (`h_A`) which:
+- Opens each task file with `readFile` (encoding: `"utf8"`)
+- Trims whitespace and calls `JSON.parse`
+- Validates that the result `Array.isArray` before returning
+
+Analysis basis: CC v2.1.157 bundle.js:+12644678
 
 ---
 
-### Scheduled Task File Reader
+### 4. Assistant session reader (`me1`)
 
 ```
-async function loadScheduledFile(filePath):
-    content = await filesystem.readFile(filePath, "utf8")
-    parsed  = parseScheduledEntries(content)    // kd1
-    resolvedEntries = resolveEntryPaths(parsed) // Nq
-    if processMustStop:
+async function readAssistantStatus():
+    sessionDir = buildSessionDir()     // u2H → resolves ENOENT gracefully
+    daemonCfg  = readDaemonJson()      // FC  → "daemon.json"
+    pidData    = readPidFile()         // nW
+    sessionNames = sessions.map(s => path.basename(s))   // pfH.basename
+    return { sessionDir, daemonCfg, pidData, sessionNames }
+```
+
+`u2H` handles the `"ENOENT"` error code (file not found) gracefully — it checks `err.code === "ENOENT"` and returns a safe empty result rather than propagating the error.
+
+Analysis basis: CC v2.1.157 bundle.js:+12638192
+
+---
+
+### 5. PID-file reader and process-kill helper (`nW`)
+
+```
+async function readPidAndMaybeKill(action):
+    pid = await readPidFromFile()   // mN6 → vm.readFile → JSON.parse via V9
+    if action == "stop":
         process.kill(pid, signal)
-    return resolvedEntries
+        await waitForExit()         // aa_ → reads /proc or ps slice
+        notifyResult(RP)
+    return pid
 ```
 
-- Encoding: `"utf8"` (Analysis basis: CC v2.1.150 bundle.js:+12421388)
+`aa_` reads a `/proc`-style or `ps`-output file, splits on whitespace, and slices the relevant columns to extract process metadata.
+
+Analysis basis: CC v2.1.157 bundle.js:+11228327
 
 ---
 
-### PID File Resolver
+### 6. Roster file parser (`TF`)
+
+Reads the roster of running background sessions.
 
 ```
-async function readPidFiles():
-    baseDir  = os.homedir()
-    entries  = filesystem.readdirSync(baseDir)
-    filtered = entries.filter(matchesPidPattern)    // SR
-    mapped   = _.map(filtered, resolvePidEntry)     // Rc1 → _.map
-    
-    for each entry:
-        basename = path.basename(entry)             // M5H.basename
-        if entry.type == "same-dir":                // literal "same-dir"
-            resolveRelative(entry)
-    
-    return mapped
+async function readRosterFile():
+    raw = await fs.readFile(rosterFilePath)   // "roster.json"
+    parsed = JSON.parse(raw)
+    if not valid(parsed):
+        emit telemetry("tengu_bg_roster_parse_failed")
+        throw Error
+    normalise timestamps via Ms_()   // Ms_ uses Date.now()
+    entries = NtL(parsed)            // validates Array.isArray + Object.keys
+    return entries
 ```
 
-- Directory resolution strategy literal: `"same-dir"` (Analysis basis: CC v2.1.150 bundle.js:+12520201)
+File path is built by joining with `h3.join` through `ffH → RRH`.
+
+Analysis basis: CC v2.1.157 bundle.js:+11238449
 
 ---
 
-### Process Lifecycle Controller
+### 7. launchd service query (`sl` / `v8` / `G_`)
+
+Used to surface remote-control daemon status on macOS.
 
 ```
-function processLifecycleControl(pid, action):
-    switch action:
-        case "start":
-            spawnProcess(pid)               // bB.spawn
-        case "stop":
-            sendSignal(pid, "SIGTERM")
-            waitForExit(timeoutMs)
-        case "restart":
-            sendSignal(pid, "SIGTERM")
-            pollForExit(interval=200ms, maxAttempts=50)
-            if not exitedWithin(10s):
-                abort("daemon did not exit within 10s of SIGTERM; restart aborted before kickstart")
-            kickstart(pid)
-        case "kill":
-            sendSignal(pid, "SIGKILL")
-            emit telemetry("tengu_daemon_control")
+async function queryLaunchdService():
+    result = runCommand("launchctl", ["print", serviceIdentifier])
+    // timeout: 5000 ms (literal at +11232397)
+    return parseServiceOutput(result)   // G_ parses stdout
 ```
 
-- Stop signal: `SIGTERM` (Analysis basis: CC v2.1.150 bundle.js:+11137666)
-- Kill signal: `SIGKILL` (Analysis basis: CC v2.1.150 bundle.js:+15260919)
-- Restart poll interval: 200 ms (Analysis basis: CC v2.1.150 bundle.js:+11137778)
-- Restart max poll cycles: 50 (Analysis basis: CC v2.1.150 bundle.js:+11137917)
-- Timeout abort message: `"daemon did not exit within 10s of SIGTERM; restart aborted before kickstart"` (Analysis basis: CC v2.1.150 bundle.js:+11137946)
+`G_` invokes error logging (`SH`) if the exit code is non-zero and tracks a buffer limit of 10 items (literal `10` at +1049606) with a 1 000 000-byte cap (literal at +1050128).
+
+Analysis basis: CC v2.1.157 bundle.js:+11232347
 
 ---
 
-### macOS launchctl Integration
+### 8. Model picker and session spawner (`q86` / `WrL` / `GfA` / `YfA`)
+
+When the user selects **new assistant session**, the model-picker component (`WrL`) is mounted.
 
 ```
-function launchctlServiceControl(action, serviceLabel):
-    if platform != "darwin":
-        if action == "uninstall":
-            throw Error("service uninstall not available on darwin")
-        return
-
-    launchAgentsPath = path.join(os.homedir(), "Library", "LaunchAgents")
-
-    switch action:
-        case "start":
-            exec("launchctl", "kickstart", serviceLabel)
-        case "stop":
-            exec("launchctl", "stop", serviceLabel)
-        case "kill":
-            exec("launchctl", "kill", "SIGTERM", serviceLabel)
-        case "restart":
-            exec("launchctl", "stop", serviceLabel)
-            poll until stopped (timeout=10s, interval=200ms, maxCycles=50)
-            exec("launchctl", "kickstart", serviceLabel)
-        case "uninstall":
-            exec("launchctl", "bootout", serviceLabel)
-        case "status":
-            exec("launchctl", "print", serviceLabel, timeout=5000ms)
-
-    emit telemetry("tengu_daemon_control")
+function modelPickerComponent(props):
+    models = buildModelList()   // WrL aggregates tier constants
+    // Tier options surfaced (from literals):
+    //   "default", "opus", "sonnet", "haiku",
+    //   "opus[1m]", "sonnet[1m]", "opusplan",
+    //   gateway-sourced models ("gateway-models.json")
+    selected = userPicks(models)
+    return selected
 ```
 
-- Platform guard: `"darwin"` (Analysis basis: CC v2.1.150 bundle.js:+11138272)
-- launchctl binary literal: `"launchctl"` (Analysis basis: CC v2.1.150 bundle.js:+11138703)
-- Status subcommand: `"print"` (Analysis basis: CC v2.1.150 bundle.js:+11138716)
-- Status timeout: 5000 ms (Analysis basis: CC v2.1.150 bundle.js:+11138750)
-- LaunchAgents sub-path: `"Library/LaunchAgents"` (Analysis basis: CC v2.1.150 bundle.js:+11135488, +11135498)
-- Uninstall subcommand: `"bootout"` (Analysis basis: CC v2.1.150 bundle.js:+11137261)
-- Kickstart subcommand: `"kickstart"` (Analysis basis: CC v2.1.150 bundle.js:+11137624)
+After model selection, `GfA` (session lifecycle manager) calls `YfA` to spawn the subprocess:
+
+```
+async function spawnBackgroundSession(model, options):
+    token   = randomBytes(hex)                 // jVK.randomBytes
+    sockDir = path.join(dataDir, token)
+    fs.mkdir(sockDir)
+    child = Bun.spawn([execPath, "--bg-pty-host", "200", "50",
+                       "--", "--bg-spare"], { stdin: "ignore" })
+    // "--bg-pty-host" cols=200 rows=50, literal at +15446187/+15446205/+15446211
+    child.unref()
+    // idle timeout: 300 000 ms (literal at +15473715)
+    // spare-refill telemetry: "daemon_bg_spare_refill"
+```
+
+Analysis basis: CC v2.1.157 bundle.js:+10834292 (WrL), +15445842 (YfA)
 
 ---
 
-### Socket Directory Resolution
+### 9. Session lifecycle states (`GfA`)
 
-```
-async function resolveSocketDirectory():
-    configDir = path.join(os.homedir(), ...)    // kc1.homedir + L5H.join
-    
-    try:
-        stat = await filesystem.stat(configDir) // Nv6.stat
-        if stat fails:
-            throw { code: "ENOENT" }
-    catch error:
-        if error.code == "ENOENT":
-            log("debug", ...)
-            return null
-        log("error", ...)                       // literal "error"
-        return null
+Background sessions transition through a defined set of string-keyed states:
 
-    assistantSocket = path.join(configDir, "assistant")  // literal "assistant"
-    codeSocket      = path.join(configDir, "code")       // literal "code"
-    return { assistantSocket, codeSocket }
-```
-
-- Socket type `"assistant"`: Analysis basis: CC v2.1.150 bundle.js:+12516205
-- Socket type `"code"`: Analysis basis: CC v2.1.150 bundle.js:+12516198
-- Error code `"ENOENT"`: Analysis basis: CC v2.1.150 bundle.js:+173271
-- Log level `"debug"`: Analysis basis: CC v2.1.150 bundle.js:+202680
-- Log level `"error"`: Analysis basis: CC v2.1.150 bundle.js:+12516330
-
----
-
-### MCP Server Connection Manager
-
-```
-async function manageMcpConnections(serverConfig):
-    entries = Object.entries(serverConfig)
-    
-    for each [name, config] in entries:
-        if config.status == "disabled":
-            skip
-        
-        transportType = config.transport   // "stdio" | "sse" | "http" | "sse-ide" | "ws-ide"
-        
-        if transportType == "claudeai-proxy":
-            handleProxyTransport(config)
-        
-        if config.auth == "needs-auth":
-            log("Skipping connection (cached needs-auth)")
-            markStatus("needs-auth")
-            continue
-        
-        connectionResult = await connectToServer(name, config)
-        
-        if connectionResult.ok:
-            markStatus("connected")
-        else:
-            markStatus("failed")
-    
-    // MCP update reconciliation
-    applyMcpUpdate(currentState, newState)   // H.applyMcpUpdate
-    
-    if allRemoteServersRecovered:
-        log("[MCP] Retry: all remote servers recovered, stopping")
-        stopRetryLoop()
-```
-
-- Transport types: `"stdio"`, `"sse"`, `"http"`, `"sse-ide"`, `"ws-ide"` (Analysis basis: CC v2.1.150 bundle.js:+10090807, +10090841, +10090873, +10090906, +10090942)
-- Proxy transport: `"claudeai-proxy"` (Analysis basis: CC v2.1.150 bundle.js:+10091214)
-- Auth-skip message: `"Skipping connection (cached needs-auth)"` (Analysis basis: CC v2.1.150 bundle.js:+10091400)
-- Recovery log: `"[MCP] Retry: all remote servers recovered, stopping"` (Analysis basis: CC v2.1.150 bundle.js:+14981566)
-
----
-
-### Background Session Dispatcher
-
-```
-function backgroundSessionDispatcher(sessionMap):
-    MAX_GRACE_SECONDS = 30      // seconds before SIGKILL escalation
-    KILL_CHECK_INTERVAL = 15    // polling interval seconds
-    SPAWN_RETRY_LIMIT = 100
-    MEMORY_THRESHOLD_KB = 1024  // free-memory floor in KB
-
-    for each session in sessionMap.values():
-        
-        if session.status == "stopped":
-            checkBackgroundSession()
-        
-        freeMem = os.freemem() / 1024
-        if freeMem < MEMORY_THRESHOLD_KB:
-            emit telemetry("tengu_bg_dispatch_low_mem")
-            deferSpawn()
-            continue
-        
-        if session.needsSigkill:
-            emit telemetry("tengu_bg_dispatch_sigkill_escalate")
-            process.kill(session.pid, "SIGKILL")
-            continue
-        
-        if session.isSpare:
-            emit telemetry("tengu_bg_spare_enable")
-            claimedSession = tryClaimSpare(session)
-            
-            if claimedSession.ok:
-                emit telemetry("tengu_bg_spare_claim")
-            else:
-                emit telemetry("tengu_bg_spare_claim_fail")
-                handleClaimFailure(session)
-        
-        if session.retryCount > SPAWN_RETRY_LIMIT:
-            emit telemetry with tag "dup_retry_exhausted"
-            reportError(
-                "report the issue at https://github.com/anthropics/claude-code/issues"
-            )
-        
-        newProcess = childProcess.spawn(executablePath, args)
-        sessionMap.set(session.id, newProcess)
-        emit telemetry("tengu_bg_session_create")
-        
-        session.dispose()
-```
-
-- SIGKILL grace period: 30 s (Analysis basis: CC v2.1.150 bundle.js:+15260826)
-- Kill check interval: 15 s (Analysis basis: CC v2.1.150 bundle.js:+15260837)
-- Spawn retry ceiling: 100 (Analysis basis: CC v2.1.150 bundle.js:+15260943)
-- Memory floor: 1024 KB (Analysis basis: CC v2.1.150 bundle.js:+15261344)
-- Issue URL: `"https://github.com/anthropics/claude-code/issues"` (Analysis basis: CC v2.1.150 bundle.js:+15261996)
-- Session create event: `"tengu_bg_session_create"` (Analysis basis: CC v2.1.150 bundle.js:+15261181)
-
----
-
-### Supervisor & Config-Reload Loop
-
-```
-function supervisorConfigReloadLoop(supervisorHandle):
-    // Supervisor writes to an output stream (q.write)
-    // Heartbeat key: "heartbeat"
-    // Supervisor label: "supervisor"
-
-    supervisorHandle.write(currentConfig)
-    
-    on configChange:
-        scheduler.stop()
-        scheduler.updateConfig(newConfig)
-        scheduler.start()
-        emit telemetry("tengu_daemon_config_reload")
-    
-    on stop:
-        scheduler.stop()
-        deleteTimerEntry()              // M.delete
-```
-
-- Heartbeat literal: `"heartbeat"` (Analysis basis: CC v2.1.150 bundle.js:+15274086)
-- Supervisor label: `"supervisor"` (Analysis basis: CC v2.1.150 bundle.js:+15274864)
-- Config reload event: `"tengu_daemon_config_reload"` (Analysis basis: CC v2.1.150 bundle.js:+15275657)
-
----
-
-### Remote Control Startup Handler
-
-```
-function remoteControlAtStartupHandler(event):
-    event.preventDefault()
-    activateRemoteControlFlag("remoteControlAtStartup")   // literal key
-    navigateToView("detail-remoteControl")
-    scheduleJitterDelay()                                  // H: Math.random * 2 + setTimeout
-```
-
-- Flag key: `"remoteControlAtStartup"` (Analysis basis: CC v2.1.150 bundle.js:+13469621)
-- View label: `"detail-remoteControl"` (Analysis basis: CC v2.1.150 bundle.js:+12533407)
-- Jitter base multiplier: `2` (Analysis basis: CC v2.1.150 bundle.js:+13290153)
-
----
-
-### Scheduled Task Model Selector
-
-```
-function resolveScheduledModel(modelHint):
-    if modelHint.startsWith("anthropic."):
-        return modelHint                    // pass-through
-    
-    switch modelHint:
-        case "opusplan":
-            return planningOpusModel
-        case "opus":
-            return "claude-opus-4-6"
-        case "opus[1m]":
-            return "claude-opus-4-6[1m]"
-        default:
-            return "Custom model"
-```
-
-- Namespace prefix: `"anthropic."` (Analysis basis: CC v2.1.150 bundle.js:+10742163)
-- Opus model ID: `"claude-opus-4-6"` (Analysis basis: CC v2.1.150 bundle.js:+10742646)
-- Extended-context variant: `"claude-opus-4-6[1m]"` (Analysis basis: CC v2.1.150 bundle.js:+10742711)
-- Custom fallback label: `"Custom model"` (Analysis basis: CC v2.1.150 bundle.js:+10742248)
-
----
-
-### Hub View Service Classes
-
-The hub view (`"hub"`) aggregates three top-level service class sections:
-
-| Key | Display Name |
+| State string | Meaning |
 |---|---|
-| `scheduled` | `Scheduled` |
-| `remoteControl` | `Remote Control` |
-| *(implicit)* | `Claude Daemon` |
+| `"spare"` | Pre-warmed, unclaimed |
+| `"exec"` | Being promoted to active |
+| `"done"` | Completed normally |
+| `"killed"` | Terminated by signal |
+| `"failed"` | Non-zero exit |
+| `"crashed"` | Unexpected exit |
+| `"blocked"` | Waiting on permission |
+| `"working"` | Processing a task |
+| `"bg"` | Running in background |
+| `"idle"` | Waiting for next task |
+| `"active"` | Claimed by a foreground session |
+| `"resuming"` | Being reconnected |
 
-Analysis basis: CC v2.1.150 bundle.js:+12532635, +12532661, +12534055, +12534376, +12534661
-
----
-
-### View Navigation State Machine
-
-```
-type ViewState =
-    | "hub"
-    | "detail-scheduled"
-    | "detail-assistant"
-    | "detail-remoteControl"
-    | "new"
-
-function navigate(currentView, action):
-    switch action.type:
-        case SELECT_SERVICE:
-            return "detail-" + action.serviceClass
-        case CREATE_NEW:
-            return "new"
-        case BACK:
-            return "hub"
-        default:
-            return currentView
-```
-
-- View key literals: `"hub"`, `"detail-scheduled"`, `"detail-assistant"`, `"detail-remoteControl"`, `"new"` (Analysis basis: CC v2.1.150 bundle.js:+12532635, +12533128, +12533286, +12533407, +12533226)
+Analysis basis: CC v2.1.157 bundle.js:+15472148 through +15473929
 
 ---
 
-### Session List Aggregator (Bc1)
+### 10. Remote-control install / uninstall (`J86`, `_s_`, `FN6`)
 
 ```
-async function aggregateSessionList():
-    results = await Promise.all([
-        enumerateSessions(),         // f66
-        readSessionRegistry(),       // RH
-        resolveSessionPids(),        // T0
-    ])
-    
-    mergedList = mergeSessionResults(results, index=1)
-    return mergedList
+async function installRemoteControlAgent():
+    agentPlistPath = path.join(homedir(), "Library", "LaunchAgents", ...)
+    // Hs_ builds the path: "Library" + "LaunchAgents" literals at +11229135/+11229145
+    writeAgentPlist(agentPlistPath)
+    runLaunchctl("kickstart", agentPlistPath)
+
+async function uninstallRemoteControlAgent():
+    runLaunchctl("bootout", agentPlistPath)   // "bootout" literal at +11230908
+    fs.unlink(agentPlistPath)
+    // Note: "service uninstall not available on darwin" literal at +11231040
+    //       is emitted as a warning on non-macOS platforms
+
+async function restartRemoteControlAgent():
+    sendSIGTERM(pid)
+    waitUpTo(200 polls × 50 ms = 10 s)   // literals at +11231425/+11231564
+    if not exited:
+        logError("daemon did not exit within 10s of SIGTERM; restart aborted before kickstart")
+    runLaunchctl("kickstart")
 ```
 
-- Merge offset literal: `1` (Analysis basis: CC v2.1.150 bundle.js:+12526605)
+Analysis basis: CC v2.1.157 bundle.js:+11230880, +11231154
 
 ---
 
-### Socket Cleanup on Exit
+### 11. Send-claim protocol (`DfA` / `IB5`)
+
+When the daemon hub promotes a spare session to active, it opens a Unix socket and sends a claim frame.
 
 ```
-function cleanupSocketOnExit(socketPath):
-    try:
-        filesystem.unlinkSync(socketPath)   // hJK.unlinkSync
-    catch:
-        // ignore ENOENT
+async function sendClaimToSpare(sockPath, claimData):
+    frame = buildClaimFrame(claimData)   // IB5 → cF.buildClaimFrame
+    // frame is a length-prefixed binary envelope (DF):
+    //   4-byte big-endian length (writeUInt32BE)
+    //   1-byte message type (writeUInt8)
+    //   payload bytes (_.copy)
+    socket = net.connect(sockPath)
+    socket.write(frame)
+    await waitForAck(timeout: 2000 ms)   // literal at +15447007
+    // On timeout → emit "daemon_bg_sendclaim_failed"
+    // On ECONNREFUSED → retry / mark spare as failed
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+15239542
+Analysis basis: CC v2.1.157 bundle.js:+15447524
 
 ---
 
-### Permission Panel
+### 12. Memory pressure monitor (`uy8` / `w`)
 
-The hub view exposes a `"permission"` sub-panel for each service entry.
+The background session dispatcher periodically checks free memory.
 
-- Permission panel key: `"permission"` (Analysis basis: CC v2.1.150 bundle.js:+12534759)
+```
+function checkMemoryPressure():
+    freeMB = os.freemem() / 1024   // literal 1024 at +12729109
+    if freeMB < threshold:
+        emit telemetry("tengu_bg_low_mem_mb", { freeMB })
+        emit telemetry("tengu_bg_dispatch_low_mem")
+        pauseSpareRefill()
+    // platform check: "macos" literal at +12729060
+```
+
+The main session-dispatch loop (`w`) also escalates to `SIGKILL` when SIGTERM does not terminate a session within the grace window (literals: 30 s / 15 s at +15466906/+15466917).
+
+Analysis basis: CC v2.1.157 bundle.js:+12729053, +15466951
 
 ---
 
-### Display Padding Utility
+### 13. Hub UI component (`NAA`)
+
+The root JSX component mounts with React hooks and co-ordinates all sub-panels.
 
 ```
-function formatStatusRow(entries):
-    lines = entries.map(entry =>
-        entry.label.padEnd(columnWidth, " ")    // M.padEnd with "  " fill
-    )
-    return lines.join("\n")
+function DaemonHubComponent(props):
+    [tab, setTab] = useState("hub")   // j1.useState
+    clock = useClock()                 // oA → xaq.useContext
+    // "useClock must be used within a ClockProvider" error guard at +3764103
+    inputHandler = useInputHandler()   // RK → fo hooks
+    sessionMap   = useSessionStore()   // J → w (Map of sessions)
+    assistantCtrl = useAssistantCtrl() // Y
+    scheduler     = useScheduler()     // E
+    remoteControl = useRemoteCtrl()    // G → handles "remoteControlAtStartup" key
+
+    render switch(tab):
+        "hub"                 → HubPanel
+        "detail-scheduled"    → ScheduledDetailPanel
+        "detail-assistant"    → AssistantDetailPanel
+        "detail-remoteControl"→ RemoteControlDetailPanel
+        "new"                 → NewSessionPanel (model picker)
 ```
 
-- Padding fill literal: `"  "` (two spaces) (Analysis basis: CC v2.1.150 bundle.js:+15284910)
+The string key `"hub"` appears at literal +12650793; detail-tab names at +12651286/+12651444/+12651565; `"new"` at +12651384.
 
----
-
-### Jitter Delay Helper
-
-```
-function jitteredDelay(baseFactor):
-    // baseFactor = 2
-    jitter = Math.random() * baseFactor   // yields [0, 2)
-    return new Promise(resolve => setTimeout(resolve, jitter))
-```
-
-Analysis basis: CC v2.1.150 bundle.js:+13290155, +13290192, +13290153
+Analysis basis: CC v2.1.157 bundle.js:+12650666
 
 ---
 
@@ -553,22 +383,30 @@ Analysis basis: CC v2.1.150 bundle.js:+13290155, +13290192, +13290153
 
 | Item | Detail |
 |---|---|
-| Telemetry: `tengu_bg_roster_parse_failed` | Fired when the background-process roster file cannot be parsed (Analysis basis: +11144891) |
-| Telemetry: `tengu_daemon_control` | Fired on every lifecycle control action (start/stop/restart/kill) (Analysis basis: +15296981) |
-| Telemetry: `tengu_bg_dispatch_sigkill_escalate` | Fired when a session is force-killed with SIGKILL after grace period expires (Analysis basis: +15260871) |
-| Telemetry: `tengu_bg_dispatch_low_mem` | Fired when free memory drops below 1024 KB and a spawn is deferred (Analysis basis: +15261450) |
-| Telemetry: `tengu_bg_spare_enable` | Fired when a spare session slot is activated (Analysis basis: +15262145) |
-| Telemetry: `tengu_bg_spare_claim` | Fired when a spare session is successfully claimed (Analysis basis: +15262266) |
-| Telemetry: `tengu_bg_spare_claim_fail` | Fired when a spare session claim fails (Analysis basis: +15262529) |
-| Telemetry: `tengu_bg_session_create` | Fired when a new background session process is spawned (Analysis basis: +15261181) |
-| Telemetry: `tengu_daemon_config_reload` | Fired when the supervisor applies a live config reload (Analysis basis: +15275657) |
-| Hook registration | `remoteControlAtStartup` key registered on startup via event handler `G` (Analysis basis: +13469621) |
-| appState changes | View-state field cycles through `"hub"`, `"detail-*"`, and `"new"` values; timestamp recorded via `Date.now` at mount (Analysis basis: +12532557) |
-| Socket cleanup | `unlinkSync` called on socket path at process exit (Analysis basis: +15239542) |
-| Process signals | `process.kill` used for both SIGTERM (graceful) and SIGKILL (forced) scenarios (Analysis basis: +12331691, +12421568, +15260912) |
-| MCP state | `H.applyMcpUpdate` reconciles MCP server connection state; `A.cleanup` run on teardown (Analysis basis: +14980996, +14981125) |
+| Telemetry — `tengu_bg_roster_parse_failed` | Emitted when `roster.json` cannot be parsed (bundle.js:+11238539) |
+| Telemetry — `tengu_config_parse_error` | Emitted on general config JSON parse failure (bundle.js:+3210553) |
+| Telemetry — `tengu_feature_ok` / `tengu_feature_bad` / `tengu_feature_sad` | Feature-gate probes (bundle.js:+966033/+966091/+966168) |
+| Telemetry — `tengu_daemon_control` | Emitted on daemon start/stop control actions (bundle.js:+15502788) |
+| Telemetry — `tengu_bg_dispatch_sigkill_escalate` | SIGTERM → SIGKILL escalation event (bundle.js:+15466951) |
+| Telemetry — `tengu_bg_low_mem_mb` | Low free-memory reading (bundle.js:+12729087) |
+| Telemetry — `tengu_bg_dispatch_low_mem` | Dispatch paused due to memory pressure (bundle.js:+15467530) |
+| Telemetry — `tengu_bg_spare_enable` | Spare-session pool re-enabled (bundle.js:+15468225) |
+| Telemetry — `tengu_bg_sendclaim_failed` | Claim frame delivery timeout (bundle.js:+15447680) |
+| Telemetry — `tengu_daemon_config_reload` | Config reloaded at runtime (bundle.js:+15481439) |
+| Telemetry — `tengu_bg_spare_claim` | Spare session successfully claimed (bundle.js:+15468346) |
+| Telemetry — `tengu_bg_spare_spawn` | New spare session spawned (bundle.js:+15466644) |
+| Telemetry — `tengu_bg_spare_claim_fail` | Spare claim failed (bundle.js:+15468609) |
+| Telemetry — `tengu_bg_session_create` | Background session created (bundle.js:+15467261) |
+| Telemetry — `daemon_bg_spare_refill` | Spare pool refill triggered (bundle.js:+15445881) |
+| File reads | `daemon.json`, `daemon.status.json`, `daemon.scheduled.status.json`, `roster.json`, `gateway-models.json`, `pins.json` |
+| File writes / deletes | Socket directory creation, agent plist, unlink on stop |
+| Process signals | `SIGTERM` then `SIGKILL` for stop; `process.kill(pid, sig)` |
+| launchd interaction | `launchctl print`, `launchctl kickstart`, `launchctl bootout` (macOS only) |
+| Subprocess spawn | `Bun.spawn([..., "--bg-pty-host", "200", "50", "--", "--bg-spare"])` |
+| appState changes | `remoteControlAtStartup` flag, session map (get/set/delete), config reload |
 | Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Spawn side effect | `bB.spawn` creates a new child process for background session (Analysis basis: +15262588) |
+| Hook registration | `_OA.register` (via `K9` / log-sink registration path) |
+| Unix socket | `net.connect(sockPath)` for send-claim; `z.write` for supervisor pipe |
 
 ---
 
@@ -576,23 +414,18 @@ Analysis basis: CC v2.1.150 bundle.js:+13290155, +13290192, +13290153
 
 | Version | Change |
 |---|---|
-| v2.1.150 | Initial analysis. Command registered as `local-jsx`, `immediate: true`, module `qt_`. Covers assistants, scheduled tasks, remote control, MCP management, macOS launchctl integration, and background session dispatcher. |
+| v2.1.157 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Invoking `/daemon` outside a project context**: The socket-resolution step looks for paths relative to `os.homedir()`; if the home directory is unavailable or the config directory does not exist, all socket lookups silently return `null` and no services will be listed.
-
-2. **Expecting `uninstall` to work on non-macOS platforms**: The `uninstall` subcommand is guarded by a `"darwin"` platform check. On Linux or Windows the call throws `"service uninstall not available on darwin"` — this error message is misleading on non-darwin hosts; it indicates the feature is darwin-only, not that it failed on darwin.
-
-3. **Restarting when SIGTERM is slow**: The restart path polls for exit over 50 cycles at 200 ms each (~10 s total). If the daemon process does not exit within that window, the restart is aborted before `kickstart` is called, leaving the service neither fully stopped nor restarted. Monitor the log for the abort message and retry manually.
-
-4. **Assuming spare sessions are always available**: The spare-session claim path can fail (`tengu_bg_spare_claim_fail`). Callers must handle the failure branch; the dispatcher will not automatically fall back to a fresh spawn in the same tick.
-
-5. **Assuming MCP connections are synchronous**: All MCP server connections are resolved via `Promise.all` and individual entries may land in `"needs-auth"` or `"failed"` state without blocking the rest of the UI render. Check per-entry status rather than assuming global readiness.
-
-6. **Ignoring memory pressure**: When `os.freemem()` falls below 1024 KB, spawns are deferred and `tengu_bg_dispatch_low_mem` is emitted. If the system is memory-constrained, background sessions will not start until pressure is relieved.
+1. **Expecting a text response**: `/daemon` is `local-jsx` with `immediate: true` — it renders an interactive TUI immediately and never sends a prompt to the model. Scripting tools that wait for text output will hang.
+2. **Platform assumptions**: Remote-control install/uninstall via `launchctl` is macOS-only. On other platforms the command shows a warning (`"service uninstall not available on darwin"`).
+3. **Killing the daemon from outside**: The daemon uses a two-stage termination (SIGTERM → SIGKILL with a 10-second grace window). Sending SIGKILL directly skips teardown and may leave stale socket files.
+4. **Stale `daemon.status.json`**: The UI reads the status file at mount time; it does not hot-reload. Re-open `/daemon` to get current state after external changes.
+5. **Spare-session pool confusion**: Sessions in `"spare"` state are pre-warmed processes and are listed in the roster. They are not idle user sessions — do not stop them manually unless you want to shrink the warm pool.
+6. **Memory-pressure throttling**: On macOS with < 1 024 MB free RAM the spare-refill logic is suppressed; the UI may show fewer available sessions than expected without any visible error.
 
 ---
 
@@ -602,61 +435,146 @@ Analysis basis: CC v2.1.150 bundle.js:+13290155, +13290192, +13290153
 
 | Identifier | Role |
 |---|---|
-| `F15` | Top-level daemon command entry function |
-| `_t_` | Background roster loader / orchestrator |
-| `HXH` | Roster list helper (depth-2 leaf) |
-| `Bc1` | Session list aggregator |
-| `Rc1` | PID file resolver |
-| `T0` | Process lifecycle controller (kill/signal dispatch) |
-| `AQ1` | Assistant entry loader |
-| `yd1` | Scheduled task file reader |
-| `jB` | Roster file parser (JSON + schema validation) |
-| `kc` | Service index builder |
-| `es_` | Socket directory resolver |
-| `j_` | Config directory path helper |
-| `Vm6` | Config value accessor |
-| `j8` | Logging utility (structured log emitter) |
-| `N` | Log-level router (debug/error/etc.) |
-| `EH` | Error-to-string converter |
-| `K` | Display row formatter / map utility |
-| `L` | Async task tracker (add/delete/finally) |
-| `M` | Server/connection handle (close/padEnd) |
-| `H` | Jitter delay helper (Math.random + setTimeout) |
-| `_` | General collection utility |
-| `f` | JSX render host (render / unmount) |
-| `UyH` | MCP server connection manager |
-| `gDK` | MCP update reconciler (applyMcpUpdate / cleanup) |
-| `$` | Hub-state accessor (HQ1 delegate) |
-| `lv5` | MCP entry filter and connection dispatcher |
-| `nc1` | Scheduled-task config loader (wraps YeH) |
-| `YeH` | Scheduled-task model/config resolver |
-| `C15` | Parallel init coordinator (Promise.all over _t_, es_, nc1) |
-| `At_` | React component: daemon UI root |
-| `R9` | Clock context consumer (useContext) |
-| `XK` | External-store subscription hook |
-| `q` | Socket cleanup handle (unlinkSync) |
-| `z` | Daemon stop helper (bH/uH/Rk/pu) |
-| `O` | App-state reader (k8 delegate) |
-| `k8` | App-state store accessor |
-| `T` | HE6/wh8 composite utility |
-| `HE6` | Shared event/hook emitter |
-| `wh8` | Shared watch/state hook |
-| `J` | Process killer wrapper (delegates to w) |
-| `w` | Background session dispatcher (spawn, SIGKILL, memory check) |
-| `P` | MCP connection failure handler |
-| `RH` | Error reporter / log aggregator |
-| `c_` | Error normaliser (Error/String coercion) |
-| `VeH` | macOS launchctl service controller |
-| `ec_` | LaunchAgents path resolver |
-| `E8` | launchctl exec wrapper |
-| `uG8` | launchctl output parser ($E1 delegate) |
-| `ZZ6` | Restart orchestrator (wraps Hl_) |
-| `Hl_` | Restart poll loop (uG8/E8/setTimeout) |
-| `Y` | Supervisor config-reload loop handler |
-| `tXH` | Supervisor session resolver (A1/K8/ts_/EH/Nq) |
-| `Ic1` | Column-width calculator (Object.keys / Math.max / wz) |
-| `G` | Remote-control startup event handler |
-| `Z` | Scheduler handle (stop / updateConfig / start) |
-| `_XK` | Heartbeat registration helper (Je delegate) |
-| `V` | View-state push target |
-| `c` | Generic cleanup / finaliser |
+| `yY5` | Arbor-resolved main async handler for `/daemon` (entry point) |
+| `mY5` | Alternate top-level render entry seen in callGraph (BFS root) |
+| `NAA` | Root daemon hub JSX component (mounts tab state, hooks) |
+| `vAA` | Daemon status aggregator (fan-out to all status readers) |
+| `de1` | Scheduled-task config reader (parallel fetch) |
+| `r_6` | Scheduled-task entry file iterator |
+| `h_A` | Individual task-file loader (readFile + JSON.parse) |
+| `AAA` | Array.isArray validator for task lists |
+| `SH` | Service status query helper / error logger |
+| `nW` | PID-file reader and process-kill dispatcher |
+| `mN6` | PID file JSON parser |
+| `aa_` | Process-metadata extractor (reads proc/ps output) |
+| `RP` | Result notification / error reporter |
+| `me1` | Assistant session status reader |
+| `u2H` | Session directory resolver (ENOENT-safe) |
+| `s9` | AsyncLocalStorage store getter |
+| `TAA` | Session aggregator helper |
+| `EH` | String error coercion helper |
+| `K` | Session display formatter (padEnd columns) |
+| `FC` | `daemon.json` reader (joins path via `sa_`) |
+| `Ms1` | `daemon.status.json` reader + stop handler |
+| `uI6` | Status file path builder (`Ks1.join` + `F8`) |
+| `bt1` | `daemon.scheduled.status.json` reader + stop handler |
+| `Ct1` | Scheduled status file path builder |
+| `TF` | Roster file (`roster.json`) parser and validator |
+| `Ms_` | Timestamp normaliser using `Date.now` |
+| `NtL` | Roster entry structure validator |
+| `ffH` | Roster file path builder |
+| `RRH` | Roster directory path builder |
+| `vh1` | Roster file atomic rename helper |
+| `sl` | launchd service query dispatcher |
+| `v8` | launchctl command runner |
+| `G_` | launchctl stdout parser |
+| `Dv8` | launchd service detail fetcher |
+| `jh1` | UID lookup via `process.getuid` |
+| `ZAA` | Assistant directory resolver (stat + homedir) |
+| `$F6` | Path stat helper with error handling |
+| `oe1` | Session overview builder (mounts `q86`) |
+| `q86` | Session list component (model picker + session table) |
+| `WrL` | Model-picker component (renders all model tiers) |
+| `WA` | Model entry base component |
+| `AHH` | "max" plan model entry |
+| `FOH` | "team" / "default_claude_max_5x" model entry |
+| `MFH` | "enterprise" / "enterprise_usage_based" model entry |
+| `bV8` | Default-model entry with description |
+| `IP` | First-party model entry |
+| `Da` | Gateway-model entry |
+| `Ka_` | Model sub-action handler |
+| `vk1` | Opus (1M context) model entry |
+| `XLH` | Gateway model detail entry |
+| `Vk1` | Opus model entry |
+| `yk1` | Opus 4.8 (1M) model entry |
+| `Ik1` | Opus base model entry |
+| `Gk1` | Model-group header component |
+| `Zk1` | Sonnet (1M) model entry |
+| `Pk1` | Sonnet model-group |
+| `Wk1` | Sonnet model entry |
+| `Tk1` | Sonnet (1M) variant entry |
+| `Ek1` | Haiku model-group |
+| `kk1` | Haiku model entry |
+| `$rL` | Opus Plan mode entry |
+| `YrL` | Opus 4.7 (1M) entry |
+| `Jk1` | Gateway model list loader |
+| `Dk1` | Gateway model entry renderer |
+| `jk1` | Gateway-models.json path builder |
+| `GrL` | Model-picker interaction handler |
+| `sw` | Model case-insensitive match helper |
+| `f9` | Model type filter (inference-profile check) |
+| `pN` | Model picker "no results" panel |
+| `LFH` | Model picker footer component |
+| `GfA` | Background session lifecycle manager (spawn, claim, state transitions) |
+| `YfA` | Spare-session subprocess spawner (`Bun.spawn`) |
+| `DfA` | Send-claim protocol handler |
+| `IB5` | Claim frame builder |
+| `DF` | Binary frame encoder (UInt32BE length prefix) |
+| `a9A` | Session metadata writer (mkdir + writeFile) |
+| `yB5` | Claim timeout / retry handler |
+| `t9` | Session roster entry manager |
+| `G86` | Scheduled-task runner (TF + timestamp) |
+| `MfH` | Daemon socket path builder |
+| `QT` | Roster entry socket-path resolver |
+| `GF` | Session folder path builder |
+| `gN6` | Session directory creator |
+| `Y` | Assistant manager (start/stop/updateConfig) |
+| `D` | Session dispatch loop (memory check, SIGKILL escalation) |
+| `w` | Session map manager (get/set/kill/freemem) |
+| `S` | Session supervisor entry (realpath + stat + SH + write) |
+| `dVK` | Session realpath resolver |
+| `HF5` | Supervisor notification writer |
+| `uy8` | macOS memory-pressure reader |
+| `G6` | Background session state machine |
+| `Lw6` | Pins file reader (`pins.json`) |
+| `XP_` | Pins file path builder |
+| `sX7` | Plugin directory scanner |
+| `B` | MCP-tool permission filter |
+| `VH` | Plugin manifest reader (`.claude-plugin` / `marketplace.json`) |
+| `dH` | Orphaned-permission tracker |
+| `J86` | Remote-control agent uninstall handler |
+| `Hs_` | LaunchAgents directory path builder |
+| `FN6` | Remote-control agent restart handler |
+| `_s_` | Remote-control agent start/kickstart helper |
+| `E` | Scheduled-task controller (start/stop/updateConfig) |
+| `G` | Remote-control key-press handler (`remoteControlAtStartup`) |
+| `h0` | Settings key handler |
+| `U_` | Settings loader (policy/flag/user/project/local layers) |
+| `ZO` | Settings composite reader |
+| `Ga8` | Per-layer settings merger |
+| `$Q` | Settings layer dispatcher |
+| `wP` | Settings helper (Ni) |
+| `iGH` | Settings cache invalidator |
+| `yL6` | Atomic settings file writer |
+| `vz` | Cache clear helper |
+| `bF6` | Git-aware settings tracker |
+| `cb` | `.claude/settings.json` path builder |
+| `Cp` | Settings change applicator |
+| `O_` | React ink element renderer / permission-prompt renderer |
+| `AN` | Ink element creator |
+| `P` | MCP connection manager (stdio/sse/http/dynamic) |
+| `J` | Foreground session map wrapper |
+| `z` | Input / key-event router |
+| `hH` | "daemon_stop" event emitter |
+| `bH` | "daemon_stop_failed" event emitter |
+| `hy` | Daemon shutdown sequencer |
+| `Zx` | Shutdown signal receiver |
+| `FEH` | Shutdown notification formatter |
+| `xz_` | UUID-keyed shutdown event emitter |
+| `Fm` | Process exit orchestrator (`Promise.race` + `process.exit`) |
+| `Md` | MCP server shutdown invoker |
+| `Yd` | Timeout clear on exit |
+| `g8` | Abort-signal timeout controller |
+| `O` | Background session store accessor |
+| `k8` | Session store implementation |
+| `T` | Terminal/display abstraction |
+| `M` | Ink render controller (`render` / `unmount`) |
+| `cS6` | Plugin name resolver / path validator |
+| `lS6` | Plugin synced-directory path builder |
+| `RK` | Key-repeat / input hook (`fo.useRef`, `fo.useMemo`, `fo.useSyncExternalStore`) |
+| `oA` | Clock context consumer |
+| `V` | Panel / view stack controller |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

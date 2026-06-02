@@ -1,12 +1,12 @@
 ---
 type: feature-spec
 feature: "branch"
-cc_version: 2.1.157
+cc_version: "2.1.157"
+updated: "2026-06-02"
 tags: ["branch", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-inherited_from: 2.1.150
-analysis_basis: "CC v2.1.150 bundle.js (AST extraction + Claude interpretation)"
+analysis_basis: "CC v2.1.157 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -14,14 +14,14 @@ license: "AGPL-3.0-only"
 
 # `/branch`
 
-> Analysis basis: CC v2.1.150 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.150
+> Analysis basis: CC v2.1.157 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.157
 
 ---
 
 ## Overview
 
-The `/branch` command (also aliased as `/fork`) creates a new, independent conversation session that is a copy of the current conversation up to the point at which the command is invoked. It serializes the current conversation's messages into a new session file and then opens that new session, allowing the user to explore an alternative path without modifying the original conversation. The default title assigned to the new branch is `"Branched conversation"`.
+`/branch` (aliased as `/fork`) creates a divergent copy of the current conversation at the point it is invoked. The command reads the existing message history up to the current turn, writes it into a new conversation file with a fresh UUID, and then opens that new session — leaving the original conversation intact. An optional name argument lets the user label the branch.
 
 ---
 
@@ -31,203 +31,213 @@ The `/branch` command (also aliased as `/fork`) creates a new, independent conve
 |---|---|
 | type | `local-jsx` |
 | name | `branch` |
-| description | Create a branch of the current conversation at this point |
-| argumentHint | `[name]` |
+| description | `Create a branch of the current conversation at this point` |
 | aliases | `["fork"]` |
-| module_id | `Md_` |
+| argumentHint | `[name]` |
+| module_id | `fo_` |
+| load_inline | `true` |
+| loc_byte | `12203684` |
+| loc_byte_end | `12203878` |
+| loc_line | `8114` |
+| arbor_handler.name | `rlL` |
+| arbor_handler.fqn | `claude-2.1.157::rlL` |
+| arbor_handler.kind | `AsyncFunction` |
+| arbor_handler.resolution_path | `module_id` |
+| arbor_handler.n_hits | `0` |
 
-Analysis basis: CC v2.1.150 bundle.js:+12099775
+Analysis basis: CC v2.1.157 bundle.js:+12203684
 
 ---
 
 ## Input Branching
 
-The command handler performs several validation steps before creating the branch. The flowchart below captures the main decision paths.
+The command has four distinct outcomes depending on conversation state and the presence of messages, so a Mermaid flowchart is used.
 
 ```mermaid
 flowchart TD
-    A([User invokes /branch or /fork]) --> B{Active conversation\nexists?}
-    B -- No --> C[Emit error:\n'No conversation to branch'\nbundle.js:+10615194]
-    B -- Yes --> D{Conversation has\nat least one message?}
-    D -- No --> E[Emit error:\n'No messages to branch'\nbundle.js:+10616215]
-    D -- Yes --> F[Determine branch name:\nargument supplied or\ndefault 'Branched conversation'\nbundle.js:+10614747]
-    F --> G[Sanitize name via\nlowercase + replace\nbundle.js:+10614877]
-    G --> H[Generate new UUID\nfor branch session\nbundle.js:+10614986]
-    H --> I[Create session directory\nvia mkdir\nbundle.js:+10615048]
-    I --> J[Serialize messages to\nnew session file via\ncreateWriteStream\nbundle.js:+10615243]
-    J --> K{Write stream\ndrains successfully?}
-    K -- No / Error --> L[Destroy stream,\nunlink file,\nlog error\nbundle.js:+10615439 / +10615457]
-    K -- Yes --> M[Finalize stream,\nawait finish\nbundle.js:+10616611]
-    M --> N[Register new session\nin session store\nbundle.js:+10615799]
-    N --> O[Close current session\nbundle.js:+10615851]
-    O --> P[Open branched session\nbundle.js:+10616111]
-    P --> Q[Emit telemetry:\ntengu_conversation_forked\nbundle.js:+10617444]
-    Q --> R([Branch session active])
+    A(["/branch [name] invoked"]) --> B{Active conversation\nexists?}
+    B -- No --> C["Return error:\n'No conversation to branch'"]
+    B -- Yes --> D{Message history\nnon-empty?}
+    D -- No --> E["Return error:\n'No messages to branch'"]
+    D -- Yes --> F["Resolve branch name:\nargument supplied?"]
+    F -- "name arg present" --> G["Sanitize & use\nsupplied name"]
+    F -- "no arg" --> H["Default title:\n'Branched conversation'"]
+    G --> I["Generate new UUID\nfor branch session"]
+    H --> I
+    I --> J["Determine storage path\nvia yv / AM helpers"]
+    J --> K["Create directory\n(MV8.mkdir)"]
+    K --> L["Copy history stream:\ncreatReadStream → createWriteStream\n(max ~448-byte chunks, utf8)"]
+    L --> M["Write branch metadata\n(title, timestamps, content-replacement marker)"]
+    M --> N["Register new session\nin roster (rosterEntry)"]
+    N --> O["Open / switch to\nbranched session"]
+    O --> P["Emit telemetry:\ntengu_conversation_forked"]
+    P --> Q([Done])
+    C --> R([Error shown to user])
+    E --> R
 ```
 
 ---
 
 ## Behavioral Spec
 
-### 1. Name Resolution
+### Entry-Point Handler (`rlL`)
 
-When the user supplies an optional `[name]` argument, the raw argument string is used as the branch title; otherwise the default title `"Branched conversation"` is substituted.
-
-Analysis basis: CC v2.1.150 bundle.js:+10614747
+The Arbor-resolved handler is the async function `rlL` (FQN `claude-2.1.157::rlL`), reached via `module_id` resolution on `fo_`.
 
 ```
-function resolveBranchName(rawArgument):
-    if rawArgument is non-empty:
-        title = rawArgument
-    else:
-        title = "Branched conversation"
-    sanitized = sanitizeName(title)
-    return sanitized
+async function branchCommandHandler(args, appContext):
+    # --- guard: active conversation required ---
+    conversation = findActiveConversation(appContext)   # eV1 / _.find
+    if conversation is null:
+        return displayError("No conversation to branch")   # literal @ +10705452
+
+    # --- guard: non-empty history required ---
+    messages = getMessagesUpToCurrentPoint(conversation)
+    if messages is empty:
+        return displayError("No messages to branch")       # literal @ +10706473
+
+    # --- resolve branch title ---
+    rawName = args.trim() if args else null
+    sanitizedName = sanitizeName(rawName)                  # A.replace @ +10705135
+    title = sanitizedName if sanitizedName else "Branched conversation"  # literal @ +10705005
+
+    # --- create new session identity ---
+    newSessionId = crypto.randomUUID()                     # aV1.randomUUID @ +10705244
+    newPath = resolveSessionStoragePath(newSessionId)      # yv, AM helpers
+
+    # --- persist branch ---
+    mkdir(newPath, recursive=true)                         # MV8.mkdir @ +10705306
+    readStream = fs.createReadStream(sourceFile, {         # fV8.createReadStream @ +10705355
+        encoding: "utf8",                                  # literal @ +10705388
+        highWaterMark: 448                                 # literal @ +10705337 (bytes)
+    })
+    writeStream = fs.createWriteStream(destFile)           # fV8.createWriteStream @ +10705501
+    copyStreamWithProgressCallback(readStream, writeStream,
+        onData: markProgress("content-replacement"))       # literal @ +10705932
+
+    waitForStreamFinish(writeStream)                       # tV1.finished @ +10706883
+
+    # --- metadata / roster ---
+    writeBranchMetadata(newSessionId, title, messageType="text")  # literal @ +10705078
+    registerInRoster(newSessionId, title)                  # _.rosterEntry @ +15473457
+
+    # --- switch to branch ---
+    openSession(newSessionId, mode="fork")                 # literal "fork" @ +10708223
+    waitForOpen("open")                                    # literal @ +10705414
+
+    # --- telemetry ---
+    emit("tengu_conversation_forked")                      # @ +10707702
+
+    return success
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+10614747, +10614877
+Analysis basis: CC v2.1.157 bundle.js:+10708487 (rlL → _v1 call chain)
 
-### 2. Name Sanitization
+---
 
-The resolved title is normalized by converting it to lowercase and applying a regular-expression replacement to produce a filesystem-safe identifier.
-
-Analysis basis: CC v2.1.150 bundle.js:+10614877, +15286807
+### Pre-flight Validation (`_v1` / `eV1`)
 
 ```
-function sanitizeName(title):
-    lower = title.toLowerCase()
-    safe  = lower.replace(UNSAFE_CHARS_PATTERN, REPLACEMENT)
-    return safe
+function validateBranchPreconditions(conversation, args):
+    # Check conversation slot
+    found = _.find(conversations, matchCurrent)   # _.find @ +10705057
+    if not found:
+        return { ok: false, reason: "No conversation to branch" }
+
+    # Sanitize optional name argument (< 100 chars enforced downstream)
+    cleanName = args.replace(forbiddenChars, "")  # A.replace @ +10705135
+
+    # Confirm messages exist
+    if messageCount == 0:
+        return { ok: false, reason: "No messages to branch" }
+
+    return { ok: true, title: cleanName or defaultTitle }
 ```
 
-The truncation threshold observed in the call vicinity is **40** characters.
-Analysis basis: CC v2.1.150 bundle.js:+15286881
+Analysis basis: CC v2.1.157 bundle.js:+10707565 (`_v1` → `eV1`)
 
-### 3. Session File Serialization
+---
 
-A unique session identifier is generated with `crypto.randomUUID()`. The target directory is created if it does not exist. Messages from the current conversation are written into the new session file through a writable stream. Each message is encoded as UTF-8 JSON, one record per line (NDJSON-style), using a buffer size of **448** bytes per chunk.
+### Stream Copy Sub-routine (`Hv1`)
 
-Analysis basis: CC v2.1.150 bundle.js:+10614986, +10615048, +10615079, +10615130, +10615243
+`Hv1` is the internal async helper that performs the physical file duplication.
 
 ```
-function createBranchSessionFile(messages, branchName):
-    sessionId  = crypto.randomUUID()
-    targetDir  = buildSessionPath(sessionId)
-    mkdir(targetDir, recursive = true)
+async function copyConversationFile(srcPath, destPath, options):
+    readStream  = fs.createReadStream(srcPath, encoding="utf8", highWaterMark=448)
+    writeStream = fs.createWriteStream(destPath)
 
-    writeStream = createWriteStream(targetDir + "/messages.jsonl", encoding = "utf8")
+    # Wire "drain" event for back-pressure        # literal "drain" @ +10705812
+    readStream.once("open", ...)                  # literal "open" @ +10705414
 
-    for message in messages:
-        chunk = JSON.stringify(message) + "\n"
+    # Pipe with content-replacement header        # literal @ +10705932
+    on("data", chunk):
+        progress.push(chunk)                      # j.push @ +10705972
         writeStream.write(chunk)
 
-    writeStream.end()
-    await streamFinished(writeStream)
+    on("error", err):
+        if err.code == "ENOENT":                  # literal @ +174141
+            throw new Error("No conversation to branch")
+        propagate(err, formatError)               # F_ @ +10705581
 
-    return sessionId
+    await streamFinished(writeStream)             # tV1.finished @ +10706883
+    writeStream.end()                             # O.end @ +10706869
 ```
 
-Analysis basis: CC v2.1.150 bundle.js:+10615048, +10615097, +10615130, +10615243, +10616611
+Maximum chunk size: **448 bytes** (bundle.js:+10705337)
 
-### 4. Message Filtering by Type
+Analysis basis: CC v2.1.157 bundle.js:+10707506
 
-Only messages whose `type` field equals `"text"` are included in the branch payload at the point of serialization.
+---
 
-Analysis basis: CC v2.1.150 bundle.js:+10614820
-
-```
-function filterMessages(allMessages):
-    return allMessages.filter(m => m.type === "text")
-```
-
-### 5. Content-Replacement Handling
-
-During serialization the command applies a `"content-replacement"` pass over the message array before writing, normalizing any assistant-side content edits before they are frozen into the branch.
-
-Analysis basis: CC v2.1.150 bundle.js:+10615674
+### Session Path Resolution (`yv` / `AM`)
 
 ```
-function applyContentReplacement(messages):
-    for message in messages:
-        if message has pending content-replacement:
-            apply replacement inline
-    return messages
+function resolveSessionPath(sessionId):
+    base    = getConfigDir()           # k6 @ +12877403
+    variant = getOSPathVariant()       # MI @ +12877415
+    parts   = [base, variant, sessionId]
+    return path.join(...parts)         # yD.join @ +12877448
 ```
 
-### 6. Progress Reporting
+Analysis basis: CC v2.1.157 bundle.js:+10705281 (Hv1 → yv)
 
-While the write is in progress a `"progress"` status update is emitted to the UI layer so the user receives visual feedback during potentially long serialization of large conversations.
+---
 
-Analysis basis: CC v2.1.150 bundle.js:+10616133
-
-```
-function emitProgress(statusEmitter):
-    statusEmitter.emit("progress", { stage: "branch-write" })
-```
-
-### 7. Error Handling
-
-Two named error conditions are recognized:
-
-| Condition | Message | Source |
-|---|---|---|
-| No active conversation | `"No conversation to branch"` | bundle.js:+10615194 |
-| Conversation has zero messages | `"No messages to branch"` | bundle.js:+10616215 |
-| Generic fallback | `"Unknown error occurred"` | bundle.js:+10618113 |
-| File not found during read | `ENOENT` guard | bundle.js:+173271 |
-
-On a write-stream error the stream is destroyed and the partially written session file is deleted via `unlink` before the error is surfaced to the user.
-
-Analysis basis: CC v2.1.150 bundle.js:+10615439, +10615457, +10615188, +10616215, +10618113
+### Name Deduplication / Roster Registration (`ilL` / `ll`)
 
 ```
-function handleWriteError(writeStream, targetFilePath, error):
-    writeStream.destroy()
-    unlink(targetFilePath)
-    throw error
+function registerBranch(sessionId, title, existingSessions):
+    # Deduplicate title suffix
+    seen = new Set()
+    for each existing in existingSessions:
+        index = parseInt(extractSuffix(existing.title))  # ilL @ +10707075
+        seen.add(index)
+
+    suffix = nextAvailableIndex(seen)   # K.has / K.add @ +10707270-10707323
+    finalTitle = suffix ? title + " " + suffix : title
+
+    roster.add({ id: sessionId, title: finalTitle })
+    return finalTitle
 ```
 
-### 8. Session Registration and Transition
+Analysis basis: CC v2.1.157 bundle.js:+10707638
 
-After the file is successfully written, the new session is registered in the in-memory session map (`w.set`). The current session's UI components are torn down (`Y.close`, `$.destroy`), and the new branch session is opened. The session store is then updated to track the branch as the active session.
+---
 
-Analysis basis: CC v2.1.150 bundle.js:+10615799, +10615851, +10615861, +10616111
-
-```
-function transitionToNewBranch(sessionStore, currentSession, newSessionId):
-    sessionStore.set(newSessionId, newBranchDescriptor)
-    currentSession.close()
-    currentSession.destroy()
-    openSession(newSessionId)
-```
-
-### 9. Title Metadata Handling
-
-The title type recorded in the new session metadata is `"auto"` when no explicit name is provided by the user, and `"custom-title"` when the user supplies a name argument.
-
-Analysis basis: CC v2.1.150 bundle.js:+10617398, +12783269
+### Conversation Title Writer (`th` / `s5H`)
 
 ```
-function buildTitleMetadata(userSuppliedName):
-    if userSuppliedName is non-empty:
-        return { titleType: "custom-title", title: userSuppliedName }
-    else:
-        return { titleType: "auto", title: "Branched conversation" }
+function writeTitleMetadata(sessionPath, title, mode):
+    if mode == "custom-title":          # literal @ +12906486
+        appendToLog(sessionPath, encodeTitle(title))
+        emit("tengu_session_renamed")   # @ +12906578
+    elif mode == "agent-name":          # literal @ +12909509
+        appendToLog(sessionPath, encodeAgentName(title))
+        emit("tengu_agent_name_set")    # @ +12909607
 ```
 
-### 10. Fork Telemetry Emission
-
-Immediately after the new session is opened, a `tengu_conversation_forked` telemetry event is emitted. The event is tagged with `"fork"` as the action kind.
-
-Analysis basis: CC v2.1.150 bundle.js:+10617444, +10617965
-
-```
-function emitForkTelemetry(telemetryClient, sessionId):
-    telemetryClient.emit("tengu_conversation_forked", {
-        action : "fork",
-        sessionId: sessionId
-    })
-```
+Analysis basis: CC v2.1.157 bundle.js:+10707669 (th), +10707687 (s5H)
 
 ---
 
@@ -235,14 +245,15 @@ function emitForkTelemetry(telemetryClient, sessionId):
 
 | Item | Detail |
 |---|---|
-| Telemetry — primary | `tengu_conversation_forked` (bundle.js:+10617444) |
-| Telemetry — background daemon (indirect) | `tengu_bg_dispatch_sigkill_escalate`, `tengu_bg_dispatch_low_mem`, `tengu_bg_spare_enable`, `tengu_bg_spare_claim`, `tengu_bg_spare_claim_fail`, `tengu_daemon_yield`, `tengu_bg_low_mem_mb`, `tengu_bg_spare_spawn`, `tengu_daemon_config_reload`, `tengu_daemon_control`, `tengu_bg_proto_mismatch`, `tengu_bg_dispatch_stale_drop`, `tengu_bg_attach_legacy_autorespawn`, `tengu_bg_attach`, `tengu_bg_attach_stall_gave_up`, `tengu_bg_attach_stall_respawn`, `tengu_bg_attach_kick`, `tengu_session_renamed`, `tengu_agent_name_set` |
-| Session file created | New NDJSON session file written under the CC sessions directory |
-| Session directory created | `mkdir` called recursively for the new session path (bundle.js:+10615048) |
-| appState changes | Active session pointer switched from source session to new branch session; source session closed and destroyed |
-| Session store mutation | `sessionStore.set(newSessionId, descriptor)` called (bundle.js:+10615799) |
-| Write stream lifecycle | Created → written → ended → finished; on error: destroyed + file unlinked |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | `tengu_conversation_forked` (+10707702) — emitted on every successful branch |
+| Telemetry (indirect) | `tengu_session_renamed` (+12906578), `tengu_agent_name_set` (+12909607) — emitted if title or agent name is set during branch setup |
+| Telemetry (background infra) | `tengu_bg_spare_claim`, `tengu_bg_spare_spawn`, `tengu_bg_sendclaim_failed`, `tengu_bg_dispatch_sigkill_escalate`, `tengu_bg_dispatch_low_mem`, `tengu_bg_spare_enable`, `tengu_bg_spare_claim_fail`, `tengu_daemon_control`, `tengu_daemon_yield`, `tengu_daemon_idle_exit`, `tengu_bg_attach`, `tengu_bg_attach_kick`, `tengu_bg_attach_stall_ms`, `tengu_bg_attach_stall_gave_up`, `tengu_bg_attach_stall_respawn`, `tengu_bg_attach_legacy_autorespawn`, `tengu_bg_proto_mismatch`, `tengu_bg_dispatch_stale_drop`, `tengu_daemon_config_reload`, `tengu_amber_anchor`, `tengu_bg_low_mem_mb`, `tengu_feature_ok`, `tengu_feature_bad`, `tengu_worktree_detection` — reached via background-session infrastructure used when switching to the new branch |
+| Filesystem writes | New session directory created (`MV8.mkdir` @ +10705306); conversation file copied via read/write streams |
+| Roster mutation | `_.rosterEntry` (@ +15473457) adds the new session; `Y.delete` (@ +15473702) / `H.delete` (@ +15473757) remove stale roster entries |
+| appState changes | Active session pointer switches to newly created branch session after open |
+| Hook registration | `Lo_.once` (@ +10705403) used on stream-open; `O.on` (@ +10705560) for data events |
+| Sound | None detected in depth-2 traversal |
+| Error strings surfaced | `"No conversation to branch"` (+10705452), `"No messages to branch"` (+10706473), `"Unknown error occurred"` (+10708371) |
 
 ---
 
@@ -250,23 +261,18 @@ function emitForkTelemetry(telemetryClient, sessionId):
 
 | Version | Change |
 |---|---|
-| v2.1.150 | Initial analysis |
+| v2.1.157 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Invoking `/branch` with no active conversation.** If no conversation session is loaded, the command immediately exits with `"No conversation to branch"` and does nothing. Start a conversation first.
-
-2. **Invoking `/branch` on an empty conversation.** If the conversation has been started but contains zero messages (e.g., the user typed `/branch` as their very first input), the command exits with `"No messages to branch"`. At least one exchange must exist.
-
-3. **Assuming the original conversation is modified.** The branch is a snapshot copy; the source conversation remains open and unmodified in a separate session. The UI switches to the new branch, but the source is still accessible via session history.
-
-4. **Expecting the branch name to be case-preserving.** The supplied name argument is lowercased and sanitized before being used as a filesystem identifier. Display titles may be rendered differently from the sanitized form.
-
-5. **Using `/branch` inside a non-interactive or piped invocation.** The command is registered as `local-jsx`, meaning it requires an interactive terminal session. It will not function correctly when Claude Code is driven programmatically without a TTY.
-
-6. **Confusing `/branch` with `/fork`.** Both aliases are fully equivalent; `"fork"` is simply a registered alias for the same command handler. There is no behavioral difference.
+1. **Invoking `/branch` with no active conversation** — the command guards against this and returns `"No conversation to branch"` immediately; ensure a conversation is open before branching.
+2. **Expecting the original conversation to be modified** — `/branch` copies history at the current point; the source session remains unchanged. All subsequent edits happen in the new branch.
+3. **Using `/fork` and expecting different behavior** — `/fork` is a registered alias; it is functionally identical to `/branch`.
+4. **Providing a name with special characters** — the name argument is sanitized via `A.replace` (@ +10705135) before use; characters outside the allowed set are stripped silently.
+5. **Branching an empty conversation** — the command checks for at least one message and rejects the operation with `"No messages to branch"` if the history is empty.
+6. **Assuming instant availability** — the branch is opened through the background-session dispatch infrastructure; a brief "starting" phase is normal while the new session is adopted.
 
 ---
 
@@ -276,63 +282,120 @@ function emitForkTelemetry(telemetryClient, sessionId):
 
 | Identifier | Role |
 |---|---|
-| `eP1` | Branch name sanitizer / argument processor |
-| `H21` | Core branch-session file writer (main async routine) |
-| `S6` | Session path builder utility |
-| `Dv` | Low-level filesystem path helper |
-| `j_` | Session descriptor constructor |
-| `BV` | Session metadata assembler |
-| `YI` | Session index updater |
-| `VM` | Message-array serializer (formats messages for NDJSON output) |
-| `j8` | ENOENT error classifier |
-| `K8` | Generic error wrapper |
-| `RH` | Error log dispatcher |
-| `c_` | Error object normalizer |
-| `mH` | String coercion helper |
-| `G1` | Error queue manager |
-| `xiK` | Rotating error buffer (shift/push queue) |
-| `O` | Active write stream handle |
-| `k8` | Background session label constant holder |
-| `H` | Retry / jitter timer helper |
-| `J` | Session teardown orchestrator |
-| `w` | In-memory session store map |
-| `g6` | JSON line parser |
-| `j` | Worker process registry |
-| `y` | Transient worker process handle |
-| `TR` | Content-replacement transformer |
-| `D` | Background daemon dispatcher |
-| `V6` | Daemon job registry lookup |
-| `$` | Current session UI component handle |
-| `Kv8` | Platform-aware memory-check wrapper |
-| `kqA` | Background spare-session spawner |
-| `c` | Generic async continuation / callback helper |
-| `Dz` | Daemon state logger |
-| `N` | Shell command argument normalizer |
-| `Y` | Session lifecycle controller (open/close/update) |
-| `tXH` | Session config writer |
-| `q` | Persistent socket / IPC write handle |
-| `Ic1` | Session column-width calculator |
-| `G` | Keyboard/input event interceptor |
-| `Z` | Daemon watcher / heartbeat controller |
-| `_XK` | Heartbeat interval scheduler |
-| `V` | Session start coordinator |
-| `W` | Notification / skill-update broadcaster |
-| `z` | Active notification set |
-| `czH` | Config-change event emitter |
-| `tQH` | Skill availability checker |
-| `vyH` | Notification visibility helper |
-| `bo` | Notification payload builder |
-| `L` | Async task queue (add / finally / delete) |
-| `XyH` | Display-cache invalidator |
-| `X` | IPC socket message reader |
-| `zM` | IPC framing / end-of-message handler |
-| `Ok5` | IPC message dispatcher / protocol handler |
-| `EH` | Buffer-to-string decoder |
-| `CH` | JSON serializer wrapper |
-| `pxL` | Top-level branch command entry point (JSX component) |
-| `_21` | Branch orchestrator (coordinates name resolution, file write, session switch) |
-| `gO` | Session store initializer |
-| `mxL` | Message index builder (parseInt / K.add / K.has) |
-| `cy` | Custom-title metadata emitter |
-| `GLH` | Agent-name metadata emitter |
-| `Cq` | ISO timestamp slicer / formatter |
+| `rlL` | Main async handler for `/branch` command (Arbor-resolved) |
+| `_v1` | Primary branch orchestration function (called by `rlL`) |
+| `eV1` | Active-conversation finder and argument sanitizer |
+| `Hv1` | Async file-copy helper (stream duplication) |
+| `ilL` | Branch title deduplication / roster index resolver |
+| `ll` | Session listing and sorting utility used by `ilL` |
+| `ACH` | Worktree / git context detection helper |
+| `$_K` | Directory-scanning autocomplete helper (reached via `ll`) |
+| `uCH` | Buffer assembly helper used in session listing |
+| `th` | Custom-title metadata writer |
+| `s5H` | Agent-name metadata writer |
+| `cfH` | Log-append helper used by `th` and `s5H` |
+| `mQ` | Session metadata read/write coordinator |
+| `iM6` | Low-level session file read/write (JSON) |
+| `nq` | String slice helper (indexOf + slice pattern) |
+| `$N` | String escape helper (replace with `\$&`) |
+| `z$` | Session cache invalidation helper |
+| `g6` | Log-file path resolver used by `cfH` |
+| `yv` | Session storage path builder |
+| `AM` | OS-variant path builder |
+| `RS` | Config-dir resolver used by `AM` |
+| `k6` | Config-directory accessor |
+| `O_` | OS path variant selector |
+| `AN` | Platform detection primitive |
+| `MI` | Platform-specific path segment provider |
+| `CO` | Home-directory resolver |
+| `SH` | Structured error reporter |
+| `F_` | Error code classifier (`ENOENT`, etc.) |
+| `CH` | String coercion helper |
+| `L1` | Error formatting helper |
+| `fVA` | Error format assembler |
+| `X_4` | Rolling error-log queue (shift/push) |
+| `P8` | Promise utility (resolve/reject wrapper) |
+| `j8` | Async scheduler / microtask helper |
+| `eS6` | Socket write/destroy helper |
+| `RH` | JSON serializer wrapper |
+| `Qf` | Response-end helper |
+| `DF` | Binary frame encoder (Buffer pack) |
+| `DfA` | Background-session claim dispatcher |
+| `yB5` | Claim send with timeout (5000 ms) |
+| `IB5` | Claim frame builder |
+| `a9A` | Roster-file writer (JSON, mkdir + writeFile) |
+| `QM` | Claim acknowledgement helper |
+| `EH` | String coercer (String()) |
+| `GfA` | Background-session lifecycle manager |
+| `K` | Session label formatter (padEnd) |
+| `gK` | Session state-directory path builder |
+| `t9` | Session-state reader with cache |
+| `YD` | Active-session directory resolver |
+| `ff` | Session roster-path builder |
+| `G86` | Background session keep-alive / heartbeat |
+| `MfH` | Session log-path resolver |
+| `QT` | Session log reader (split lines) |
+| `GF` | Session log appender |
+| `gN6` | Session directory initializer |
+| `Y` | Session supervisor lifecycle controller |
+| `D` | Spare-pool spawn controller |
+| `YfA` | Spare PTY worker spawner (Bun.spawn) |
+| `w` | Background-dispatch main loop |
+| `GfA` | (same as above — background lifecycle wrapper) |
+| `J` | Process kill coordinator |
+| `j` | Active-process set iterator |
+| `y` | PTY write/kill helper |
+| `S` | Worker adoption / identity verification |
+| `dVK` | Worker realpath / stat verifier |
+| `kz` | Daemon socket path builder |
+| `N` | Shell-command builder (platform-aware) |
+| `HF5` | noop/warmup helper |
+| `z` | IPC write multiplexer |
+| `hH` | Feature-ok telemetry emitter |
+| `bH` | Feature-bad telemetry emitter |
+| `uy8` | Memory-pressure sampler (macOS) |
+| `G6` | Background memory monitor |
+| `Lw6` | Pinned-context file reader |
+| `XP_` | pins.json path builder |
+| `p6` | JSON parse wrapper |
+| `sX7` | Pinned-directory recursive reader |
+| `B` | MCP server retirement checker |
+| `VH` | MCP plugin manifest loader |
+| `dH` | Orphaned-permission set |
+| `DfA` | (see above — claim dispatcher) |
+| `pB5` | Daemon protocol message router |
+| `TVK` | Dispatch-timeout controller (30 000 ms) |
+| `g8` | Timer/promise with abort |
+| `M` | Tool-use path normalizer |
+| `cS6` | Plugin path safety checker |
+| `tO` | Service-type resolver |
+| `rzH` | Background-service context builder |
+| `JfA` | Dispatch-slot tracker |
+| `P` | MCP server repaint orchestrator |
+| `Lx8` | Ink/terminal repaint primitive |
+| `X0` | Project path resolver |
+| `jN` | Projects-directory path builder |
+| `hz` | Path normalization helper |
+| `c$` | Realpath + normalize helper |
+| `s$H` | File-type detector (user/assistant line scan) |
+| `uB5` | Stall-time accumulator |
+| `mB5` | Session-restart orchestrator |
+| `k` | Away-summary controller |
+| `w08` | Global state accessor |
+| `eb5` | Away-summary generator |
+| `uf8` | Turn-request builder with abort |
+| `zZ1` | Request UUID generator |
+| `g` | Conversation message store accessor |
+| `o` | Voice toggle-mode handler |
+| `Q` | Daemon supervisor IPC channel |
+| `a` | Voice permission checker |
+| `x` | Cursor/terminal blink controller |
+| `r` | Voice focus-mode handler |
+| `T` | MCP transport container |
+| `l` | Input-stream frame filter |
+| `t` | Voice-session manager |
+| `c` | Voice permission grant handler |
+| `vS8` | Voice permission state machine |
+| `W` | Commit/push helper |
+| `DL` | Git diff utility |
+| `CC` | Conversation-complete marker |

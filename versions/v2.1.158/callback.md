@@ -2,10 +2,12 @@
 type: feature-spec
 feature: "callback"
 cc_version: "2.1.158"
+updated: "2026-06-02"
 tags: ["callback", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v2.1.158 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: "2.1.139"
+analysis_basis: "CC v2.1.139 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -13,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/callback`
 
-> Analysis basis: CC v2.1.158 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.158
+> Analysis basis: CC v2.1.139 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.139
 
 ---
 
 ## Overview
 
-The `/callback` command is a registered slash command of type `"callback"` in Claude Code v2.1.158. Based on the AST extraction, no entry-point implementation functions were resolved for this command's module, meaning its runtime behavior could not be traversed beyond the registration record itself. It is documented here as a structurally registered command whose full implementation details require deeper bundle traversal.
+The `callback` command is an internal registration type used by Claude Code to handle asynchronous callback invocations originating from external or internal sources (such as MCP tool responses, HTTP callbacks, agent completions, or prompt returns). Rather than being a user-facing interactive slash command, it functions as a dispatch mechanism: it maps over a set of pending callback entries and routes each one to the appropriate internal handler. The command's type `"callback"` places it in a distinct category alongside `"prompt"`, `"agent"`, `"http"`, and `"mcp_tool"` command types.
 
 ---
 
@@ -30,57 +32,105 @@ The `/callback` command is a registered slash command of type `"callback"` in Cl
 |---|---|
 | type | `callback` |
 | name | `callback` |
-| description | `null` (no user-visible description string registered) |
+| description | `null` |
+| loc_byte | `12099953` |
+| loc_byte_end | `12099986` |
+| loc_line | `8893` |
+| arbor_handler.name | `Qy7` |
+| arbor_handler.fqn | `claude-2.1.139::Qy7` |
+| arbor_handler.kind | `Function` |
+| arbor_handler.resolution_path | `direct` |
+| arbor_handler.n_hits | `1` |
 
-Analysis basis: CC v2.1.158 bundle.js:+13050013
+Analysis basis: CC v2.1.139 bundle.js:+12099953
 
 ---
 
 ## Input Branching
 
-No call graph edges were resolved during depth-2 AST traversal. The branching logic for this command cannot be stated with bundle-verified accuracy.
-
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+The handler iterates over a collection of pending callback entries and dispatches each one. The primary branching is determined by whether a callback entry type is recognized. The literals reveal a fixed enumeration of known command types: `"prompt"`, `"agent"`, `"http"`, `"mcp_tool"`, and `"callback"` itself. Any entry that does not match a known type falls through to an `"unknown"` path.
 
 ```mermaid
 flowchart TD
-    A[User or system invokes /callback] --> B{Entry function resolved?}
-    B -- No --> C[Module: 'undefined' — no entry functions found]
-    B -- Yes --> D[Execute command logic]
-    C --> E[Behavior undetermined from current traversal depth]
+    A[Handler invoked: callbackHandler] --> B[Map over pending callback entries]
+    B --> C{Entry type?}
+    C -->|"prompt"| D[Route to prompt handler]
+    C -->|"agent"| E[Route to agent handler]
+    C -->|"http"| F[Route to HTTP handler]
+    C -->|"mcp_tool"| G[Route to MCP tool handler]
+    C -->|"callback"| H[Route to nested callback handler]
+    C -->|unrecognized| I[Classify as 'unknown']
+    D & E & F & G & H --> J[Dispatch via dispatchCallback / CKH]
+    I --> K[Handle unknown type gracefully]
+    J & K --> L[Return mapped results]
 ```
 
-> **Note:** The mermaid chart above reflects only what the AST extraction confirmed — that the module backing this command was listed as `"undefined"` and no call edges were emitted. It is not a simplification of known logic.
+Analysis basis: CC v2.1.139 bundle.js:+12099566, +12099597, +12099637, +12099999, +11254712, +11254741, +11254769, +11254793, +11254855
 
 ---
 
 ## Behavioral Spec
 
-### Registration Record Resolution
+### Main Handler: `callbackHandler` (Qy7)
 
 ```
-function resolveCallbackCommand():
-    record = lookupRegistration(type="callback", name="callback")
-    if record.description is null:
-        // No description string is exposed to the CLI help system
-        pass
-    return record
+function callbackHandler(pendingCallbacks):
+    results = pendingCallbacks.map(entry =>
+        dispatchCallback(entry)
+    )
+    return results
 ```
 
-Analysis basis: CC v2.1.158 bundle.js:+13050013
+Analysis basis: CC v2.1.139 bundle.js:+12099566 (`.map` call on callback collection), +12099637 (call to `dispatchCallback`)
 
-### Implementation Entry Point
+---
+
+### Callback Dispatch: `dispatchCallback` (CKH)
+
+The `dispatchCallback` function receives a single callback entry and resolves its type string against the known enumeration. The type string `"command"` appears as a structural key in the entry object used during dispatch (Analysis basis: CC v2.1.139 bundle.js:+12099597).
 
 ```
-function executeCallback(input):
-    // AST traversal reached registration object at loc_byte 13050013
-    // but found module identifier = "undefined"
-    // No entry functions were linked from the registration to an implementation
-    // Full execution path cannot be reconstructed at traversal depth <= 2
-    raise TraversalIncomplete("no entry functions found for module 'undefined'")
+function dispatchCallback(entry):
+    entryType = entry["command"].type  // structural key: "command"
+
+    switch entryType:
+        case "prompt":
+            return handlePromptCallback(entry)
+        case "agent":
+            return handleAgentCallback(entry)
+        case "http":
+            return handleHttpCallback(entry)
+        case "mcp_tool":
+            return handleMcpToolCallback(entry)
+        case "callback":
+            return handleNestedCallback(entry)
+        default:
+            return handleUnknown(entry)  // literal: "unknown"
 ```
 
-Analysis basis: CC v2.1.158 bundle.js:+13050013
+Analysis basis: CC v2.1.139 bundle.js:+12099597 (`"command"` key), +11254712 (`"prompt"`), +11254741 (`"agent"`), +11254769 (`"http"`), +11254793 (`"mcp_tool"`), +11254855 (`"callback"`), +12099999 (`"unknown"`)
+
+---
+
+### Probabilistic Delay: `randomDelayHelper` (H)
+
+The helper function `H`, reachable from `callbackHandler` via the `.map` dispatch chain, introduces a probabilistic timing mechanism. It uses `Math.random()` and compares against numeric thresholds (literals: `2` at bundle.js:+12439007, `1` at bundle.js:+12439023), then calls `setTimeout` to defer execution.
+
+```
+function randomDelayHelper(callback, context):
+    roll = Math.random()  // produces value in [0, 1)
+
+    if roll < threshold_1:       // threshold near 1 (literal: 1)
+        delayMs = computeDelay(roll, 2)  // literal: 2 used in computation
+    else:
+        delayMs = 0
+
+    setTimeout(() => callback(context), delayMs)
+```
+
+This suggests that certain callback dispatches are not executed synchronously — some fraction of callbacks are deferred by a computed interval, potentially for rate-limiting or jitter purposes.
+
+Analysis basis: CC v2.1.139 bundle.js:+12439009 (`Math.random`), +12439046 (`setTimeout`), +12439007 (literal `2`), +12439023 (literal `1`)
 
 ---
 
@@ -88,10 +138,12 @@ Analysis basis: CC v2.1.158 bundle.js:+13050013
 
 | Item | Detail |
 |---|---|
-| Telemetry | None detected — `telemetry` array is empty at traversal depth ≤ 2 |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Telemetry | None detected in depth-2 traversal |
+| Hook registration | None detected in depth-2 traversal |
 | appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Sound | None detected |
+| Async behavior | `setTimeout` is invoked within the `randomDelayHelper` path, deferring some callback executions by a probabilistically computed interval |
+| Known callback types | `"prompt"`, `"agent"`, `"http"`, `"mcp_tool"`, `"callback"` (self-referential), `"unknown"` (fallback) |
 
 ---
 
@@ -99,15 +151,17 @@ Analysis basis: CC v2.1.158 bundle.js:+13050013
 
 | Version | Change |
 |---|---|
-| v2.1.158 | Initial analysis — registration record confirmed; implementation module unresolved at depth ≤ 2 |
+| v2.1.139 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Assuming `/callback` is a user-facing interactive command.** The `type: "callback"` designation and the absence of a description string (`null`) suggest this command may be intended for internal or programmatic invocation rather than direct user input. Treating it as a standard slash command may produce unexpected behavior.
-2. **Expecting a help string.** Because `description` is `null` in the registration record, any UI component that renders command descriptions will receive no text for this entry. Do not rely on a help tooltip or autocomplete description being present.
-3. **Attempting to trace behavior from the registration record alone.** The registration confirms the command exists but provides no implementation details. Any behavioral assumptions beyond what is stated in this spec are unverified.
+1. **Treating `/callback` as a user-facing interactive command.** This command type is `"callback"`, not `"prompt"`. It is not intended to be typed by end users in the CLI; it is an internal dispatch registration used to handle async completions from other command types.
+2. **Assuming synchronous execution for all callbacks.** The `randomDelayHelper` (H) shows that some callbacks may be deferred via `setTimeout`. Logic that depends on immediate execution after a callback dispatch may behave unexpectedly.
+3. **Expecting a description string.** The `description` field is `null` for this registration — it will not appear in help text or command listings the way a normal slash command would.
+4. **Conflating the `"callback"` type entry in the dispatch switch with the registration itself.** The `"callback"` string in the type enumeration (bundle.js:+11254855) means a nested callback-type entry is being dispatched — not a recursive re-registration.
+5. **Assuming all entry types are handled identically.** Each type (`"prompt"`, `"agent"`, `"http"`, `"mcp_tool"`, `"callback"`) routes to a distinct sub-handler. The `"unknown"` fallback path exists for unrecognized types and likely results in a no-op or error log.
 
 ---
 
@@ -117,4 +171,10 @@ Analysis basis: CC v2.1.158 bundle.js:+13050013
 
 | Identifier | Role |
 |---|---|
-| *(none)* | No obfuscated identifiers were emitted by the depth-2 AST traversal for this command. |
+| `Qy7` | Main callback handler function (`callbackHandler`); Arbor-resolved entry point for the `callback` command registration |
+| `H` | Probabilistic delay / random timing helper (`randomDelayHelper`); invokes `Math.random()` and `setTimeout` |
+| `CKH` | Callback dispatch function (`dispatchCallback`); routes individual callback entries by type string |
+
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.

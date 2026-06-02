@@ -2,11 +2,12 @@
 type: feature-spec
 feature: "init-verifiers"
 cc_version: "2.1.158"
-updated: "2026-05-31"
+updated: "2026-06-02"
 tags: ["init-verifiers", "commands", "slash-commands"]
 source: "bundle-analysis"
 bundle_verified: true
-analysis_basis: "CC v2.1.158 bundle.js (AST extraction + Claude interpretation)"
+inherited_from: "2.1.142"
+analysis_basis: "CC v2.1.142 bundle.js (AST extraction + Claude interpretation)"
 author: "ryujaeuk <ryujaeuk@gmail.com>"
 repository: "https://github.com/MyLittleLuckyDog/cc-gnothi"
 license: "AGPL-3.0-only"
@@ -14,14 +15,14 @@ license: "AGPL-3.0-only"
 
 # `/init-verifiers`
 
-> Analysis basis: CC v2.1.158 bundle.js (AST extraction + Claude interpretation)
-> Minimum version: v2.1.158
+> Analysis basis: CC v2.1.142 bundle.js (AST extraction + Claude interpretation)
+> Minimum version: v2.1.142
 
 ---
 
 ## Overview
 
-`/init-verifiers` is a `prompt`-type slash command that drives the agent through a structured five-phase workflow to create one or more verifier skill files under `.claude/skills/`. It auto-detects the project's application type(s), optionally installs or configures browser-automation tooling, collects project-specific parameters interactively, and finally writes a `SKILL.md` file for each verifier so that the Verify agent can discover and execute them automatically. The command explicitly excludes unit-test and type-check verification, focusing only on functional verification via Playwright (web UI), Tmux (CLI), and HTTP (API).
+`/init-verifiers` is a multi-phase prompt command that guides the agent through auto-detecting project structure, configuring appropriate browser/CLI/HTTP verification tooling, gathering project-specific parameters via interactive Q&A, and writing one or more `SKILL.md` verifier skill files into `.claude/skills/`. The resulting skills are consumed by a separate Verify agent that discovers them by scanning for the substring `"verifier"` in skill folder names. The command is explicitly scoped to **functional** verification (Playwright, Tmux, HTTP) and explicitly excludes unit tests and type-checking.
 
 ---
 
@@ -31,70 +32,71 @@ license: "AGPL-3.0-only"
 |---|---|
 | type | `prompt` |
 | name | `init-verifiers` |
-| description | Create verifier skill(s) for automated verification of code changes |
-| prompt body length | 9,757 characters |
-| prompt body trace | inline template |
+| description | `Create verifier skill(s) for automated verification of code changes` |
+| loc_byte | `10625802` |
+| loc_byte_end | `10635933` |
+| loc_line | `6071` |
+| handler_method | `getPromptForCommand` |
+| handler_method_start | `10626024` |
+| handler_method_end | `10635932` |
+| prompt_body.length | `9757` characters |
+| prompt_body.trace | `inline template` |
+| arbor_handler.name | `getPromptForCommand` |
+| arbor_handler.kind | `Method` |
+| arbor_handler.resolution_path | `direct` |
+| arbor_handler.fqn | `claude-2.1.142::getPromptForCommand` |
+| arbor_handler.n_hits | `1` |
 
-Analysis basis: CC v2.1.158 bundle.js:+11335343
+Analysis basis: CC v2.1.142 bundle.js:+10625802
 
 ---
 
 ## Input Branching
 
-Because `/init-verifiers` is a `prompt`-type command, the agent receives the full prompt body at invocation and proceeds through five sequential phases. Branching is determined by what is detected in the project and by user answers collected via `AskUserQuestion`.
+The command drives a 5-phase workflow with branching at multiple points (browser tool availability, package manager selection, verifier type, authentication requirements, single vs. multiple project areas). A Mermaid flowchart is used because there are well over 3 distinct paths.
 
 ```mermaid
 flowchart TD
-    A(["/init-verifiers invoked"]) --> B["Phase 1: Auto-Detection\nScan top-level directories\nfor manifest files"]
+    A(["/init-verifiers invoked"]) --> B[Phase 1: Scan project structure\ndetect sub-areas & manifests]
 
-    B --> C{How many distinct\nproject areas found?}
+    B --> C{Project areas found?}
+    C -- "One area" --> D[Suggest simple verifier name\ne.g. verifier-playwright]
+    C -- "Multiple areas" --> E[Suggest compound names\ne.g. verifier-frontend-playwright]
 
-    C -- "One area" --> D["Single verifier path\nSimple name format:\nverifier-<type>"]
-    C -- "Multiple areas" --> E["Multi-verifier path\nCompound name format:\nverifier-<project>-<type>"]
+    D & E --> F{Application type\nper area}
 
-    D --> F{Application type\ndetected?}
-    E --> F
+    F -- "Web app" --> G[Phase 2: Check for\nbrowser automation tooling]
+    F -- "CLI tool" --> H[Check asciinema & Tmux\navailability]
+    F -- "API service" --> I[Check curl / httpie\navailability]
 
-    F -- "Web app\n(React / Next.js / Vue / etc.)" --> G["Suggest Playwright verifier"]
-    F -- "CLI tool" --> H["Suggest Tmux verifier"]
-    F -- "API service\n(Express / FastAPI / etc.)" --> I["Suggest HTTP verifier"]
+    G --> J{Browser tools\nalready present?}
+    J -- "Yes" --> K[AskUserQuestion:\nWhich detected tool to use?]
+    J -- "No" --> L[AskUserQuestion:\nInstall or skip browser automation?]
 
-    G --> J["Phase 2: Browser-automation\ntool setup"]
-    H --> K["Phase 2: Check asciinema\n+ Tmux availability"]
-    I --> L["Phase 2: Check curl / httpie\navailability"]
+    L --> M{User choice}
+    M -- "Playwright" --> N[Run package-manager-specific\nPlaywright install command]
+    M -- "Chrome DevTools MCP\nor Claude Chrome Extension" --> O[Configure .mcp.json entry\nupdate allowed-tools list]
+    M -- "None" --> P[HTTP-only checks]
 
-    J --> M{Browser automation\nalready installed?}
-    M -- "Yes — one tool" --> N["Ask user to confirm tool"]
-    M -- "Yes — multiple tools" --> O["AskUserQuestion:\nwhich tool to use?"]
-    M -- "No tools detected" --> P["AskUserQuestion:\ninstall / configure one?"]
+    K & N & O & P --> Q[Phase 3: Interactive Q&A\nper verifier area]
+    H --> Q
+    I --> Q
 
-    P -- "Playwright" --> Q["Run package-manager-specific\ninstall command"]
-    P -- "Chrome DevTools MCP\nor Chrome Extension" --> R["Configure .mcp.json entry"]
-    P -- "None" --> S["Fall back to HTTP checks only"]
+    Q --> R[Confirm verifier name]
+    R --> S[Collect type-specific params\ne.g. dev server URL / ready signal\nor entry point command / base URL]
+    S --> T{Auth required?}
+    T -- "No" --> V[Phase 4: Generate SKILL.md\nin .claude/skills/verifier-name/]
+    T -- "Yes / Partial" --> U[Collect login method\ntest credentials\npost-login indicator]
+    U --> V
 
-    N --> T["Phase 3: Interactive Q&A"]
-    O --> T
-    Q --> T
-    R --> T
-    S --> T
-    K --> T
-    L --> T
+    V --> W{Multiple areas?}
+    W -- "Yes" --> Q
+    W -- "No / all done" --> X[Phase 5: Report skill locations\nand discovery rules to user]
 
-    T --> U["Collect verifier name,\ndev server details,\nand auth requirements"]
-
-    U --> V{Authentication\nrequired?}
-    V -- "No" --> W["Phase 4: Generate skill\n(no auth section)"]
-    V -- "Yes (full or partial)" --> X["Collect login method,\ntest credentials,\npost-login indicator"]
-    X --> W
-
-    W --> Y["Write .claude/skills/<name>/SKILL.md"]
-    Y --> Z{More project\nareas to process?}
-    Z -- "Yes" --> T
-    Z -- "No" --> AA["Phase 5: Confirm creation\nInform user of paths,\ndiscovery rules, and\nself-update behaviour"]
-    AA --> AB([Done])
+    X --> Y([Done])
 ```
 
-Analysis basis: CC v2.1.158 bundle.js:+11335343
+Analysis basis: CC v2.1.142 bundle.js:+10625802
 
 ---
 
@@ -102,236 +104,207 @@ Analysis basis: CC v2.1.158 bundle.js:+11335343
 
 ### Phase 1 — Project Auto-Detection
 
-The agent scans the working directory to identify distinct sub-projects before any user interaction takes place.
-
 ```
-function detectProjectAreas(workingDir):
+function autoDetectProjectAreas(workingDirectory):
     areas = []
-    topLevelEntries = listDirectory(workingDir)
+    topLevelEntries = scanDirectory(workingDirectory, depth=1)
 
-    for entry in topLevelEntries:
-        if isDirectory(entry):
-            manifests = findManifests(entry, [
-                "package.json", "Cargo.toml",
-                "pyproject.toml", "go.mod"
-            ])
-            if manifests is not empty:
-                area = buildAreaDescriptor(entry, manifests)
-                areas.append(area)
-
-    if areas is empty:
-        // No subdirectory manifests; treat working directory as one area
-        areas.append(buildAreaDescriptor(workingDir, findManifests(workingDir, ...)))
+    for each entry in topLevelEntries:
+        manifests = findAny(entry, [
+            "package.json", "Cargo.toml",
+            "pyproject.toml", "go.mod"
+        ])
+        if manifests is not empty:
+            area = {
+                path: entry,
+                manifests: manifests,
+                type: inferApplicationType(manifests),
+                packageManager: inferPackageManager(manifests),
+                existingE2ETools: detectE2ETools(entry),
+                devServerConfig: extractDevServerConfig(entry)
+            }
+            areas.append(area)
 
     return areas
-
-function classifyApplicationType(area):
-    if area has web-framework indicators (React, Next.js, Vue, Svelte, ...):
-        return APPLICATION_TYPE.WEB
-    if area has API-framework indicators (Express, FastAPI, Flask, Gin, ...):
-        return APPLICATION_TYPE.API
-    if area has binary/CLI entry-point indicators:
-        return APPLICATION_TYPE.CLI
-    return APPLICATION_TYPE.UNKNOWN
 ```
 
-Analysis basis: CC v2.1.158 bundle.js:+11335343
+The agent inspects manifest files in each subdirectory to classify each area as one of: **web app** (React, Next.js, Vue, etc.), **CLI tool**, or **API service** (Express, FastAPI, etc.).
+It also checks `.mcp.json` at the project root for pre-configured browser automation MCP servers (Playwright MCP, Chrome DevTools MCP, Claude Chrome Extension MCP).
+
+Analysis basis: CC v2.1.142 bundle.js:+10625802
 
 ---
 
 ### Phase 2 — Verification Tool Setup
 
-Tool selection varies by application type. The agent checks what is already available before prompting.
-
 ```
-function setupVerificationTools(area):
-    appType = classifyApplicationType(area)
+function setupVerificationTooling(area):
+    if area.type == WEB_APP:
+        detected = area.existingE2ETools + readMCPConfig(".mcp.json")
 
-    if appType == APPLICATION_TYPE.WEB:
-        installedTools = detectBrowserAutomationTools(area)
-        // Check package.json deps for @playwright/test
-        // Check .mcp.json for playwright MCP, Chrome DevTools MCP,
-        //   or Claude Chrome Extension MCP entries
-
-        if count(installedTools) == 0:
+        if detected is not empty:
             choice = AskUserQuestion(
-                "No browser automation tools detected. " +
-                "Install/configure one for UI verification?",
-                options=["Playwright (Recommended)", "Chrome DevTools MCP",
-                         "Claude Chrome Extension", "None"]
+                "Detected tools: " + detected + ". Which to use?"
             )
-            return installOrConfigureTool(choice, area)
-
-        if count(installedTools) == 1:
-            confirmTool(installedTools[0])
         else:
             choice = AskUserQuestion(
-                "Multiple tools detected: " + join(installedTools) +
-                ". Which to use for verification?",
-                options=installedTools
+                "No browser automation detected. Install one?",
+                options=["Playwright", "Chrome DevTools MCP",
+                         "Claude Chrome Extension", "None"]
             )
-            return choice
 
-    if appType == APPLICATION_TYPE.CLI:
-        checkCommandAvailable("asciinema")   // optional; warn if missing
-        checkCommandAvailable("tmux")        // required
+        if choice == "Playwright":
+            cmd = buildPlaywrightInstallCommand(area.packageManager)
+            // package-manager dispatch:
+            // npm  → "npm install -D @playwright/test && npx playwright install"
+            // yarn → "yarn add -D @playwright/test && yarn playwright install"
+            // pnpm → "pnpm add -D @playwright/test && pnpm exec playwright install"
+            // bun  → "bun add -D @playwright/test && bun playwright install"
+            runShellCommand(cmd)
 
-    if appType == APPLICATION_TYPE.API:
-        checkCommandAvailable("curl")        // system-installed; no action if present
-        checkCommandAvailable("http")        // httpie; optional
+        else if choice in ["Chrome DevTools MCP", "Claude Chrome Extension"]:
+            if AskUserQuestion("Add MCP server entry to .mcp.json?") == YES:
+                appendMCPConfig(".mcp.json", choice)
+            if choice == "Claude Chrome Extension":
+                notifyUser("Extension must be installed from Chrome Web Store")
 
-function installPlaywright(packageManager):
-    commands = {
-        "npm":  "npm install -D @playwright/test && npx playwright install",
-        "yarn": "yarn add -D @playwright/test && yarn playwright install",
-        "pnpm": "pnpm add -D @playwright/test && pnpm exec playwright install",
-        "bun":  "bun add -D @playwright/test && bun playwright install"
-    }
-    runShell(commands[packageManager])
+    else if area.type == CLI_TOOL:
+        verifyAvailable("tmux")
+        checkOptionalTool("asciinema")   // informational only; not required
+
+    else if area.type == API_SERVICE:
+        checkAvailable(["curl", "http"])  // usually system-installed; no install needed
 ```
 
-Analysis basis: CC v2.1.158 bundle.js:+11335343
+Analysis basis: CC v2.1.142 bundle.js:+10625802
 
 ---
 
-### Phase 3 — Interactive Q&A
-
-The agent collects the specific parameters needed to populate the skill template for each area.
+### Phase 3 — Interactive Q&A Per Verifier
 
 ```
-function collectVerifierParameters(area, projectAreaCount):
-    // --- Name ---
-    if projectAreaCount == 1:
-        suggestedName = "verifier-" + mapTypeToSuffix(area.appType)
+function collectVerifierParameters(area, totalAreas):
+    // Name convention
+    if totalAreas == 1:
+        suggestedName = "verifier-" + inferTypeSuffix(area.type)
         // e.g. "verifier-playwright", "verifier-cli", "verifier-api"
     else:
-        suggestedName = "verifier-" + area.shortId + "-" + mapTypeToSuffix(area.appType)
-        // e.g. "verifier-frontend-playwright"
+        suggestedName = "verifier-" + area.shortId + "-" + inferTypeSuffix(area.type)
+        // e.g. "verifier-frontend-playwright", "verifier-backend-api"
 
     name = AskUserQuestion("Verifier name?", default=suggestedName)
-    assert "verifier" in name.lower(),
-        "Name MUST contain 'verifier' for automatic discovery by the Verify agent"
+    // CONSTRAINT: name MUST contain the substring "verifier"
+    // (Verify agent discovery depends on this)
 
-    // --- Type-specific parameters ---
-    if area.appType == APPLICATION_TYPE.WEB:
-        devServerCmd = AskUserQuestion("Dev server start command?")
-        devServerUrl = AskUserQuestion("Dev server URL?")
-        readySignal  = AskUserQuestion("Text that signals server is ready?")
+    // Type-specific parameters
+    if area.type == WEB_APP:
+        devServerCmd = AskUserQuestion("Dev server command?")
+        devServerURL = AskUserQuestion("Dev server URL?")
+        readySignal  = AskUserQuestion("Text in output that signals server is ready?")
 
-    if area.appType == APPLICATION_TYPE.CLI:
-        entryPointCmd  = AskUserQuestion("Entry point command?")
-        useAsciinema   = AskUserQuestion("Record session with asciinema?")
+    else if area.type == CLI_TOOL:
+        entryPoint   = AskUserQuestion("Entry point command?")
+        useAsciinema = AskUserQuestion("Record with asciinema?")
 
-    if area.appType == APPLICATION_TYPE.API:
-        apiServerCmd = AskUserQuestion("API server start command?")
-        baseUrl      = AskUserQuestion("API base URL?")
+    else if area.type == API_SERVICE:
+        serverCmd = AskUserQuestion("API server command?")
+        baseURL   = AskUserQuestion("Base URL?")
 
-    // --- Authentication ---
-    authMode = AskUserQuestion(
+    // Authentication
+    authStatus = AskUserQuestion(
         "Does your app require authentication?",
-        options=["No authentication needed",
+        options=["No auth needed",
                  "Yes, login required",
-                 "Some pages/endpoints require auth"]
+                 "Some pages require auth"]
     )
 
-    authConfig = null
-    if authMode != "No authentication needed":
+    authConfig = {}
+    if authStatus != "No auth needed":
         loginMethod = AskUserQuestion(
             "Login method?",
-            options=["Form-based (username/password)",
-                     "API token/key",
-                     "OAuth/SSO",
-                     "Other"]
+            options=["Form-based", "API token/key", "OAuth/SSO", "Other"]
         )
-        loginUrl    = AskUserQuestion("Login URL?")
-        credentials = AskUserQuestion(
-            "Test credentials? " +
-            "(Recommend env vars: TEST_USER, TEST_PASSWORD)"
+        loginURL         = AskUserQuestion("Login URL?")
+        testCredentials  = AskUserQuestion(
+            "Test credentials? (suggest env vars TEST_USER / TEST_PASSWORD)"
         )
-        postLoginIndicator = AskUserQuestion(
-            "How to confirm login succeeded?",
-            options=["URL redirect", "Element appears", "Cookie/token set"]
-        )
-        authConfig = buildAuthConfig(loginMethod, loginUrl,
-                                     credentials, postLoginIndicator)
+        postLoginSignal  = AskUserQuestion("How to confirm login succeeded?")
+        authConfig = { loginMethod, loginURL, testCredentials, postLoginSignal }
 
-    return VerifierParams(name, area, authConfig, ...)
+    return VerifierSpec {
+        name, area, devParams, authConfig
+    }
 ```
 
-Analysis basis: CC v2.1.158 bundle.js:+11335343
+Analysis basis: CC v2.1.142 bundle.js:+10626030
 
 ---
 
 ### Phase 4 — Skill File Generation
 
-After all parameters are collected, the agent writes a structured Markdown skill file.
-
 ```
-function generateSkillFile(params):
-    skillDir  = projectRoot + "/.claude/skills/" + params.name + "/"
-    skillPath = skillDir + "SKILL.md"
-
-    allowedTools = selectAllowedTools(params.area.appType, params.toolChoice)
-    // verifier-playwright: Bash(npm *), Bash(yarn *), Bash(pnpm *), Bash(bun *),
-    //                      mcp__playwright__*, Read, Glob, Grep
-    // verifier-cli:        Tmux, Bash(asciinema *), Read, Glob, Grep
-    // verifier-api:        Bash(curl *), Bash(http *), Bash(npm *),
-    //                      Bash(yarn *), Read, Glob, Grep
+function generateSkillFile(spec):
+    outputPath = ".claude/skills/" + spec.name + "/SKILL.md"
 
     frontmatter = buildFrontmatter(
-        name        = params.name,
-        description = deriveDescription(params),
-        allowedTools = allowedTools
+        name        = spec.name,
+        description = deriveDescription(spec.area.type),
+        allowedTools = selectAllowedTools(spec.area.type, spec.toolChoice)
+    )
+    // Allowed-tool sets by verifier type:
+    //   playwright : Bash(npm*), Bash(yarn*), Bash(pnpm*), Bash(bun*),
+    //                mcp__playwright__*, Read, Glob, Grep
+    //   cli        : Tmux, Bash(asciinema*), Read, Glob, Grep
+    //   api        : Bash(curl*), Bash(http*), Bash(npm*), Bash(yarn*),
+    //                Read, Glob, Grep
+
+    body = buildSkillBody(
+        projectContext   = summariseDetectionResults(spec.area),
+        setupInstructions = spec.devParams,
+        authSection      = spec.authConfig,   // omitted if no auth
+        reportingBlock   = PASS_FAIL_format,
+        cleanupBlock     = [stopServers, closeBrowsers, reportSummary],
+        selfUpdateBlock  = instructionsForSelfPatch
+        // Self-update: if skill instructions are STALE (not a feature bug),
+        // agent should AskUserQuestion to confirm and then edit SKILL.md inline
     )
 
-    body = composeSections([
-        "Project Context"    : params.area.contextSummary,
-        "Setup Instructions" : params.setupInstructions,
-        "Authentication"     : params.authConfig,   // omitted if null
-        "Reporting"          : STANDARD_REPORTING_BLOCK,
-        "Cleanup"            : STANDARD_CLEANUP_BLOCK,
-        "Self-Update"        : STANDARD_SELF_UPDATE_BLOCK
-    ])
-
-    createDirectoryIfAbsent(skillDir)
-    writeFile(skillPath, frontmatter + body)
-    return skillPath
+    writeFile(outputPath, frontmatter + body)
 ```
 
-Key structural rules encoded in the template (Analysis basis: CC v2.1.158 bundle.js:+11335343):
-
-| Rule | Detail |
-|---|---|
-| Output directory | Always `.claude/skills/<verifier-name>/` under the project root |
-| Output filename | Always `SKILL.md` |
-| Discovery key | Folder name **must** contain the string `verifier` (case-insensitive) |
-| Authentication section | Included only when auth is required; omitted entirely otherwise |
-| Self-Update section | Always present; instructs the skill to patch itself when its own metadata is stale rather than reporting a test failure |
+The skill is always written under `.claude/skills/<name>/SKILL.md` at the **project root**, never elsewhere.
+Analysis basis: CC v2.1.142 bundle.js:+10626088
 
 ---
 
-### Phase 5 — Creation Confirmation
-
-After all skill files are written, the agent delivers a structured summary to the user.
+### Phase 5 — Post-Creation Summary
 
 ```
-function confirmCreation(createdSkills):
-    for skill in createdSkills:
-        inform("Created: " + skill.path)
+function reportCreation(createdSkills):
+    for each skill in createdSkills:
+        print "Created: .claude/skills/" + skill.name + "/SKILL.md"
 
-    inform(
-        "Discovery rule: folder name must contain 'verifier' " +
-        "(case-insensitive) for the Verify agent to find it automatically."
-    )
-    inform("You can edit any SKILL.md to customise it.")
-    inform("Run /init-verifiers again to add verifiers for additional areas.")
-    inform(
-        "Each verifier will offer to self-update if its own startup " +
-        "instructions become stale."
-    )
+    print "Discovery rule: folder name must contain 'verifier' (case-insensitive)"
+    print "Skills are editable; re-run /init-verifiers to add more"
+    print "Each verifier will self-update if its own instructions become stale"
 ```
 
-Analysis basis: CC v2.1.158 bundle.js:+11335343
+Analysis basis: CC v2.1.142 bundle.js:+10626088
+
+---
+
+### Handler Dispatch
+
+The command handler is the `getPromptForCommand` method resolved directly (Arbor `direct` path) on the registration object at byte range `(10625802, 10635933)`. At invocation, the handler calls the progress-tracking helper (`nY`, role: `buildTextContent`) to wrap the entire prompt body as a `"text"` content block before returning it to the agent runtime. The `"text"` literal at bundle.js:+10626065 is the content-type discriminator for that wrapping.
+
+```
+function dispatchInitVerifiers(commandInput):
+    promptString = getPromptForCommand(commandInput)   // inline template, 9757 chars
+    contentBlock = buildTextContent("text", promptString)
+    return contentBlock
+```
+
+Analysis basis: CC v2.1.142 bundle.js:+10626030, +10626065, +10626088
 
 ---
 
@@ -339,14 +312,14 @@ Analysis basis: CC v2.1.158 bundle.js:+11335343
 
 | Item | Detail |
 |---|---|
-| Telemetry | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Hook registration | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| appState changes | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| Sound | <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
-| File writes | Creates `.claude/skills/<verifier-name>/SKILL.md` for each verifier; may also write or modify `.mcp.json` if an MCP-based browser tool is selected |
-| Package manager side effects | May execute `npm install`, `yarn add`, `pnpm add`, or `bun add` to install `@playwright/test` and run `playwright install` if the user chooses Playwright and it is not already present |
-| Interactive prompts | Uses `AskUserQuestion` repeatedly across Phases 2, 3; blocks execution until the user responds |
-| Progress tracking | Uses an unresolved tool reference (rendered as `...` in the extracted prompt body) to track multi-step progress; the exact tool name was not resolved in the depth-2 traversal |
+| Telemetry | None found in depth-2 traversal <!-- TODO: not found in depth-2 traversal; needs --depth 4 --> |
+| Files written | `.claude/skills/<verifier-name>/SKILL.md` (one per detected area) |
+| Files modified (conditional) | `.mcp.json` — if user selects an MCP-based browser tool |
+| Packages installed (conditional) | `@playwright/test` + playwright browsers — if user selects Playwright |
+| Hook registration | None detected |
+| appState changes | None detected |
+| Sound | None detected |
+| AskUserQuestion calls | Multiple interactive prompts across Phases 2–3; exact count depends on project structure and user choices |
 
 ---
 
@@ -354,23 +327,18 @@ Analysis basis: CC v2.1.158 bundle.js:+11335343
 
 | Version | Change |
 |---|---|
-| v2.1.158 | Initial analysis |
+| v2.1.142 | Initial analysis |
 
 ---
 
 ## Common Mistakes
 
-1. **Naming a verifier without the word "verifier"** — The Verify agent performs case-insensitive substring matching on the skill folder name. Any folder that does not contain `verifier` is silently ignored at discovery time, so the skill will never be invoked automatically.
-
-2. **Creating verifiers for unit tests or type checks** — The command prompt explicitly prohibits this. Standard build/test workflows already cover those cases; a redundant verifier skill adds noise and may conflict with existing CI pipelines.
-
-3. **Hardcoding credentials in SKILL.md** — The prompt instructs the agent to recommend environment variables (`TEST_USER`, `TEST_PASSWORD`, etc.) for secrets. Hardcoded values end up committed to version control and may be read by other agents or tools that load the skill.
-
-4. **Placing the skill outside `.claude/skills/`** — Skills stored in other locations are not automatically loaded when Claude runs in the project. The path `.claude/skills/<verifier-name>/SKILL.md` is the only supported location.
-
-5. **Running /init-verifiers once for a multi-area project and assuming one skill suffices** — The command is designed to be run multiple times or to create multiple skills in a single run. A mono-repo with both a web frontend and an API backend needs at least two separate verifier skills.
-
-6. **Selecting an MCP-based browser tool without ensuring the MCP server is actually running** — Chrome DevTools MCP and the Claude Chrome Extension MCP require a live MCP server process and (for the extension) the Chrome browser extension to be installed. The command configures `.mcp.json` but cannot verify that the runtime environment satisfies these prerequisites.
+1. **Naming a skill without the `verifier` substring.** The Verify agent's discovery logic scans folder names for the string `"verifier"` (case-insensitive). A skill named `"ui-checker"` will be silently ignored.
+2. **Creating verifiers for unit tests or type-checking.** The prompt body explicitly prohibits this; such verifiers add noise and duplicate the standard build/test workflow.
+3. **Hardcoding credentials in SKILL.md.** The command instructs the agent to suggest environment variables (`TEST_USER`, `TEST_PASSWORD`). Hardcoded secrets will be committed to version control.
+4. **Running `/init-verifiers` from a sub-directory.** Skills are written relative to the project root under `.claude/skills/`. Running from a nested folder may place skills where the Verify agent does not look.
+5. **Skipping Phase 2 tool setup then referencing Playwright in the skill.** If Playwright is listed in `allowed-tools` but was never installed, the verifier skill will fail at runtime. Always complete Phase 2 before proceeding.
+6. **Assuming a single verifier is sufficient for a monorepo.** The command is designed to generate one skill per distinct project area. A monorepo with a frontend and a backend needs at minimum `verifier-frontend-playwright` and `verifier-backend-api`.
 
 ---
 
@@ -380,6 +348,10 @@ Analysis basis: CC v2.1.158 bundle.js:+11335343
 
 | Identifier | Role |
 |---|---|
-| *(none extracted)* | The depth-2 AST traversal reported an empty `identifiers` array and noted "no entry functions found for module 'undefined'". No obfuscated identifiers are available for this command at the current traversal depth. |
+| `__handler_init-verifiers` | Synthetic BFS entry point representing the `getPromptForCommand` method call; not a real bundle symbol |
+| `nY` | `buildTextContent` — wraps a string value into a typed content block `{type:"text", ...}` |
+| `Nq` | `coerceToString` — low-level string coercion utility called by `buildTextContent`; delegates to `String()` |
 
-<!-- TODO: not found in depth-2 traversal; needs --depth 4 -->
+---
+
+Note: index built via Arbor fallback; some signals (telemetry, literals) may be missing — see arbor-fallback.js.
