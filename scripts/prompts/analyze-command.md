@@ -195,3 +195,5 @@ Analysis basis: CC v{VERSION} bundle.js:+{loc_byte}
 ```
 
 {PROMPT_BODY}
+
+{ARBOR_CONTEXT}

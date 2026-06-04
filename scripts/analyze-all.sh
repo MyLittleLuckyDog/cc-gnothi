@@ -111,6 +111,104 @@ open(dst, "w").write(content)
 # function exports the old xargs-P self-invoke needed are gone.
 # Keep the env exports for any extra-shell tooling that still
 # expects them.
+
+analyze_command() {
+  local cmd="$1"
+  local out_path="$VERSIONS_DIR/${cmd}.md"
+
+  if [[ -f "$out_path" ]] && grep -q "^bundle_verified: true" "$out_path"; then
+    echo "SKIP [$cmd]: already verified"
+    return 0
+  fi
+
+  echo "START [$cmd]"
+
+  # Extract AST data for this command
+  local json_data
+  if ! json_data="$(node "$SCRIPT_DIR/extract-ast.js" \
+    --cmd "$cmd" \
+    --bundle "$BUNDLE" \
+    --index "$INDEX_PATH" \
+    --depth "$DEPTH" \
+    2>/tmp/cc-gnothi-${cmd}-ast-err.log)"; then
+    echo "ERROR [$cmd]: AST extraction failed (see /tmp/cc-gnothi-${cmd}-ast-err.log)"
+    return 1
+  fi
+
+  if [[ -z "$json_data" ]]; then
+    echo "ERROR [$cmd]: AST extraction produced no output"
+    return 1
+  fi
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "DRY-RUN [$cmd]: AST OK ($(echo "$json_data" | wc -c) bytes) → would call API → $out_path"
+    return 0
+  fi
+
+  # ── Arbor context enrichment (optional, graceful fallback) ─────────────────
+  # If `arbor` is on PATH and a graph snapshot exists for this version, call
+  # `arbor context --fqn` to get a pre-resolved handler + immediate callees.
+  # The result is injected into the prompt as ## Arbor Graph Context so the
+  # LLM starts the spec with the handler FQN already confirmed.
+  local arbor_context=""
+  local handler_name
+  handler_name="$(echo "$json_data" | python3 -c \
+    "import json,sys; d=json.load(sys.stdin); print(d.get('handler_name',''))" 2>/dev/null || true)"
+  local arbor_graph="${HOME}/.cc-gnothi/cache/arbor-graph-${VERSION}.json"
+  if [[ -n "$handler_name" ]] && command -v arbor &>/dev/null && [[ -f "$arbor_graph" ]]; then
+    local arbor_out
+    arbor_out="$(arbor context \
+      --fqn "claude-${VERSION}::${handler_name}" \
+      --path "$(dirname "$BUNDLE")" \
+      --graph "$arbor_graph" \
+      --depth 2 \
+      --output md \
+      2>/dev/null || true)"
+    if [[ -n "$arbor_out" ]]; then
+      arbor_context="$(printf '\n## Arbor Graph Context (pre-resolved handler + call structure)\n\n> Source: arbor context --fqn claude-%s::%s --depth 2\n> Use the FQN and callee list below as the confirmed starting point — they are\n> graph-verified, not inferred. Cite locations as bundle.js:+{loc_byte}.\n\n%s' \
+        "$VERSION" "$handler_name" "$arbor_out")"
+      echo "  arbor context: ${handler_name} → $(echo "$arbor_out" | wc -l | tr -d ' ') lines"
+    fi
+  fi
+
+  # Build prompt: template variables + embed JSON data + Arbor context
+  local prompt
+  prompt="$(sed \
+    -e "s|{COMMAND}|${cmd}|g" \
+    -e "s|{VERSION}|${VERSION}|g" \
+    -e "s|{TODAY}|${TODAY}|g" \
+    "$PROMPT_TEMPLATE" \
+  | sed "s|{AST_JSON}|PLACEHOLDER_AST_JSON|" \
+  | sed "s|{ARBOR_CONTEXT}|PLACEHOLDER_ARBOR_CONTEXT|")"
+  prompt="${prompt/PLACEHOLDER_AST_JSON/$json_data}"
+  prompt="${prompt/PLACEHOLDER_ARBOR_CONTEXT/$arbor_context}"
+
+  # Write prompt to temp file (avoids shell arg length limits)
+  local prompt_file tmp
+  prompt_file="$(mktemp /tmp/cc-gnothi-${cmd}-prompt-XXXX.txt)"
+  echo "$prompt" > "$prompt_file"
+  tmp="$(mktemp /tmp/cc-gnothi-${cmd}-XXXX.md)"
+
+  if node "$SCRIPT_DIR/call-api.js" --prompt-file "$prompt_file" > "$tmp" \
+       2>/tmp/cc-gnothi-${cmd}-err.log; then
+    rm -f "$prompt_file"
+    if validate_output "$tmp" "$cmd"; then
+      mv "$tmp" "$out_path"
+      echo "OK    [$cmd] → $out_path"
+    else
+      mv "$tmp" "/tmp/cc-gnothi-${cmd}-FAILED.md"
+      echo "FAIL  [$cmd]: validation failed (saved to /tmp/cc-gnothi-${cmd}-FAILED.md)"
+      return 1
+    fi
+  else
+    rm -f "$prompt_file"
+    echo "ERROR [$cmd]: API call failed (see /tmp/cc-gnothi-${cmd}-err.log)"
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+export -f analyze_command validate_output copy_from_version
 export VERSION BUNDLE VERSIONS_DIR TODAY PROMPT_TEMPLATE DRY_RUN DEPTH SCRIPT_DIR INDEX_PATH REPO_ROOT
 # Note: CLAUDE_GATEWAY_URL / ANTHROPIC_API_KEY / CC_GNOTHI_SESSION_ID
 # inherited from environment if set.

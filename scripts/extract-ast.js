@@ -958,17 +958,45 @@ function extractCommand(src, index, cmdName, maxDepth) {
 
   for (const { fn } of entryFns) bfs(fn, 0);
 
+  // Pass moduleExports to serialize() for handler_name resolution.
+  result._index_moduleExports = index.moduleExports || {};
   return serialize(result);
 }
 
 function serialize(result) {
-  return {
+  const identifiers = Array.from(result.identifiers);
+
+  // Resolve the primary handler name for downstream Arbor context lookups.
+  // Priority: moduleExports[module_id].call > first entry function (in
+  // callGraph froms not in tos) > identifiers[0].
+  // Stored as `handler_name` (plain identifier, not FQN) so callers can
+  // prefix the version: `claude-${VERSION}::${handler_name}`.
+  let handler_name = null;
+  const reg = result.registration || {};
+  const modId = reg.module_id;
+  if (modId && result._index_moduleExports) {
+    const exports_ = result._index_moduleExports[modId] || {};
+    // Prefer `call`, then `load`, then any first export
+    handler_name = exports_.call || exports_.load || Object.values(exports_)[0] || null;
+  }
+  if (!handler_name) {
+    const cg = result.callGraph || [];
+    const targets = new Set(cg.map(e => e.to.split('.')[0]));
+    const froms   = new Set(cg.map(e => e.from));
+    const entries = [...froms].filter(f => !targets.has(f)).sort();
+    handler_name  = entries[0] || identifiers[0] || null;
+  }
+
+  const out = {
     ...result,
-    identifiers: Array.from(result.identifiers),
+    identifiers,
+    handler_name,
     callGraph: dedupe(result.callGraph, (e) => `${e.from}->${e.to}`),
-    literals: dedupe(result.literals, (e) => `${e.kind}:${e.value}`),
+    literals:  dedupe(result.literals,  (e) => `${e.kind}:${e.value}`),
     telemetry: dedupe(result.telemetry, (e) => e.event),
   };
+  delete out._index_moduleExports; // internal only — don't leak into JSON
+  return out;
 }
 
 function dedupe(arr, key) {
