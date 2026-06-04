@@ -33,6 +33,7 @@ function parseArgs() {
       case '--hash-commands':       opts.mode = 'hash';  break;
       case '--dump-system-context': opts.mode = 'system-context'; break;
       case '--dump-prompts':        opts.mode = 'dump-prompts'; break;
+      case '--dump-tools':          opts.mode = 'dump-tools'; break;
       case '--cmd':                 opts.mode = 'cmd'; opts.cmd = args[++i]; break;
       case '--bundle':      opts.bundle = args[++i]; break;
       case '--version':     opts.version = args[++i]; break;
@@ -1360,6 +1361,184 @@ function dumpPrompts(index, outDir) {
   return { written, skipped };
 }
 
+// ── Tool catalog extraction ───────────────────────────────────────────────────
+//
+// `--dump-tools` scans the bundle for every C1({name:X, ...}) built-in tool
+// registration and produces a structured catalog:
+//
+//   { name, hint, has_description_fn, has_prompt_fn, has_input_schema,
+//     schema_properties, byte_offset, description_fn, prompt_fn }
+//
+// Pass A: build a variable→string constant map (var rA = "Bash")
+// Pass B: walk CallExpressions matching X = C1({...}) and extract fields
+// Pass C: for tools with dynamic descriptions, find the description-builder
+//         function name so callers can extract it via --cmd-style analysis
+
+function dumpTools(src, version) {
+  process.stderr.write('Pass A: building variable→string constant map...\n');
+  const ast = parser.parse(src, {
+    sourceType: 'script',
+    errorRecovery: true,
+    strictMode: false,
+  });
+
+  // Pass A: var X = "string" / const X = "string"
+  const varStrings = {};
+  walk(ast, {
+    VariableDeclarator(node) {
+      if (!node.id || node.id.type !== 'Identifier') return;
+      const init = node.init;
+      if (init && init.type === 'StringLiteral' && init.value.length >= 2 && init.value.length <= 80) {
+        varStrings[node.id.name] = init.value;
+      }
+    },
+  });
+  process.stderr.write(`Pass A done: ${Object.keys(varStrings).length} string constants.\n`);
+
+  function resolveString(node) {
+    if (!node) return null;
+    if (node.type === 'StringLiteral') return node.value;
+    if (node.type === 'Identifier') return varStrings[node.name] || null;
+    return null;
+  }
+
+  // Extract inputSchema properties list from an ObjectExpression
+  function extractSchemaProps(schemaNode) {
+    if (!schemaNode || schemaNode.type !== 'ObjectExpression') return null;
+    const props = {};
+    for (const p of schemaNode.properties) {
+      if (p.type !== 'ObjectProperty') continue;
+      const key = p.key.name || p.key.value;
+      if (key === 'properties' && p.value.type === 'ObjectExpression') {
+        for (const pp of p.value.properties) {
+          if (pp.type !== 'ObjectProperty') continue;
+          const pname = pp.key.name || pp.key.value;
+          const desc = pp.value.type === 'ObjectExpression'
+            ? (() => {
+                const dp = pp.value.properties.find(x => (x.key.name||x.key.value) === 'description');
+                return dp ? resolveString(dp.value) : null;
+              })()
+            : null;
+          props[pname] = { description: desc };
+        }
+      }
+      if (key === 'required' && p.value.type === 'ArrayExpression') {
+        props.__required = p.value.elements
+          .filter(e => e && e.type === 'StringLiteral')
+          .map(e => e.value);
+      }
+    }
+    return Object.keys(props).length > 0 ? props : null;
+  }
+
+  // Pass B: find X = C1({...}) registrations
+  process.stderr.write('Pass B: scanning for C1({...}) tool registrations...\n');
+  const tools = {};
+
+  walk(ast, {
+    AssignmentExpression(node) {
+      const right = node.right;
+      if (!right || right.type !== 'CallExpression') return;
+      if (right.callee.type !== 'Identifier' || right.callee.name !== 'C1') return;
+      if (!right.arguments[0] || right.arguments[0].type !== 'ObjectExpression') return;
+
+      const varName = node.left.type === 'Identifier' ? node.left.name : null;
+      extractC1Tool(right.arguments[0], varName, right.start);
+    },
+    VariableDeclarator(node) {
+      const init = node.init;
+      if (!init || init.type !== 'CallExpression') return;
+      if (init.callee.type !== 'Identifier' || init.callee.name !== 'C1') return;
+      if (!init.arguments[0] || init.arguments[0].type !== 'ObjectExpression') return;
+
+      const varName = node.id?.type === 'Identifier' ? node.id.name : null;
+      extractC1Tool(init.arguments[0], varName, init.start);
+    },
+  });
+
+  function extractC1Tool(obj, varName, byteOffset) {
+    const get = (key) => obj.properties.find(
+      p => p.type === 'ObjectProperty' && (p.key.name === key || p.key.value === key)
+    );
+
+    const nameProp  = get('name');
+    const hintProp  = get('searchHint') || get('description');
+    const schemaProp = get('inputSchema');
+
+    if (!nameProp) return;
+
+    const name = resolveString(nameProp.value);
+    if (!name) return; // truly dynamic, skip
+
+    const hint = hintProp ? resolveString(hintProp.value) : null;
+
+    // Check for async description() method
+    const descMethod = obj.properties.find(
+      p => (p.type === 'ObjectMethod' || p.type === 'ObjectProperty') &&
+           (p.key.name === 'description' || p.key.value === 'description') &&
+           (p.type === 'ObjectMethod' || (p.value && ['FunctionExpression','ArrowFunctionExpression'].includes(p.value.type)))
+    );
+    const promptMethod = obj.properties.find(
+      p => (p.type === 'ObjectMethod' || p.type === 'ObjectProperty') &&
+           (p.key.name === 'prompt' || p.key.value === 'prompt') &&
+           (p.type === 'ObjectMethod' || (p.value && ['FunctionExpression','ArrowFunctionExpression'].includes(p.value.type)))
+    );
+
+    // For description functions, find the external builder called within
+    let descBuilderFn = null;
+    if (descMethod) {
+      const methodNode = descMethod.type === 'ObjectMethod' ? descMethod.body : descMethod.value?.body;
+      if (methodNode) {
+        walk(methodNode, {
+          CallExpression(callNode) {
+            if (callNode.callee.type === 'Identifier' && !descBuilderFn) {
+              descBuilderFn = callNode.callee.name;
+            }
+          },
+        });
+      }
+    }
+
+    let promptBuilderFn = null;
+    if (promptMethod) {
+      const methodNode = promptMethod.type === 'ObjectMethod' ? promptMethod.body : promptMethod.value?.body;
+      if (methodNode) {
+        walk(methodNode, {
+          CallExpression(callNode) {
+            if (callNode.callee.type === 'Identifier' && !promptBuilderFn) {
+              promptBuilderFn = callNode.callee.name;
+            }
+          },
+        });
+      }
+    }
+
+    const schemaProps = schemaProp ? extractSchemaProps(schemaProp.value) : null;
+
+    if (!tools[name]) {
+      tools[name] = {
+        name,
+        registrar_var: varName,
+        hint:           hint || null,
+        description_fn: descBuilderFn || null,
+        prompt_fn:      promptBuilderFn || null,
+        has_input_schema: !!schemaProp,
+        schema_properties: schemaProps,
+        byte_offset:    byteOffset,
+      };
+    }
+  }
+
+  process.stderr.write(`Pass B done: ${Object.keys(tools).length} tools found.\n`);
+
+  return {
+    version,
+    extracted: new Date().toISOString().slice(0, 10),
+    tool_count: Object.keys(tools).length,
+    tools: Object.fromEntries(Object.entries(tools).sort(([a],[b]) => a.localeCompare(b))),
+  };
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 function main() {
@@ -1376,6 +1555,23 @@ function main() {
   // branches below). This is what lets sync.sh's automated cycle pick up
   // Arbor enrichment without exporting an env var of its own.
   if (opts.bundle) process.env.CC_GNOTHI_BUNDLE_PATH = opts.bundle;
+
+  if (opts.mode === 'dump-tools') {
+    if (!opts.bundle || !opts.version) {
+      console.error('--dump-tools requires --bundle and --version');
+      process.exit(1);
+    }
+    process.stderr.write(`Loading bundle: ${opts.bundle}\n`);
+    const src = fs.readFileSync(opts.bundle, 'utf8');
+    const result = dumpTools(src, opts.version);
+
+    const cacheDir = path.join(os.homedir(), '.cc-gnothi', 'cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const outPath = path.join(cacheDir, `tools-${opts.version}.json`);
+    fs.writeFileSync(outPath, JSON.stringify(result, null, 2));
+    process.stderr.write(`Tools catalog written: ${outPath} (${result.tool_count} tools)\n`);
+    return;
+  }
 
   if (opts.mode === 'index') {
     if (!opts.bundle || !opts.version) {
