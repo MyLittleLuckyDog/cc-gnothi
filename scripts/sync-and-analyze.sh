@@ -15,7 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-AVAX2_DIR="$(cd "$REPO_ROOT/../caludeCodeAVX2" && pwd)"
+AVAX2_DIR="$(cd "$REPO_ROOT/../claudeCodeAVX2" && pwd)"
 ARTIFACTS_DIR="$AVAX2_DIR/artifacts"
 DRY_RUN="${1:-}"
 

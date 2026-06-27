@@ -41,7 +41,7 @@ DEPTH=${DEPTH:-4}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ARTIFACTS_DIR="$(cd "$REPO_ROOT/../caludeCodeAVX2/artifacts" && pwd)"
+ARTIFACTS_DIR="$(cd "$REPO_ROOT/../claudeCodeAVX2/artifacts" && pwd)"
 CACHE_DIR="$HOME/.cc-gnothi/cache"
 
 # Sorted version list filtered to [START..END]

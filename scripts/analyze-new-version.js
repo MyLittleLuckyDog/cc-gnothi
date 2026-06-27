@@ -21,7 +21,7 @@ const { execFileSync, spawnSync } = require('child_process');
 
 const SCRIPT_DIR = path.dirname(__filename);
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
-const DEFAULT_ARTIFACTS = path.resolve(REPO_ROOT, '..', 'caludeCodeAVX2', 'artifacts');
+const DEFAULT_ARTIFACTS = path.resolve(REPO_ROOT, '..', 'claudeCodeAVX2', 'artifacts');
 const DEFAULT_VERSIONS = path.join(REPO_ROOT, 'versions');
 // Arbor binary path. `arbor` on PATH wins; otherwise the cargo-install
 // default. Falls back gracefully (handler resolution is skipped, not

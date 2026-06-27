@@ -27,7 +27,7 @@ NEW="$2"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ARTIFACTS_DIR="${ARTIFACTS_DIR:-$REPO_ROOT/../caludeCodeAVX2/artifacts}"
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-$REPO_ROOT/../claudeCodeAVX2/artifacts}"
 ARBOR_BIN="${ARBOR_BIN:-arbor}"
 OUT="${3:-version-diff-${OLD}-${NEW}.md}"
 

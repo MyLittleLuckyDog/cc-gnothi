@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 로컬 시크릿 로드 (커밋되지 않음)
 [[ -f "$SCRIPT_DIR/../.env.local" ]] && source "$SCRIPT_DIR/../.env.local"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-AVX2_REPO="/Volumes/juryu_home/with_AI/projects/0x.tools/caludeCodeAVX2"
+AVX2_REPO="/Volumes/juryu_home/with_AI/projects/0x.tools/claude-is/claudeCodeAVX2"
 ARTIFACTS_DIR="$AVX2_REPO/artifacts"
 GATEWAY_BIN="/Volumes/juryu_home/with_AI/projects/06.DenoV8POC/01.Tools/claude-gateway/target/release/claude-agent-rs"
 LOG_FILE="/tmp/cc-gnothi-sync.log"

@@ -13,7 +13,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Bundle artifacts directory. Defaults to a sibling `caludeCodeAVX2`
 # repo (the most common host layout); override with `CC_GNOTHI_ARTIFACTS`
 # when the source repo lives elsewhere.
-ARTIFACTS_DIR="${CC_GNOTHI_ARTIFACTS:-$(cd "$REPO_ROOT/../caludeCodeAVX2/artifacts" 2>/dev/null && pwd)}"
+ARTIFACTS_DIR="${CC_GNOTHI_ARTIFACTS:-$(cd "$REPO_ROOT/../claudeCodeAVX2/artifacts" 2>/dev/null && pwd)}"
 if [[ -z "$ARTIFACTS_DIR" || ! -d "$ARTIFACTS_DIR" ]]; then
   echo "ERROR: artifacts dir not found (set CC_GNOTHI_ARTIFACTS or clone caludeCodeAVX2 next to cc-gnothi)" >&2
   exit 1
