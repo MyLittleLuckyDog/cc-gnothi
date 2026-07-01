@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "cc-gnothi-mcp"
-version = "0.3.25"
+version = "0.3.26"
 dependencies = [
  "anyhow",
  "dirs",
